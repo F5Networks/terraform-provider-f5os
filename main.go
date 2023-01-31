@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"log"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/plugin"
-	"github.com/hashicorp/terraform-provider-scaffolding/internal/provider"
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
+	"gitswarm.f5net.com/terraform-providers/terraform-provider-f5os/internal/provider"
 )
 
 // Run "go generate" to format example terraform files and generate the docs for the registry/website
@@ -27,19 +29,20 @@ var (
 )
 
 func main() {
-	var debugMode bool
+	var debug bool
 
-	flag.BoolVar(&debugMode, "debug", false, "set to true to run the provider with support for debuggers like delve")
+	flag.BoolVar(&debug, "debug", false, "set to true to run the provider with support for debuggers like delve")
 	flag.Parse()
 
-	opts := &plugin.ServeOpts{
-		Debug: debugMode,
-
-		// TODO: update this string with the full name of your provider as used in your configs
-		ProviderAddr: "registry.terraform.io/hashicorp/scaffolding",
-
-		ProviderFunc: provider.New(version),
+	opts := providerserver.ServeOpts{
+		// TODO: Update this string with the published name of your provider.
+		Address: "registry.terraform.io/hashicorp/f5os",
+		Debug:   debug,
 	}
 
-	plugin.Serve(opts)
+	err := providerserver.Serve(context.Background(), provider.New(version), opts)
+
+	if err != nil {
+		log.Fatal(err.Error())
+	}
 }
