@@ -2,56 +2,177 @@ package provider
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"strings"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/provider"
+	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
+	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
-func init() {
-	// Set descriptions to support markdown syntax, this will be used in document generation
-	// and the language server.
-	schema.DescriptionKind = schema.StringMarkdown
+// Ensure F5osProvider satisfies various provider interfaces.
+var _ provider.Provider = &F5osProvider{}
 
-	// Customize the content of descriptions when output. For example you can add defaults on
-	// to the exported descriptions if present.
-	// schema.SchemaDescriptionBuilder = func(s *schema.Schema) string {
-	// 	desc := s.Description
-	// 	if s.Default != nil {
-	// 		desc += fmt.Sprintf(" Defaults to `%v`.", s.Default)
-	// 	}
-	// 	return strings.TrimSpace(desc)
-	// }
+// F5osProvider defines the provider implementation.
+type F5osProvider struct {
+	// version is set to the provider version on release, "dev" when the
+	// provider is built and ran locally, and "test" when running acceptance
+	// testing.
+	version string
 }
 
-func New(version string) func() *schema.Provider {
-	return func() *schema.Provider {
-		p := &schema.Provider{
-			DataSourcesMap: map[string]*schema.Resource{
-				"scaffolding_data_source": dataSourceScaffolding(),
+// F5osProviderModel describes the provider data model.
+type F5osProviderModel struct {
+	Host     types.String `tfsdk:"host"`
+	Username types.String `tfsdk:"username"`
+	Password types.String `tfsdk:"password"`
+}
+
+func (p *F5osProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
+	resp.TypeName = "f5os"
+	resp.Version = p.version
+}
+
+func (p *F5osProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Description: "Interact with F5os.",
+		Attributes: map[string]schema.Attribute{
+			"host": schema.StringAttribute{
+				MarkdownDescription: "URI for F5os Device. May also be provided via BIGIPNEXT_HOST environment variable.",
+				Optional:            true,
 			},
-			ResourcesMap: map[string]*schema.Resource{
-				"scaffolding_resource": resourceScaffolding(),
+			"username": schema.StringAttribute{
+				MarkdownDescription: "Username for F5os Device. May also be provided via BIGIPNEXT_USERNAME environment variable.",
+				Optional:            true,
 			},
+			"password": schema.StringAttribute{
+				MarkdownDescription: "Password for F5os Device. May also be provided via BIGIPNEXT_PASSWORD environment variable.",
+				Optional:            true,
+				Sensitive:           true,
+			},
+		},
+	}
+}
+
+func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	tflog.Info(ctx, "Configuring F5os client")
+
+	// Retrieve provider data from configuration
+	var config F5osProviderModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Configuration values are now available.
+	// if data.Endpoint.IsNull() { /* ... */ }
+
+	// Default values to environment variables, but override
+	// with Terraform configuration value if set.
+
+	tflog.Info(ctx, fmt.Sprintf("\n----f5osConfig :%+v", config))
+
+	host := os.Getenv("BIGIPNEXT_HOST")
+	username := os.Getenv("BIGIPNEXT_USERNAME")
+	password := os.Getenv("BIGIPNEXT_PASSWORD")
+
+	if !config.Host.IsNull() {
+		host = config.Host.ValueString()
+	}
+
+	if !config.Username.IsNull() {
+		username = config.Username.ValueString()
+	}
+
+	if !config.Password.IsNull() {
+		password = config.Password.ValueString()
+	}
+	ctx = tflog.SetField(ctx, "f5os_host", host)
+	ctx = tflog.SetField(ctx, "f5os_username", username)
+	ctx = tflog.SetField(ctx, "f5os_password", password)
+	ctx = tflog.MaskFieldValuesWithFieldKeys(ctx, "f5os_password")
+
+	// Example client configuration for data sources and resources
+	f5osConfig := &f5ossdk.F5osConfig{
+		Host:     host,
+		User:     username,
+		Password: password,
+	}
+
+	tflog.Info(ctx, fmt.Sprintf("f5osConfig client:%+v", f5osConfig))
+
+	client, err := f5ossdk.NewSession(f5osConfig)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Unable to Create f5os Client",
+			"An unexpected error occurred when creating the f5os client. "+
+				"If the error is not clear, please contact the provider developers.\n\n"+
+				"f5os Client Error: "+err.Error(),
+		)
+		return
+	}
+	resp.DataSourceData = client
+	resp.ResourceData = client
+	tflog.Info(ctx, "Configured BIGIPNEXT client", map[string]any{"success": true})
+}
+
+func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource {
+	return []func() resource.Resource{}
+}
+
+func (p *F5osProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
+	return []func() datasource.DataSource{
+		NewSystemsDataSource,
+	}
+}
+
+func New(version string) func() provider.Provider {
+	return func() provider.Provider {
+		return &F5osProvider{
+			version: version,
 		}
-
-		p.ConfigureContextFunc = configure(version, p)
-
-		return p
 	}
 }
 
-type apiClient struct {
-	// Add whatever fields, client or connection info, etc. here
-	// you would need to setup to communicate with the upstream
-	// API.
+// toProvider can be used to cast a generic provider.Provider reference to this specific provider.
+// This is ideally used in DataSourceType.NewDataSource and ResourceType.NewResource calls.
+func toF5osProvider(in any) (*f5ossdk.F5os, diag.Diagnostics) {
+	if in == nil {
+		return nil, nil
+	}
+
+	var diags diag.Diagnostics
+
+	p, ok := in.(*f5ossdk.F5os)
+
+	if !ok {
+		diags.AddError(
+			"Unexpected Provider Instance Type",
+			fmt.Sprintf("While creating the data source or resource, an unexpected provider type (%T) was received. "+
+				"This is always a bug in the provider code and should be reported to the provider developers.", in,
+			),
+		)
+		return nil, diags
+	}
+
+	return p, diags
 }
 
-func configure(version string, p *schema.Provider) func(context.Context, *schema.ResourceData) (any, diag.Diagnostics) {
-	return func(context.Context, *schema.ResourceData) (any, diag.Diagnostics) {
-		// Setup a User-Agent for your API client (replace the provider name for yours):
-		// userAgent := p.UserAgent("terraform-provider-scaffolding", version)
-		// TODO: myClient.UserAgent = userAgent
-
-		return &apiClient{}, nil
+// hashForState computes the hexadecimal representation of the SHA1 checksum of a string.
+// This is used by most resources/data-sources here to compute their Unique Identifier (ID).
+func hashForState(value string) string {
+	if value == "" {
+		return ""
 	}
+	hash := sha1.Sum([]byte(strings.TrimSpace(value)))
+	return hex.EncodeToString(hash[:])
 }
