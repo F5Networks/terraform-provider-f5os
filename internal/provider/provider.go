@@ -81,9 +81,9 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 
 	tflog.Info(ctx, fmt.Sprintf("\n----f5osConfig :%+v", config))
 
-	host := os.Getenv("BIGIPNEXT_HOST")
-	username := os.Getenv("BIGIPNEXT_USERNAME")
-	password := os.Getenv("BIGIPNEXT_PASSWORD")
+	host := os.Getenv("F5OS_HOST")
+	username := os.Getenv("F5OS_USERNAME")
+	password := os.Getenv("F5OS_PASSWORD")
 
 	if !config.Host.IsNull() {
 		host = config.Host.ValueString()
@@ -122,7 +122,7 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	}
 	resp.DataSourceData = client
 	resp.ResourceData = client
-	tflog.Info(ctx, "Configured BIGIPNEXT client", map[string]any{"success": true})
+	tflog.Info(ctx, "Configured F5OS client", map[string]any{"success": true})
 }
 
 func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource {
@@ -131,7 +131,7 @@ func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource
 
 func (p *F5osProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
-		NewSystemsDataSource,
+		NewSoftwareInfoDataSource,
 	}
 }
 

@@ -13,32 +13,32 @@ import (
 
 // Ensure provider defined types fully satisfy framework interfaces
 var (
-	_ datasource.DataSource = &SystemsDataSource{}
-	// _ datasource.DataSourceWithConfigure = &SystemsDataSource{}
+	_ datasource.DataSource = &SoftwareInfoDataSource{}
+	// _ datasource.DataSourceWithConfigure = &SoftwareInfoDataSource{}
 )
 
-func NewSystemsDataSource() datasource.DataSource {
-	return &SystemsDataSource{}
+func NewSoftwareInfoDataSource() datasource.DataSource {
+	return &SoftwareInfoDataSource{}
 }
 
-// SystemsDataSource defines the data source implementation.
-type SystemsDataSource struct {
+// SoftwareInfoDataSource defines the data source implementation.
+type SoftwareInfoDataSource struct {
 	client *f5ossdk.F5os
 }
 
-// SystemsDataSourceModel describes the data source data model.
-type SystemsDataSourceModel struct {
-	ID         types.String `tfsdk:"id"`
-	SystemInfo types.String `tfsdk:"systems_info"`
+// SoftwareInfoDataSourceModel describes the data source data model.
+type SoftwareInfoDataSourceModel struct {
+	ID           types.String `tfsdk:"id"`
+	SoftwareInfo types.String `tfsdk:"software_info"`
 }
 
-func (d *SystemsDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_systems"
+func (d *SoftwareInfoDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_softwareinfo"
 	tflog.Info(ctx, resp.TypeName)
 
 }
 
-func (d *SystemsDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+func (d *SoftwareInfoDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		// This description is used by the documentation generator and the language server.
 		MarkdownDescription: "Get information about the VLANs on f5os platform.\n\n" +
@@ -49,7 +49,7 @@ func (d *SystemsDataSource) Schema(ctx context.Context, req datasource.SchemaReq
 				Computed:            true,
 				MarkdownDescription: "Unique identifier of this data source: hashing of the certificates in the chain.",
 			},
-			"systems_info": schema.StringAttribute{
+			"software_info": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Unique identifier of this data source: hashing of the certificates in the chain.",
 			},
@@ -57,12 +57,12 @@ func (d *SystemsDataSource) Schema(ctx context.Context, req datasource.SchemaReq
 	}
 }
 
-func (d *SystemsDataSource) Configure(ctx context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
+func (d *SoftwareInfoDataSource) Configure(ctx context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
 	d.client, resp.Diagnostics = toF5osProvider(req.ProviderData)
 }
 
-func (d *SystemsDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	var data SystemsDataSourceModel
+func (d *SoftwareInfoDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	var data SoftwareInfoDataSourceModel
 
 	// Read Terraform configuration data into the model
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
@@ -71,7 +71,7 @@ func (d *SystemsDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		return
 	}
 
-	systemData, err := d.client.GetSystems()
+	systemData, err := d.client.GetSoftwareComponentVersions()
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read Vlan, got error: %s", err))
 		return
@@ -80,8 +80,9 @@ func (d *SystemsDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	// For the purposes of this example code, hardcoding a response value to
 	// save into the Terraform state.
 	// data.VlanID = types.Int64Value(int64(vlanIDs.OpenconfigVlanVlan[0].VlanID))
-	data.ID = types.StringValue(fmt.Sprintf("%v", systemData.Embedded.Systems[0].MachineID))
-	data.SystemInfo = types.StringValue(hashForState(fmt.Sprintf("%v", systemData)))
+	tflog.Info(ctx, fmt.Sprintf("software info:%+v", string(systemData)))
+	data.ID = types.StringValue(hashForState(fmt.Sprintf("%v", string(systemData))))
+	data.SoftwareInfo = types.StringValue(fmt.Sprintf("%v", systemData))
 
 	// Write logs using the tflog package
 	// Documentation: https://terraform.io/plugin/log
