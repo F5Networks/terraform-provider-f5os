@@ -82,7 +82,11 @@ func (p *F5os) ImportImage(tenantImage *F5TenantImage, timeOut int) ([]byte, err
 	if err != nil {
 		return respData, err
 	}
-	// f5osLogger.Debug("[ImportImage]", "Import Image Resp: ", hclog.Fmt("%+v", string(respData)))
+	f5osLogger.Info("[ImportImage]", "Import Image Resp: ", hclog.Fmt("%+v", string(respData)))
+	if strings.Contains(string(respData), "Aborted: local-file already exists") {
+		return []byte(""), fmt.Errorf("%s",string(respData))
+	}
+
 	t1 := time.Now()
 	for {
 		check, err := p.importWait()
@@ -115,6 +119,9 @@ func (p *F5os) importWait() (bool, error) {
 		}
 		if strings.Contains(transStatus, "Completed") {
 			return false, nil
+		}
+		if strings.Contains(transStatus, "HTTP Error") {
+			return false, fmt.Errorf("%s",transStatus)
 		}
 		for strings.HasPrefix(transStatus, "In Progress") {
 			return true, nil

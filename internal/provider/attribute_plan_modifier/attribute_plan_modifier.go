@@ -1,4 +1,4 @@
-package attribute_plan_modifier_int64
+package attribute_plan_modifier
 
 import (
 	"context"

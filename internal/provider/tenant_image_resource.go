@@ -87,7 +87,9 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 			"timeout": schema.Int64Attribute{
 				MarkdownDescription: "The number of seconds to wait for image import to finish.",
 				Optional:            true,
-				PlanModifiers:       []planmodifier.Int64{attribute_plan_modifier.Int64DefaultValue(types.Int64Value(360))},
+				Computed:            true,
+				PlanModifiers: []planmodifier.Int64{
+					attribute_plan_modifier.Int64DefaultValue(types.Int64Value(360))},
 			},
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -114,21 +116,29 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 	// If applicable, this is a great opportunity to initialize any necessary
 	// provider client data and make a call using it.
 	tflog.Info(ctx, fmt.Sprintf("Create data :%+v", data))
-	timeout := int(data.Timeout.ValueInt64())
-	tflog.Info(ctx, fmt.Sprintf("timeout data :%+v", timeout))
-	importConfig := &f5ossdk.F5TenantImage{}
-	importConfig.Insecure = ""
-	importConfig.RemoteHost = data.RemoteHost.ValueString()
-	importConfig.RemoteFile = fmt.Sprintf("%s/%s", data.RemotePath.ValueString(), data.ImageName.ValueString())
-	importConfig.LocalFile = data.LocalPath.ValueString()
-	respByte, err := r.client.ImportImage(importConfig, timeout)
+	resp1Byte, err := r.client.GetImage(data.ImageName.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Import Image, got error: %s", err))
 		return
 	}
-	if string(respByte) != "Import Image Transfer Success" {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Import Image failed"))
-		return
+	timeout := int(data.Timeout.ValueInt64())
+	tflog.Info(ctx, fmt.Sprintf("timeout data :%+v", timeout))
+
+	if len(resp1Byte.TenantImages) == 0 {
+		importConfig := &f5ossdk.F5TenantImage{}
+		importConfig.Insecure = ""
+		importConfig.RemoteHost = data.RemoteHost.ValueString()
+		importConfig.RemoteFile = fmt.Sprintf("%s/%s", data.RemotePath.ValueString(), data.ImageName.ValueString())
+		importConfig.LocalFile = data.LocalPath.ValueString()
+		respByte, err := r.client.ImportImage(importConfig, timeout)
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Unable to Import Image, got error: %s", err))
+			return
+		}
+		if string(respByte) != "Import Image Transfer Success" {
+			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Import Image failed"))
+			return
+		}
 	}
 
 	// For the purposes of this example code, hardcoding a response value to
