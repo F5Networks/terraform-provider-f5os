@@ -46,15 +46,15 @@ func (p *F5osProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 		Description: "Interact with F5os.",
 		Attributes: map[string]schema.Attribute{
 			"host": schema.StringAttribute{
-				MarkdownDescription: "URI for F5os Device. May also be provided via BIGIPNEXT_HOST environment variable.",
+				MarkdownDescription: "URI for F5os Device. May also be provided via F5OS_HOST environment variable.",
 				Optional:            true,
 			},
 			"username": schema.StringAttribute{
-				MarkdownDescription: "Username for F5os Device. May also be provided via BIGIPNEXT_USERNAME environment variable.",
+				MarkdownDescription: "Username for F5os Device. May also be provided via F5OS_USERNAME environment variable.",
 				Optional:            true,
 			},
 			"password": schema.StringAttribute{
-				MarkdownDescription: "Password for F5os Device. May also be provided via BIGIPNEXT_PASSWORD environment variable.",
+				MarkdownDescription: "Password for F5os Device. May also be provided via F5OS_PASSWORD environment variable.",
 				Optional:            true,
 				Sensitive:           true,
 			},
@@ -79,8 +79,6 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	// Default values to environment variables, but override
 	// with Terraform configuration value if set.
 
-	tflog.Info(ctx, fmt.Sprintf("\n----f5osConfig :%+v", config))
-
 	host := os.Getenv("F5OS_HOST")
 	username := os.Getenv("F5OS_USERNAME")
 	password := os.Getenv("F5OS_PASSWORD")
@@ -96,10 +94,35 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	if !config.Password.IsNull() {
 		password = config.Password.ValueString()
 	}
-	ctx = tflog.SetField(ctx, "f5os_host", host)
-	ctx = tflog.SetField(ctx, "f5os_username", username)
-	ctx = tflog.SetField(ctx, "f5os_password", password)
-	ctx = tflog.MaskFieldValuesWithFieldKeys(ctx, "f5os_password")
+	if host == "" {
+		resp.Diagnostics.AddError(
+			"Missing 'host' in provider configuration",
+			"While configuring the provider, 'host' was not found in "+
+				"the F5OS_HOST environment variable or provider "+
+				"configuration block host attribute.",
+		)
+	}
+	if username == "" {
+		resp.Diagnostics.AddError(
+			"Missing 'username' in provider configuration",
+			"While configuring the provider, username was not found in "+
+				"the F5OS_USERNAME environment variable or provider "+
+				"configuration block 'username' attribute.",
+		)
+	}
+	if password == "" {
+		resp.Diagnostics.AddError(
+			"Missing 'password' in provider configuration",
+			"While configuring the provider, 'password' was not found in "+
+				"the F5OS_PASSWORD environment variable or provider "+
+				"configuration block 'password' attribute.",
+		)
+	}
+
+	//ctx = tflog.SetField(ctx, "f5os_host", host)
+	//ctx = tflog.SetField(ctx, "f5os_username", username)
+	////ctx = tflog.SetField(ctx, "f5os_password", password)
+	//ctx = tflog.MaskFieldValuesWithFieldKeys(ctx, "f5os_password")
 
 	// Example client configuration for data sources and resources
 	f5osConfig := &f5ossdk.F5osConfig{
@@ -108,7 +131,7 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		Password: password,
 	}
 
-	tflog.Info(ctx, fmt.Sprintf("f5osConfig client:%+v", f5osConfig))
+	//tflog.Info(ctx, fmt.Sprintf("f5osConfig client:%+v", f5osConfig))
 
 	client, err := f5ossdk.NewSession(f5osConfig)
 	if err != nil {
@@ -122,11 +145,14 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	}
 	resp.DataSourceData = client
 	resp.ResourceData = client
+	tflog.Info(ctx, fmt.Sprintf("f5osConfig client:%+v", client))
 	tflog.Info(ctx, "Configured F5OS client", map[string]any{"success": true})
 }
 
 func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource {
-	return []func() resource.Resource{}
+	return []func() resource.Resource{
+		NewTenantImageResource,
+	}
 }
 
 func (p *F5osProvider) DataSources(ctx context.Context) []func() datasource.DataSource {

@@ -35,7 +35,6 @@ type SoftwareInfoDataSourceModel struct {
 func (d *SoftwareInfoDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_softwareinfo"
 	tflog.Info(ctx, resp.TypeName)
-
 }
 
 func (d *SoftwareInfoDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
@@ -80,9 +79,10 @@ func (d *SoftwareInfoDataSource) Read(ctx context.Context, req datasource.ReadRe
 	// For the purposes of this example code, hardcoding a response value to
 	// save into the Terraform state.
 	// data.VlanID = types.Int64Value(int64(vlanIDs.OpenconfigVlanVlan[0].VlanID))
+	tflog.Info(ctx, fmt.Sprintf("f5os client :%+v", d.client))
 	tflog.Info(ctx, fmt.Sprintf("software info:%+v", string(systemData)))
-	data.ID = types.StringValue(hashForState(fmt.Sprintf("%v", string(systemData))))
-	data.SoftwareInfo = types.StringValue(fmt.Sprintf("%v", systemData))
+	data.ID = types.StringValue(hashForState(string(systemData)))
+	data.SoftwareInfo = types.StringValue(string(systemData))
 
 	// Write logs using the tflog package
 	// Documentation: https://terraform.io/plugin/log
