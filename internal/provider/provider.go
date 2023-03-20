@@ -152,6 +152,7 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewTenantImageResource,
+		NewTenantResource,
 	}
 }
 

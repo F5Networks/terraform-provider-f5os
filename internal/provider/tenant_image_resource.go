@@ -167,16 +167,10 @@ func (r *TenantImageResource) Read(ctx context.Context, req resource.ReadRequest
 	// provider client data and make a call using it.
 	respByte, err := r.client.GetImage(data.ImageName.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Import Image, got error: %s", err))
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Read/Get Imported Image, got error: %s", err))
 		return
 	}
 	tflog.Info(ctx, fmt.Sprintf("respByte :%+v", respByte))
-
-	// httpResp, err := r.client.Do(httpReq)
-	// if err != nil {
-	//     resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read example, got error: %s", err))
-	//     return
-	// }
 
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -218,42 +212,11 @@ func (r *TenantImageResource) Delete(ctx context.Context, req resource.DeleteReq
 	// provider client data and make a call using it.
 	err := r.client.DeleteTenantImage(data.ImageName.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Import Image, got error: %s", err))
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Delete Imported Image, got error: %s", err))
 		return
 	}
-	// httpResp, err := r.client.Do(httpReq)
-	// if err != nil {
-	//     resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete example, got error: %s", err))
-	//     return
-	// }
 }
 
 func (r *TenantImageResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
-
-//
-//func Int64DefaultValue(v types.Int64) planmodifier.Int64 {
-//	return &int64DefaultValuePlanModifier{v}
-//}
-//
-//type int64DefaultValuePlanModifier struct {
-//	DefaultValue types.Int64
-//}
-//
-//var _ planmodifier.Int64 = (*int64DefaultValuePlanModifier)(nil)
-//
-//func (apm *int64DefaultValuePlanModifier) PlanModifyInt64(ctx context.Context, req planmodifier.Int64Request, res *planmodifier.Int64Response) {
-//	// If the attribute configuration is not null, we are done here
-//	if !req.ConfigValue.IsNull() {
-//		return
-//	}
-//
-//	// If the attribute plan is "known" and "not null", then a previous plan modifier in the sequence
-//	// has already been applied, and we don't want to interfere.
-//	if !req.PlanValue.IsUnknown() && !req.PlanValue.IsNull() {
-//		return
-//	}
-//
-//	res.PlanValue = apm.DefaultValue
-//}

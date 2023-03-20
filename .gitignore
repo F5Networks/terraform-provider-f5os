@@ -4,6 +4,9 @@
 example.tf
 terraform.tfplan
 terraform.tfstate
+*.tfvars
+vendor/.DS_Store
+terraform-provider-f5os
 bin/
 dist/
 modules-dev/
@@ -24,6 +27,11 @@ website/node_modules
 *.iml
 *.test
 *.iml
+*.tf
+*.pem
+*.pub
+*.back
+*.goback
 
 website/vendor
 
