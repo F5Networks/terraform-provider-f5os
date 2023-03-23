@@ -28,7 +28,7 @@ workflow:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 default:
-  image: golang:${GO_VERSION}
+  image: golang:latest
 #   tags:
 #     - saas-linux-medium-amd64
 
