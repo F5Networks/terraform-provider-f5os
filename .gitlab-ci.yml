@@ -80,12 +80,7 @@ make:lint:
   parallel:
     matrix:
       - TARGET:
-          - lint-golangci
-          - lint-examples-tf
-          - lint-examples-sh
-          - lint-generated
-          - lint-custom
-
+          - lint
 go:build:
   rules:
     - if: $CI_MERGE_REQUEST_IID
