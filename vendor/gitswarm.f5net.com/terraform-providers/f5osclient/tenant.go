@@ -92,7 +92,7 @@ func (p *F5os) ImportImage(tenantImage *F5TenantImage, timeOut int) ([]byte, err
 	for {
 		check, err := p.importWait()
 		if err != nil {
-			return []byte(""), nil
+			return []byte(""), err
 		}
 		t2 := time.Now()
 		timeDiff := t2.Sub(t1)
@@ -114,7 +114,7 @@ func (p *F5os) importWait() (bool, error) {
 	transferMap, err := p.getImporttransferStatus()
 	for _, val := range transferMap["f5-utils-file-transfer:transfer-operation"].([]interface{}) {
 		transStatus := val.(map[string]interface{})["status"].(string)
-		f5osLogger.Debug("[importWait]", "Trans Status: ", hclog.Fmt("%+v", transStatus))
+		f5osLogger.Info("[importWait]", "Trans Status: ", hclog.Fmt("%+v", transStatus))
 		if err != nil {
 			return true, nil
 		}
@@ -122,6 +122,12 @@ func (p *F5os) importWait() (bool, error) {
 			return false, nil
 		}
 		if strings.Contains(transStatus, "HTTP Error") {
+			return false, fmt.Errorf("%s", transStatus)
+		}
+		if strings.Contains(transStatus, "Couldn't resolve host") {
+			return false, fmt.Errorf("%s", transStatus)
+		}
+		if strings.Contains(transStatus, "Failure") {
 			return false, fmt.Errorf("%s", transStatus)
 		}
 		for strings.HasPrefix(transStatus, "In Progress") {

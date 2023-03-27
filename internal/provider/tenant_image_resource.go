@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	//"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
@@ -38,6 +39,7 @@ type TenantImageResourceModel struct {
 	RemotePort     types.Int64  `tfsdk:"remote_port"`
 	Timeout        types.Int64  `tfsdk:"timeout"`
 	Id             types.String `tfsdk:"id"`
+	Status         types.String `tfsdk:"status"`
 }
 
 func (r *TenantImageResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -53,6 +55,9 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 			"image_name": schema.StringAttribute{
 				MarkdownDescription: "Name of the tenant image.",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					//stringplanmodifier.RequiresReplace(),
+					attribute_plan_modifier.StringDefaultValue(types.StringValue("BIG-IP"))},
 			},
 			"local_path": schema.StringAttribute{
 				MarkdownDescription: "The path on the F5OS where the the tenant image is to be uploaded.",
@@ -95,6 +100,10 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 				Computed:            true,
 				MarkdownDescription: "Example identifier",
 			},
+			"status": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "Status of Imported Image",
+			},
 		},
 	}
 }
@@ -116,6 +125,10 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 	// If applicable, this is a great opportunity to initialize any necessary
 	// provider client data and make a call using it.
 	tflog.Info(ctx, fmt.Sprintf("Create data :%+v", data))
+	if r.client.PlatformType == "Velos Controller" {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("`f5os_tenant_image` resource is supported with Velos Partition level (or) rSeries appliance"))
+		return
+	}
 	resp1Byte, err := r.client.GetImage(data.ImageName.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Import Image, got error: %s", err))
@@ -145,10 +158,6 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 	// save into the Terraform state.
 	data.Id = types.StringValue(data.ImageName.ValueString())
 
-	// Write logs using the tflog package
-	// Documentation: https://terraform.io/plugin/log
-	//tflog.Trace(ctx, "created a resource")
-
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -171,6 +180,7 @@ func (r *TenantImageResource) Read(ctx context.Context, req resource.ReadRequest
 		return
 	}
 	tflog.Info(ctx, fmt.Sprintf("respByte :%+v", respByte))
+	r.tenantImageResourceModeltoState(ctx, respByte, data)
 
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -219,4 +229,10 @@ func (r *TenantImageResource) Delete(ctx context.Context, req resource.DeleteReq
 
 func (r *TenantImageResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
+func (r *TenantImageResource) tenantImageResourceModeltoState(ctx context.Context, respData *f5ossdk.F5TenantImagesStatus, data *TenantImageResourceModel) {
+	tflog.Info(ctx, fmt.Sprintf("respData :%+v", respData))
+	data.ImageName = types.StringValue(respData.TenantImages[0].Name)
+	data.Status = types.StringValue(respData.TenantImages[0].Status)
 }
