@@ -3,10 +3,13 @@ package provider
 import (
 	"context"
 	"fmt"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
@@ -78,6 +81,9 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 				MarkdownDescription: "Desired running_state of the tenant.",
 				Optional:            true,
 				Computed:            true,
+				Validators: []validator.String{
+					stringvalidator.OneOf([]string{"configured", "deployed"}...),
+				},
 				PlanModifiers: []planmodifier.String{
 					attribute_plan_modifier.StringDefaultValue(types.StringValue("configured"))},
 			},
@@ -110,10 +116,6 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 				Optional:            true,
 				ElementType:         types.Int64Type,
 			},
-			"status": schema.StringAttribute{
-				Computed:            true,
-				MarkdownDescription: "Tenant status",
-			},
 			"timeout": schema.Int64Attribute{
 				MarkdownDescription: "The number of seconds to wait for image import to finish.",
 				Optional:            true,
@@ -125,9 +127,19 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 				MarkdownDescription: "Minimum virtual disk size required for Tenant deployment",
 				Optional:            true,
 			},
+			"status": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "Tenant status",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"id": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Tenant identifier",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 		},
 	}
@@ -157,7 +169,6 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 	tenantConfig := getTenantCreateConfig(ctx, req, resp)
 
 	tflog.Info(ctx, fmt.Sprintf("tenantConfig Data:%+v", tenantConfig))
-	tflog.Info(ctx, fmt.Sprintf("PlatformType Data:%+v", r.client.PlatformType))
 	if r.client.PlatformType == "Velos Partition" {
 		tenantConfig.F5TenantsTenant[0].Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
 	}
@@ -227,7 +238,7 @@ func (r *TenantResource) Update(ctx context.Context, req resource.UpdateRequest,
 
 	// If applicable, this is a great opportunity to initialize any necessary
 	// provider client data and make a call using it.
-	respByte, err := r.client.UpdateTenant(tenantConfig)
+	respByte, err := r.client.UpdateTenant(tenantConfig, int(data.Timeout.ValueInt64()))
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Tenant Deploy failed, got error: %s", err))
 		return
@@ -239,6 +250,7 @@ func (r *TenantResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 	r.tenantResourceModeltoState(ctx, respByte2, data)
+	tflog.Info(ctx, fmt.Sprintf("Updated State:%+v", data))
 
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -277,6 +289,7 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	data.Status = types.StringValue(respData.F5TenantsTenant[0].State.Status)
 	data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].State.Storage.Size))
 }
+
 func getTenantCreatebackupConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.TenantObj {
 	var data *TenantResourceModel
 

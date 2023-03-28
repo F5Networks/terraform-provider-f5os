@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package plugin
 
 import (
@@ -75,7 +78,7 @@ func NewRPCClient(conn io.ReadWriteCloser, plugins map[string]Plugin) (*RPCClien
 
 	// Connect stdout, stderr streams
 	stdstream := make([]net.Conn, 2)
-	for i, _ := range stdstream {
+	for i := range stdstream {
 		stdstream[i], err = mux.Open()
 		if err != nil {
 			mux.Close()

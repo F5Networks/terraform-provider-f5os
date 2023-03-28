@@ -250,7 +250,7 @@ func (p *F5os) CreateTenant(tenantObj *TenantsObj, timeOut int) ([]byte, error) 
 	return []byte("Tenant Deployment Success"), nil
 }
 
-func (p *F5os) UpdateTenant(tenantObj *TenantsPatchObj) ([]byte, error) {
+func (p *F5os) UpdateTenant(tenantObj *TenantsPatchObj, timeOut int) ([]byte, error) {
 	url := fmt.Sprintf("%s", uriTenant)
 	f5osLogger.Info("[UpdateTenant]", "Request path", hclog.Fmt("%+v", url))
 	byteBody, err := json.Marshal(tenantObj)
@@ -263,7 +263,27 @@ func (p *F5os) UpdateTenant(tenantObj *TenantsPatchObj) ([]byte, error) {
 		return respData, err
 	}
 	f5osLogger.Info("[UpdateTenant]", "Resp: ", hclog.Fmt("%+v", string(respData)))
-	return []byte("UpdateTenant is in progress"), nil
+	t1 := time.Now()
+	for {
+		check, err := p.tenantWait(tenantObj.F5TenantsTenants.Tenant[0].Name)
+		if err != nil {
+			return []byte(""), nil
+		}
+		t2 := time.Now()
+		timeDiff := t2.Sub(t1)
+		if timeDiff.Seconds() > float64(timeOut) {
+			return []byte(""), fmt.Errorf("Tenant Deployment still in In Progress with Timeout Period,please increse timeout")
+		}
+		if check {
+			time.Sleep(20 * time.Second)
+			continue
+		} else {
+			time.Sleep(20 * time.Second)
+			return []byte("Tenant Deployment Success"), nil
+		}
+	}
+	return []byte("Tenant Deployment Success"), nil
+	//return []byte("UpdateTenant is in progress"), nil
 }
 
 func (p *F5os) GetTenant(tenantName string) (*TenantsStatusObj, error) {
@@ -300,6 +320,9 @@ func (p *F5os) tenantWait(tenantName string) (bool, error) {
 	}
 	tenantStatus := tenantMap["f5-tenants:state"].(map[string]interface{})["status"].(string)
 	if strings.Contains(tenantStatus, "Running") {
+		return false, nil
+	}
+	if strings.Contains(tenantStatus, "Configured") {
 		return false, nil
 	}
 	return true, nil
