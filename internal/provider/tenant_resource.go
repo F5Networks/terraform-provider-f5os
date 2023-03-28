@@ -32,6 +32,7 @@ type TenantResource struct {
 // TenantResourceModel describes the resource data model.
 type TenantResourceModel struct {
 	Name            types.String `tfsdk:"name"`
+	DeploymentFile  types.String `tfsdk:"deployment_file"`
 	ImageName       types.String `tfsdk:"image_name"`
 	Cryptos         types.String `tfsdk:"cryptos"`
 	Type            types.String `tfsdk:"type"`
@@ -61,15 +62,28 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 			"name": schema.StringAttribute{
 				MarkdownDescription: "Name of the tenant.\nThe first character must be a letter.\nOnly lowercase alphanumeric characters are allowed.\nNo special or extended characters are allowed except for hyphens.\nThe name cannot exceed 50 characters.",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"image_name": schema.StringAttribute{
 				MarkdownDescription: "Name of the tenant image to be used.\nRequired for create operations",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"deployment_file": schema.StringAttribute{
+				MarkdownDescription: "Deployment file used for BIG-IP-Next .\nRequired for if `type` is `BIG-IP-Next`.",
+				Optional:            true,
 			},
 			"type": schema.StringAttribute{
 				MarkdownDescription: "Name of the tenant image to be used.\nRequired for create operations",
 				Optional:            true,
 				Computed:            true,
+				Validators: []validator.String{
+					stringvalidator.OneOf([]string{"BIG-IP", "BIG-IP-Next"}...),
+				},
 				PlanModifiers: []planmodifier.String{
 					attribute_plan_modifier.StringDefaultValue(types.StringValue("BIG-IP"))},
 			},
@@ -168,17 +182,20 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 
 	tenantConfig := getTenantCreateConfig(ctx, req, resp)
 
-	tflog.Info(ctx, fmt.Sprintf("tenantConfig Data:%+v", tenantConfig))
 	if r.client.PlatformType == "Velos Partition" {
 		tenantConfig.F5TenantsTenant[0].Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
 	}
+	if data.Type.ValueString() == "BIG-IP-Next" {
+		tenantConfig.F5TenantsTenant[0].Config.DeploymentFile = data.DeploymentFile.ValueString()
+	}
+	tflog.Info(ctx, fmt.Sprintf("tenantConfig Data:%+v", tenantConfig))
 
 	respByte, err := r.client.CreateTenant(tenantConfig, int(data.Timeout.ValueInt64()))
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Tenant Deploy failed, got error: %s", err))
 		return
 	}
-	tflog.Info(ctx, fmt.Sprintf("tenantConfig Data:%+v", string(respByte)))
+	tflog.Info(ctx, fmt.Sprintf("tenantConfig Response:%+v", string(respByte)))
 
 	// For the purposes of this example code, hardcoding a response value to
 	// save into the Terraform state.
@@ -189,6 +206,7 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get Tenants, got error: %s", err))
 		return
 	}
+	tflog.Info(ctx, fmt.Sprintf("get tenantConfig :%+v", respByte2))
 	r.tenantResourceModeltoState(ctx, respByte2, data)
 	// Write logs using the tflog package
 	// Documentation: https://terraform.io/plugin/log
@@ -235,6 +253,9 @@ func (r *TenantResource) Update(ctx context.Context, req resource.UpdateRequest,
 	if r.client.PlatformType == "Velos Partition" {
 		tenantConfig.F5TenantsTenants.Tenant[0].Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
 	}
+	if data.Type.ValueString() == "BIG-IP-Next" {
+		tenantConfig.F5TenantsTenants.Tenant[0].Config.DeploymentFile = data.DeploymentFile.ValueString()
+	}
 
 	// If applicable, this is a great opportunity to initialize any necessary
 	// provider client data and make a call using it.
@@ -280,14 +301,13 @@ func (r *TenantResource) ImportState(ctx context.Context, req resource.ImportSta
 }
 
 func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respData *f5ossdk.TenantsStatusObj, data *TenantResourceModel) {
-	tflog.Info(ctx, fmt.Sprintf("respData :%+v", respData))
 	data.ImageName = types.StringValue(respData.F5TenantsTenant[0].State.Image)
 	data.Name = types.StringValue(respData.F5TenantsTenant[0].Name)
 	data.RunningState = types.StringValue(respData.F5TenantsTenant[0].State.RunningState)
 	data.MgmtIP = types.StringValue(respData.F5TenantsTenant[0].State.MgmtIp)
 	data.MgmtGateway = types.StringValue(respData.F5TenantsTenant[0].State.Gateway)
 	data.Status = types.StringValue(respData.F5TenantsTenant[0].State.Status)
-	data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].State.Storage.Size))
+	data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].Config.Storage.Size))
 }
 
 func getTenantCreatebackupConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.TenantObj {
