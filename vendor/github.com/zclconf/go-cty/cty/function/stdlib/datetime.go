@@ -23,7 +23,8 @@ var FormatDateFunc = function.New(&function.Spec{
 			Type: cty.String,
 		},
 	},
-	Type: function.StaticReturnType(cty.String),
+	Type:         function.StaticReturnType(cty.String),
+	RefineResult: refineNonNull,
 	Impl: func(args []cty.Value, retType cty.Type) (cty.Value, error) {
 		formatStr := args[0].AsString()
 		timeStr := args[1].AsString()
@@ -242,30 +243,30 @@ var TimeAddFunc = function.New(&function.Spec{
 //
 // The full set of supported mnemonic sequences is listed below:
 //
-//	YY       Year modulo 100 zero-padded to two digits, like "06".
-//	YYYY     Four (or more) digit year, like "2006".
-//	M        Month number, like "1" for January.
-//	MM       Month number zero-padded to two digits, like "01".
-//	MMM      English month name abbreviated to three letters, like "Jan".
-//	MMMM     English month name unabbreviated, like "January".
-//	D        Day of month number, like "2".
-//	DD       Day of month number zero-padded to two digits, like "02".
-//	EEE      English day of week name abbreviated to three letters, like "Mon".
-//	EEEE     English day of week name unabbreviated, like "Monday".
-//	h        24-hour number, like "2".
-//	hh       24-hour number zero-padded to two digits, like "02".
-//	H        12-hour number, like "2".
-//	HH       12-hour number zero-padded to two digits, like "02".
-//	AA       Hour AM/PM marker in uppercase, like "AM".
-//	aa       Hour AM/PM marker in lowercase, like "am".
-//	m        Minute within hour, like "5".
-//	mm       Minute within hour zero-padded to two digits, like "05".
-//	s        Second within minute, like "9".
-//	ss       Second within minute zero-padded to two digits, like "09".
-//	ZZZZ     Timezone offset with just sign and digit, like "-0800".
-//	ZZZZZ    Timezone offset with colon separating hours and minutes, like "-08:00".
-//	Z        Like ZZZZZ but with a special case "Z" for UTC.
-//	ZZZ      Like ZZZZ but with a special case "UTC" for UTC.
+//     YY       Year modulo 100 zero-padded to two digits, like "06".
+//     YYYY     Four (or more) digit year, like "2006".
+//     M        Month number, like "1" for January.
+//     MM       Month number zero-padded to two digits, like "01".
+//     MMM      English month name abbreviated to three letters, like "Jan".
+//     MMMM     English month name unabbreviated, like "January".
+//     D        Day of month number, like "2".
+//     DD       Day of month number zero-padded to two digits, like "02".
+//     EEE      English day of week name abbreviated to three letters, like "Mon".
+//     EEEE     English day of week name unabbreviated, like "Monday".
+//     h        24-hour number, like "2".
+//     hh       24-hour number zero-padded to two digits, like "02".
+//     H        12-hour number, like "2".
+//     HH       12-hour number zero-padded to two digits, like "02".
+//     AA       Hour AM/PM marker in uppercase, like "AM".
+//     aa       Hour AM/PM marker in lowercase, like "am".
+//     m        Minute within hour, like "5".
+//     mm       Minute within hour zero-padded to two digits, like "05".
+//     s        Second within minute, like "9".
+//     ss       Second within minute zero-padded to two digits, like "09".
+//     ZZZZ     Timezone offset with just sign and digit, like "-0800".
+//     ZZZZZ    Timezone offset with colon separating hours and minutes, like "-08:00".
+//     Z        Like ZZZZZ but with a special case "Z" for UTC.
+//     ZZZ      Like ZZZZ but with a special case "UTC" for UTC.
 //
 // The format syntax is optimized mainly for generating machine-oriented
 // timestamps rather than human-oriented timestamps; the English language
@@ -279,67 +280,6 @@ var TimeAddFunc = function.New(&function.Spec{
 // recognized quickly even by a reader unfamiliar with the format syntax.
 func FormatDate(format cty.Value, timestamp cty.Value) (cty.Value, error) {
 	return FormatDateFunc.Call([]cty.Value{format, timestamp})
-}
-
-func parseTimestamp(ts string) (time.Time, error) {
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		switch err := err.(type) {
-		case *time.ParseError:
-			// If err is s time.ParseError then its string representation is not
-			// appropriate since it relies on details of Go's strange date format
-			// representation, which a caller of our functions is not expected
-			// to be familiar with.
-			//
-			// Therefore we do some light transformation to get a more suitable
-			// error that should make more sense to our callers. These are
-			// still not awesome error messages, but at least they refer to
-			// the timestamp portions by name rather than by Go's example
-			// values.
-			if err.LayoutElem == "" && err.ValueElem == "" && err.Message != "" {
-				// For some reason err.Message is populated with a ": " prefix
-				// by the time package.
-				return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp%s", err.Message)
-			}
-			var what string
-			switch err.LayoutElem {
-			case "2006":
-				what = "year"
-			case "01":
-				what = "month"
-			case "02":
-				what = "day of month"
-			case "15":
-				what = "hour"
-			case "04":
-				what = "minute"
-			case "05":
-				what = "second"
-			case "Z07:00":
-				what = "UTC offset"
-			case "T":
-				return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp: missing required time introducer 'T'")
-			case ":", "-":
-				if err.ValueElem == "" {
-					return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp: end of string where %q is expected", err.LayoutElem)
-				} else {
-					return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp: found %q where %q is expected", err.ValueElem, err.LayoutElem)
-				}
-			default:
-				// Should never get here, because time.RFC3339 includes only the
-				// above portions, but since that might change in future we'll
-				// be robust here.
-				what = "timestamp segment"
-			}
-			if err.ValueElem == "" {
-				return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp: end of string before %s", what)
-			} else {
-				return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp: cannot use %q as %s", err.ValueElem, what)
-			}
-		}
-		return time.Time{}, err
-	}
-	return t, nil
 }
 
 // splitDataFormat is a bufio.SplitFunc used to tokenize a date format.
@@ -416,6 +356,75 @@ func splitDateFormat(data []byte, atEOF bool) (advance int, token []byte, err er
 
 func startsDateFormatVerb(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+func parseTimestamp(ts string) (time.Time, error) {
+	t, err := parseStrictRFC3339(ts)
+	if err != nil {
+		switch err := err.(type) {
+		case *time.ParseError:
+			// If err is s time.ParseError then its string representation is not
+			// appropriate since it relies on details of Go's strange date format
+			// representation, which a caller of our functions is not expected
+			// to be familiar with.
+			//
+			// Therefore we do some light transformation to get a more suitable
+			// error that should make more sense to our callers. These are
+			// still not awesome error messages, but at least they refer to
+			// the timestamp portions by name rather than by Go's example
+			// values.
+			if err.LayoutElem == "" && err.ValueElem == "" && err.Message != "" {
+				// For some reason err.Message is populated with a ": " prefix
+				// by the time package.
+				return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp%s", err.Message)
+			}
+			var what string
+			switch err.LayoutElem {
+			case "2006":
+				what = "year"
+			case "01":
+				what = "month"
+			case "02":
+				what = "day of month"
+			case "15":
+				what = "hour"
+			case "04":
+				what = "minute"
+			case "05":
+				what = "second"
+			case "Z07:00":
+				what = "UTC offset"
+			case "T":
+				return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp: missing required time introducer 'T'")
+			case ":", "-":
+				if err.ValueElem == "" {
+					return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp: end of string where %q is expected", err.LayoutElem)
+				} else {
+					return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp: found %q where %q is expected", err.ValueElem, err.LayoutElem)
+				}
+			default:
+				// Should never get here, because RFC3339 includes only the
+				// above portions.
+				what = "timestamp segment"
+			}
+			if err.ValueElem == "" {
+				return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp: end of string before %s", what)
+			} else {
+				switch {
+				case what == "hour" && strings.Contains(err.ValueElem, ":"):
+					return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp: hour must be between 0 and 23 inclusive")
+				case what == "hour" && len(err.ValueElem) != 2:
+					return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp: hour must have exactly two digits")
+				case what == "minute" && len(err.ValueElem) != 2:
+					return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp: minute must have exactly two digits")
+				default:
+					return time.Time{}, fmt.Errorf("not a valid RFC3339 timestamp: cannot use %q as %s", err.ValueElem, what)
+				}
+			}
+		}
+		return time.Time{}, err
+	}
+	return t, nil
 }
 
 // TimeAdd adds a duration to a timestamp, returning a new timestamp.

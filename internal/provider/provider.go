@@ -43,18 +43,18 @@ func (p *F5osProvider) Metadata(ctx context.Context, req provider.MetadataReques
 
 func (p *F5osProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Interact with F5os.",
+		Description: "Terraform provider for Managing F5os Devices",
 		Attributes: map[string]schema.Attribute{
 			"host": schema.StringAttribute{
-				MarkdownDescription: "URI for F5os Device. May also be provided via F5OS_HOST environment variable.",
+				MarkdownDescription: "URI/Host details for F5os Device,can be provided via `F5OS_HOST` environment variable.",
 				Optional:            true,
 			},
 			"username": schema.StringAttribute{
-				MarkdownDescription: "Username for F5os Device. May also be provided via F5OS_USERNAME environment variable.",
+				MarkdownDescription: "Username for F5os Device,can be provided via `F5OS_USERNAME` environment variable.",
 				Optional:            true,
 			},
 			"password": schema.StringAttribute{
-				MarkdownDescription: "Password for F5os Device. May also be provided via F5OS_PASSWORD environment variable.",
+				MarkdownDescription: "Password for F5os Device,can be provided via `F5OS_PASSWORD` environment variable.",
 				Optional:            true,
 				Sensitive:           true,
 			},
