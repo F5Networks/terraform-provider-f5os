@@ -173,7 +173,7 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 	if r.client.PlatformType == "Velos Controller" {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("`f5os_tenant` resource is supported with Velos Partition level (or) rSeries appliance"))
+		resp.Diagnostics.AddError("Client Error", "`f5os_tenant` resource is supported with Velos Partition level (or) rSeries appliance")
 		return
 	}
 
@@ -310,27 +310,27 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].Config.Storage.Size))
 }
 
-func getTenantCreatebackupConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.TenantObj {
-	var data *TenantResourceModel
-
-	// Read Terraform plan data into the model
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
-
-	tenantConfig := &f5ossdk.TenantObj{}
-	tenantConfig.Name = data.Name.ValueString()
-	tenantSubConfig := f5ossdk.TenantConfig{}
-	tenantSubConfig.Image = data.ImageName.ValueString()
-	tenantSubConfig.MgmtIp = data.MgmtIP.ValueString()
-	tenantSubConfig.Nodes = []int{1}
-	tenantSubConfig.Gateway = data.MgmtGateway.ValueString()
-	tenantSubConfig.PrefixLength = int(data.MgmtPrefix.ValueInt64())
-	tenantSubConfig.VcpuCoresPerNode = int(data.CpuCores.ValueInt64())
-	tenantSubConfig.Memory = 3 * 1024 * int(data.CpuCores.ValueInt64())
-	tenantSubConfig.RunningState = data.RunningState.String()
-	data.Vlans.ElementsAs(ctx, &tenantSubConfig.Vlans, false)
-	tenantConfig.Config = tenantSubConfig
-	return tenantConfig
-}
+// func getTenantCreatebackupConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.TenantObj {
+//	var data *TenantResourceModel
+//
+//	// Read Terraform plan data into the model
+//	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+//
+//	tenantConfig := &f5ossdk.TenantObj{}
+//	tenantConfig.Name = data.Name.ValueString()
+//	tenantSubConfig := f5ossdk.TenantConfig{}
+//	tenantSubConfig.Image = data.ImageName.ValueString()
+//	tenantSubConfig.MgmtIp = data.MgmtIP.ValueString()
+//	tenantSubConfig.Nodes = []int{1}
+//	tenantSubConfig.Gateway = data.MgmtGateway.ValueString()
+//	tenantSubConfig.PrefixLength = int(data.MgmtPrefix.ValueInt64())
+//	tenantSubConfig.VcpuCoresPerNode = int(data.CpuCores.ValueInt64())
+//	tenantSubConfig.Memory = 3 * 1024 * int(data.CpuCores.ValueInt64())
+//	tenantSubConfig.RunningState = data.RunningState.String()
+//	data.Vlans.ElementsAs(ctx, &tenantSubConfig.Vlans, false)
+//	tenantConfig.Config = tenantSubConfig
+//	return tenantConfig
+// }
 
 func getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.TenantsObj {
 	var data *TenantResourceModel

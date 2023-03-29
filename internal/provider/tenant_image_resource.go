@@ -132,7 +132,7 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 	// If applicable, this is a great opportunity to initialize any necessary
 	// provider client data and make a call using it.
 	if r.client.PlatformType == "Velos Controller" {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("`f5os_tenant_image` resource is supported with Velos Partition level (or) rSeries appliance"))
+		resp.Diagnostics.AddError("Client Error", "`f5os_tenant_image` resource is supported with Velos Partition level (or) rSeries appliance")
 		return
 	}
 	resp1Byte, err := r.client.GetImage(data.ImageName.ValueString())
@@ -156,7 +156,7 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 			return
 		}
 		if string(respByte) != "Import Image Transfer Success" {
-			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Import Image failed"))
+			resp.Diagnostics.AddError("Client Error", "Import Image failed")
 			return
 		}
 	}
