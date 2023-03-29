@@ -303,7 +303,7 @@ func (p *F5os) GetTenant(tenantName string) (*TenantsStatusObj, error) {
 
 func (p *F5os) DeleteTenant(tenantName string) error {
 	url := fmt.Sprintf("%s%s%s/tenant=%s", p.Host, uriRoot, uriTenant, tenantName)
-	f5osLogger.Info("[DeleteTenantImage]", "Request path", hclog.Fmt("%+v", url))
+	f5osLogger.Info("[DeleteTenant]", "Request path", hclog.Fmt("%+v", url))
 	_, err := p.doRequest("DELETE", url, []byte(""))
 	if err != nil {
 		return err
