@@ -1,6 +1,6 @@
 variables:
   DOCKER_HUB_PROXY: "artifactory.f5net.com/dockerhub-remote"
-  PKG_NAME: test-cicd
+  PKG_NAME: terraform-provider-f5os
 
 default:
   image: "${DOCKER_HUB_PROXY}/golang:latest"
@@ -10,16 +10,9 @@ default:
 stages:
   - lint
   - build
-  - test
+  - unittest
   - release
   - publish
-
-# variables:
-#   # TODO(@timofurrer): verify if there is an option to read this version from either .go-version or go.mod
-#   GO_VERSION: "1.20"
-#   # NOTE(@timofurrer): used for caching, see `cache.paths` settings
-#   GOPATH: ${CI_PROJECT_DIR}/.go
-#   IMAGE_TAG: latest
 
 workflow:
   rules:
@@ -101,7 +94,7 @@ go:build:
   script:
     - make build
 
-go:test:
+unit-tests:
   rules:
     - if: $CI_MERGE_REQUEST_IID
       changes:
@@ -111,9 +104,10 @@ go:test:
         - .gitlab-ci.yml
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
-  stage: test
+  stage: unittest
   script:
     - make test
+  coverage: '/coverage: \d+\.\d+/'
 
 goreleaser:
   stage: release
