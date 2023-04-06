@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -14,6 +16,15 @@ const (
 // It is also possible to use the HASHICUPS_ environment variables instead,
 // such as updating the Makefile and running the testing through that tool.
 // providerConfig = “
+// f5osURI = "https://localhost"
+)
+
+var (
+	// mux is the HTTP request multiplexer used with the test server.
+	mux *http.ServeMux
+
+	// server is a test HTTP server used to provide mock API responses
+	server *httptest.Server
 )
 
 var (
@@ -36,4 +47,39 @@ func testAccPreCheck(t *testing.T) {
 			return
 		}
 	}
+}
+
+func testAccPreUnitCheck(t *testing.T) {
+	// You can add code here to run prior to any test case execution, for example assertions
+	// about the appropriate environment variables being set are common to see in a pre-check
+	// function.
+	setup()
+	_ = os.Setenv("F5OS_HOST", server.URL)
+	_ = os.Setenv("F5OS_USERNAME", "testuser")
+	_ = os.Setenv("F5OS_PASSWORD", "testpass")
+	//defer teardown()
+}
+
+func setup() {
+	// test server
+	mux = http.NewServeMux()
+	server = httptest.NewServer(mux)
+}
+
+func teardown() {
+	server.Close()
+}
+
+// loadFixtureBytes returns the entire contents of the given file as a byte slice
+func loadFixtureBytes(path string) []byte {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		panic(err)
+	}
+	return contents
+}
+
+// loadFixtureString returns the entire contents of the given file as a string
+func loadFixtureString(path string) string {
+	return string(loadFixtureBytes(path))
 }

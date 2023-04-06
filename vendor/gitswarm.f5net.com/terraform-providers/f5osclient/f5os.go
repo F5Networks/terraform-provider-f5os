@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -165,9 +167,12 @@ func (r *F5osError) Error() error {
 }
 
 func init() {
-	val, ok := os.LookupEnv("F5OS_LOGLEVEL")
+	val, ok := os.LookupEnv("TF_LOG")
 	if !ok {
-		val = "INFO"
+		val, ok = os.LookupEnv("TF_LOG_PROVIDER_F5OS")
+		if !ok {
+			val = "INFO"
+		}
 	}
 	f5osLogger = hclog.New(&hclog.LoggerOptions{
 		Name:  "[F5OS]",
@@ -180,17 +185,19 @@ func init() {
 // NewSession sets up connection to the F5os system.
 func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	f5osLogger.Info("[NewSession] Session creation Starts...")
-	var url string
+	var urlString string
 	f5osSession := &F5os{}
 	if !strings.HasPrefix(f5osObj.Host, "http") {
-		url = fmt.Sprintf("https://%s", f5osObj.Host)
+		urlString = fmt.Sprintf("https://%s", f5osObj.Host)
 	} else {
-		url = f5osObj.Host
+		urlString = f5osObj.Host
 	}
-	url = fmt.Sprintf("%s:%d", url, 8888)
-	f5osLogger.Info("[NewSession]", "URL", hclog.Fmt("%+v", url))
-	if f5osObj.Port != 0 {
-		url = fmt.Sprintf("%s:%d", url, f5osObj.Port)
+	f5osLogger.Info("[NewSession]", "URL", hclog.Fmt("%+v", urlString))
+	u, _ := url.Parse(urlString)
+	_, port, _ := net.SplitHostPort(u.Host)
+
+	if f5osObj.Port != 0 && port == "" {
+		urlString = fmt.Sprintf("%s:%d", urlString, f5osObj.Port)
 	}
 	if f5osObj.ConfigOptions == nil {
 		f5osObj.ConfigOptions = defaultConfigOptions
@@ -200,17 +207,17 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 			InsecureSkipVerify: true,
 		},
 	}
-	f5osSession.Host = url
+	f5osSession.Host = urlString
 	f5osSession.Transport = tr
 	f5osSession.ConfigOptions = f5osObj.ConfigOptions
 	client := &http.Client{
 		Transport: tr,
 	}
 	method := "GET"
-	url = fmt.Sprintf("%s%s", url, uriLogin)
+	urlString = fmt.Sprintf("%s%s", urlString, uriLogin)
 
-	f5osLogger.Debug("[NewSession]", "URL", hclog.Fmt("%+v", url))
-	req, err := http.NewRequest(method, url, nil)
+	f5osLogger.Debug("[NewSession]", "URL", hclog.Fmt("%+v", urlString))
+	req, err := http.NewRequest(method, urlString, nil)
 	req.Header.Set("Content-Type", contentTypeHeader)
 	req.SetBasicAuth(f5osObj.User, f5osObj.Password)
 	res, err := client.Do(req)

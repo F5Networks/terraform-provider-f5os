@@ -8,16 +8,16 @@ install: build
 
 # See https://golangci-lint.run/
 lint:
-	golangci-lint run
+	golangci-lint run --timeout=2m
 
 generate:
 	go generate ./...
 
 fmt:
-	gofmt -s -w -e .
+	gofmt -s -w ./internal
 
 test:
-	go test -v -cover -timeout=120s -parallel=4 ./...
+	go test -v -covermode=count -coverprofile cover.out -timeout=120s -parallel=4 ./...
 
 testacc:
 	TF_ACC=1 go test -v -parallel=1 -cover -timeout 120m ./...

@@ -1,0 +1,119 @@
+{
+  "openconfig-system:aaa": {
+    "authentication": {
+      "f5-openconfig-aaa-ldap:ldap": {
+        "bind_timelimit": 10,
+        "timelimit": 0,
+        "idle_timelimit": 0,
+        "ldap_version": 3,
+        "ssl": "off",
+        "active_directory": false,
+        "tls_reqcert": "demand"
+      },
+      "f5-system-aaa:users": {
+        "user": [
+          {
+            "username": "admin",
+            "config": {
+              "username": "admin",
+              "last-change": 19433,
+              "tally-count": 0,
+              "expiry-date": "-1",
+              "role": "admin"
+            },
+            "state": {
+              "username": "admin",
+              "last-change": 19433,
+              "tally-count": 0,
+              "expiry-date": "-1",
+              "role": "admin"
+            }
+          },
+          {
+            "username": "root",
+            "config": {
+              "username": "root",
+              "last-change": 0,
+              "tally-count": 0,
+              "expiry-date": "-1",
+              "role": "root"
+            },
+            "state": {
+              "username": "root",
+              "last-change": 0,
+              "tally-count": 0,
+              "expiry-date": "-1",
+              "role": "root"
+            }
+          }
+        ]
+      },
+      "f5-system-aaa:roles": {
+        "role": [
+          {
+            "rolename": "admin",
+            "config": {
+              "rolename": "admin",
+              "gid": 9000
+            },
+            "state": {
+              "rolename": "admin",
+              "gid": 9000
+            }
+          },
+          {
+            "rolename": "operator",
+            "config": {
+              "rolename": "operator",
+              "gid": 9001
+            },
+            "state": {
+              "rolename": "operator",
+              "gid": 9001
+            }
+          },
+          {
+            "rolename": "root",
+            "config": {
+              "rolename": "root",
+              "gid": 0
+            },
+            "state": {
+              "rolename": "root",
+              "gid": 0
+            }
+          },
+          {
+            "rolename": "tenant-console",
+            "config": {
+              "rolename": "tenant-console",
+              "gid": 9100
+            },
+            "state": {
+              "rolename": "tenant-console",
+              "gid": 9100
+            }
+          }
+        ]
+      }
+    },
+    "f5-openconfig-aaa-password-policy:password-policy": {
+      "config": {
+        "min-length": 6,
+        "required-numeric": 0,
+        "required-uppercase": 0,
+        "required-lowercase": 0,
+        "required-special": 0,
+        "required-differences": 8,
+        "reject-username": false,
+        "apply-to-root": true,
+        "retries": 3,
+        "max-login-failures": 10,
+        "unlock-time": 60,
+        "root-lockout": true,
+        "root-unlock-time": 60,
+        "max-age": 0
+      }
+    }
+  }
+}
