@@ -34,6 +34,7 @@ type F5osProviderModel struct {
 	Host     types.String `tfsdk:"host"`
 	Username types.String `tfsdk:"username"`
 	Password types.String `tfsdk:"password"`
+	Port     types.Int64  `tfsdk:"port"`
 }
 
 func (p *F5osProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -57,6 +58,10 @@ func (p *F5osProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 				MarkdownDescription: "Password for F5os Device,can be provided via `F5OS_PASSWORD` environment variable.",
 				Optional:            true,
 				Sensitive:           true,
+			},
+			"port": schema.Int64Attribute{
+				MarkdownDescription: "Port Number to be used to make API calls to HOST",
+				Optional:            true,
 			},
 		},
 	}
@@ -129,6 +134,7 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		Host:     host,
 		User:     username,
 		Password: password,
+		Port:     8888,
 	}
 
 	//tflog.Info(ctx, fmt.Sprintf("f5osConfig client:%+v", f5osConfig))
