@@ -216,7 +216,7 @@ func (p *F5os) CreatebackupTenant(tenantObj *TenantObj) ([]byte, error) {
 }
 
 func (p *F5os) CreateTenant(tenantObj *TenantsObj, timeOut int) ([]byte, error) {
-	url := fmt.Sprintf("%s", uriTenant)
+	url := uriTenant
 	f5osLogger.Info("[CreateTenant]", "Request path", hclog.Fmt("%+v", url))
 	byteBody, err := json.Marshal(tenantObj)
 	if err != nil {
@@ -303,7 +303,7 @@ func (p *F5os) GetTenant(tenantName string) (*TenantsStatusObj, error) {
 
 func (p *F5os) DeleteTenant(tenantName string) error {
 	url := fmt.Sprintf("%s%s%s/tenant=%s", p.Host, uriRoot, uriTenant, tenantName)
-	f5osLogger.Info("[DeleteTenant]", "Request path", hclog.Fmt("%+v", url))
+	f5osLogger.Info("[DeleteTenantImage]", "Request path", hclog.Fmt("%+v", url))
 	_, err := p.doRequest("DELETE", url, []byte(""))
 	if err != nil {
 		return err
