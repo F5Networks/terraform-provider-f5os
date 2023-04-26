@@ -284,7 +284,7 @@ func (r *PartitionResource) Update(ctx context.Context, req resource.UpdateReque
 			return
 		}
 		if success {
-			tflog.Info(ctx, fmt.Sprintf("Updated ISO version on partition successfully"))
+			tflog.Info(ctx, "Updated ISO version on partition successfully")
 		}
 	}
 
