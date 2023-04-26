@@ -74,6 +74,7 @@ make:lint:
   script:
     - go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.51.2
     - golangci-lint --version
+    - export GOFLAGS=-mod=vendor
     - make ${TARGET}
   parallel:
     matrix:
@@ -92,6 +93,7 @@ go:build:
   needs: []
   stage: build
   script:
+    - export GOFLAGS=-mod=vendor
     - make build
 
 unit-tests:
