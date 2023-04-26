@@ -1,0 +1,50 @@
+# You can copy and paste this template into a new `.gitlab-ci.yml` file.
+# You should not add this template to an existing `.gitlab-ci.yml` file by using the `include:` keyword.
+#
+# To contribute improvements to CI/CD templates, please follow the Development guide at:
+# https://docs.gitlab.com/ee/development/cicd/templates.html
+# This specific template is located at:
+# https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/gitlab/ci/templates/Go.gitlab-ci.yml
+
+variables:
+  DOCKER_HUB_PROXY: "artifactory.f5net.com/dockerhub-remote"
+  PKG_NAME: test-cicd
+
+default:
+  image: "${DOCKER_HUB_PROXY}/golang:latest"
+
+
+stages:
+  - test
+  - report
+
+unit_test:
+  stage: test
+  before_script:
+    - go mod download
+  script:
+    - go test -coverprofile=coverage_report $(go list ./... | grep -v /vendor/)
+    - go tool cover -html=coverage_report -o coverage_report.html
+  artifacts:
+    paths:
+      - "$CI_PROJECT_DIR/coverage_report.html"
+    expire_in: "1 days"
+  coverage: "/\\(statements\\)\\s+\\d+.?\\d+%/"
+
+pages:
+  stage: report
+  dependencies:
+    - unit_test
+  script:
+    - echo 'cleaning old pages'
+    - rm -rf public
+    - ls -l
+    - mkdir -p public && cp coverage_report.html public/
+  artifacts:
+    paths:
+      - "public"
+    expire_in: "30 days"
+  only:
+    - branches
+  except:
+    - main@terraform-providers/f5osclient
