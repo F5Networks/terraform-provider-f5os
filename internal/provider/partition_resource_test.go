@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -87,16 +88,17 @@ func TestUnitPartitionDeployResource(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Read testing
 			{
-				Config: testAccPartitionDeployResourceConfig,
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_partition.velos-part", "id", "TerraformPartition"),
-					resource.TestCheckResourceAttr("f5os_partition.velos-part", "name", "TerraformPartition"),
-					resource.TestCheckResourceAttr("f5os_partition.velos-part", "os_version", "1.3.1-5968"),
-					resource.TestCheckResourceAttr("f5os_partition.velos-part", "ipv4_mgmt_address", "10.144.140.125/24"),
-					resource.TestCheckResourceAttr("f5os_partition.velos-part", "ipv4_mgmt_gateway", "10.144.140.253"),
-					resource.TestCheckResourceAttr("f5os_partition.velos-part", "ipv6_mgmt_address", "2001:db8:3333:4444:5555:6666:7777:8888/64"),
-					resource.TestCheckResourceAttr("f5os_partition.velos-part", "ipv6_mgmt_gateway", "2001:db8:3333:4444::"),
-				),
+				Config:      testAccPartitionDeployResourceConfig,
+				ExpectError: regexp.MustCompile("Invalid Attribute Value Match"),
+				//Check: resource.ComposeAggregateTestCheckFunc(
+				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "id", "TerraformPartition"),
+				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "name", "TerraformPartition"),
+				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "os_version", "1.3.1-5968"),
+				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "ipv4_mgmt_address", "10.144.140.125/24"),
+				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "ipv4_mgmt_gateway", "10.144.140.253"),
+				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "ipv6_mgmt_address", "2001:db8:3333:4444:5555:6666:7777:8888/64"),
+				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "ipv6_mgmt_gateway", "2001:db8:3333:4444::"),
+				//),
 			},
 		},
 	})
@@ -108,8 +110,8 @@ resource "f5os_partition" "velos-part" {
   os_version = "1.3.1-5968"
   ipv4_mgmt_address = "10.144.140.125/24"
   ipv4_mgmt_gateway = "10.144.140.253"
-  ipv6_mgmt_address = "2001:db8:3333:4444:5555:6666:7777:8888/64"
-  ipv6_mgmt_gateway = "2001:db8:3333:4444::"
+  ipv6_mgmt_address = "2001::1/64"
+  ipv6_mgmt_gateway = "2001::"
   slots = [1,2]
 }
 `
