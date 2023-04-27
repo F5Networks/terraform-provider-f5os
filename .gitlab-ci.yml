@@ -31,10 +31,7 @@ workflow:
 cache:
   key:
     files:
-      - go.sum
       - GNUMakefile
-  paths:
-    - .go/pkg/mod
 
 # .run-for-supported-versions:
 #   parallel:
