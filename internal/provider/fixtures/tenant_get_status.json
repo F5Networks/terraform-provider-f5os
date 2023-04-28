@@ -17,6 +17,7 @@
         "storage": {
             "size": 82
         },
+        "vlans": [1],
         "running-state": "configured",
         "mac-data": {
             "base-mac": "f4:15:63:fb:a0:1a",

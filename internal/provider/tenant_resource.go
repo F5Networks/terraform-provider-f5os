@@ -348,7 +348,7 @@ func getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.VcpuCoresPerNode = int(data.CpuCores.ValueInt64())
 	tenantSubbj.Config.Memory = 3 * 1024 * int(data.CpuCores.ValueInt64())
-	data.Vlans.ElementsAs(ctx, tenantSubbj.Config.Vlans, false)
+	data.Vlans.ElementsAs(ctx, &tenantSubbj.Config.Vlans, false)
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.RunningState = data.RunningState.ValueString()
 	tenantSubbj.Config.Nodes = []int{1}
@@ -374,7 +374,7 @@ func getTenantUpdateConfig(ctx context.Context, req resource.UpdateRequest, resp
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.VcpuCoresPerNode = int(data.CpuCores.ValueInt64())
 	tenantSubbj.Config.Memory = 3 * 1024 * int(data.CpuCores.ValueInt64())
-	data.Vlans.ElementsAs(ctx, tenantSubbj.Config.Vlans, false)
+	data.Vlans.ElementsAs(ctx, &tenantSubbj.Config.Vlans, false)
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.RunningState = data.RunningState.ValueString()
 	tenantSubbj.Config.Nodes = []int{1}
