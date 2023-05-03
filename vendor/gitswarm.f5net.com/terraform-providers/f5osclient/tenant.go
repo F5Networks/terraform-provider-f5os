@@ -408,12 +408,12 @@ type TenantObjs struct {
 			Ndi string `json:"ndi,omitempty"`
 			Mac string `json:"mac,omitempty"`
 		} `json:"mac-ndi-set,omitempty"`
-		Vlans            []string `json:"vlans,omitempty"`
-		Cryptos          string   `json:"cryptos,omitempty"`
-		VcpuCoresPerNode int      `json:"vcpu-cores-per-node,omitempty"`
-		ReservedCpus     string   `json:"reserved-cpus,omitempty"`
-		Memory           int      `json:"memory,omitempty"`
-		SEPCount         int      `json:"SEP-count,omitempty"`
+		Vlans            []int  `json:"vlans,omitempty"`
+		Cryptos          string `json:"cryptos,omitempty"`
+		VcpuCoresPerNode int    `json:"vcpu-cores-per-node,omitempty"`
+		ReservedCpus     string `json:"reserved-cpus,omitempty"`
+		Memory           int    `json:"memory,omitempty"`
+		SEPCount         int    `json:"SEP-count,omitempty"`
 		Storage          struct {
 			Image    string `json:"image,omitempty"`
 			Name     string `json:"name,omitempty"`
@@ -462,12 +462,12 @@ type TenantStatusObjs struct {
 			Ndi string `json:"ndi,omitempty"`
 			Mac string `json:"mac,omitempty"`
 		} `json:"mac-ndi-set,omitempty"`
-		Vlans            []string `json:"vlans,omitempty"`
-		Cryptos          string   `json:"cryptos,omitempty"`
-		VcpuCoresPerNode int      `json:"vcpu-cores-per-node,omitempty"`
-		ReservedCpus     string   `json:"reserved-cpus,omitempty"`
-		Memory           int      `json:"memory,omitempty"`
-		SEPCount         int      `json:"SEP-count,omitempty"`
+		Vlans            []int  `json:"vlans,omitempty"`
+		Cryptos          string `json:"cryptos,omitempty"`
+		VcpuCoresPerNode int    `json:"vcpu-cores-per-node,omitempty"`
+		ReservedCpus     string `json:"reserved-cpus,omitempty"`
+		Memory           int    `json:"memory,omitempty"`
+		SEPCount         int    `json:"SEP-count,omitempty"`
 		Storage          struct {
 			Image    string `json:"image,omitempty"`
 			Name     string `json:"name,omitempty"`
