@@ -43,6 +43,8 @@ func TestAccTenantDeployResource(t *testing.T) {
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_gateway", "10.10.10.1"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "type", "BIG-IP"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "status", "Configured"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "vlans.0", "1"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "vlans.#", "1"),
 				),
 			},
 			// ImportState testing
@@ -121,5 +123,6 @@ resource "f5os_tenant" "test2" {
   cpu_cores         = 8
   running_state     = "configured"
   virtual_disk_size = 82
+  vlans             = [ 1 ]
 }
 `
