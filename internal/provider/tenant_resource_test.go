@@ -155,7 +155,7 @@ func TestUnitTenantDeployResourceTC2(t *testing.T) {
 }
 
 const testAccTenantDeployResourceConfig = `
-resource "f5os_tenant" "" {
+resource "f5os_tenant" "test2" {
   name              = "testtenant-ecosys2"
   image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
   mgmt_ip           = "10.10.10.26"
