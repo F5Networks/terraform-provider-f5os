@@ -92,7 +92,7 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 			},
 			"cpu_cores": schema.Int64Attribute{
 				MarkdownDescription: "The number of vCPUs that should be added to the tenant.\nRequired for create operations.",
-				Optional:            true,
+				Required:            true,
 			},
 			"running_state": schema.StringAttribute{
 				MarkdownDescription: "Desired running_state of the tenant.",
@@ -152,7 +152,7 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 			},
 			"virtual_disk_size": schema.Int64Attribute{
 				MarkdownDescription: "Minimum virtual disk size required for Tenant deployment",
-				Optional:            true,
+				Required:            true,
 			},
 			"status": schema.StringAttribute{
 				Computed:            true,

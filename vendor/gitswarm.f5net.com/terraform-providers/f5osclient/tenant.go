@@ -232,7 +232,7 @@ func (p *F5os) CreateTenant(tenantObj *TenantsObj, timeOut int) ([]byte, error) 
 	for {
 		check, err := p.tenantWait(tenantObj.F5TenantsTenant[0].Name)
 		if err != nil {
-			return []byte(""), nil
+			return []byte(""), err
 		}
 		t2 := time.Now()
 		timeDiff := t2.Sub(t1)
@@ -267,7 +267,7 @@ func (p *F5os) UpdateTenant(tenantObj *TenantsPatchObj, timeOut int) ([]byte, er
 	for {
 		check, err := p.tenantWait(tenantObj.F5TenantsTenants.Tenant[0].Name)
 		if err != nil {
-			return []byte(""), nil
+			return []byte(""), err
 		}
 		t2 := time.Now()
 		timeDiff := t2.Sub(t1)
@@ -283,7 +283,6 @@ func (p *F5os) UpdateTenant(tenantObj *TenantsPatchObj, timeOut int) ([]byte, er
 		}
 	}
 	return []byte("Tenant Deployment Success"), nil
-	//return []byte("UpdateTenant is in progress"), nil
 }
 
 func (p *F5os) GetTenant(tenantName string) (*TenantsStatusObj, error) {
@@ -325,6 +324,11 @@ func (p *F5os) tenantWait(tenantName string) (bool, error) {
 	if strings.Contains(tenantStatus, "Configured") {
 		return false, nil
 	}
+	if strings.Contains(tenantStatus, "Pending") {
+		if tenantMap["f5-tenants:state"].(map[string]interface{})["instances"] != nil {
+			return false, fmt.Errorf("%v", tenantMap["f5-tenants:state"].(map[string]interface{})["instances"])
+		}
+	}
 	return true, nil
 }
 func (p *F5os) getTenantDeployStatus(tenantName string) (map[string]interface{}, error) {
@@ -335,13 +339,11 @@ func (p *F5os) getTenantDeployStatus(tenantName string) (map[string]interface{},
 	if err != nil {
 		return nil, err
 	}
-	// err := json.Unmarshal(byteData, fileTransStatus)
 	err = json.Unmarshal(byteData, &ss)
 	if err != nil {
 		return nil, err
 	}
 	return ss, nil
-	// return fileTransStatus, nil
 }
 
 func (p *F5os) GetSoftwareComponentVersions() ([]byte, error) {

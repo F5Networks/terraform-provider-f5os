@@ -1,0 +1,43 @@
+{
+    "f5-tenants:state": {
+        "name": "test-tenant22",
+        "unit-key-hash": "FXTrjhCs+nkfPn30/E0A/EBcye/I511NFZELSGOuUDH82AMt65Iz5E36TbAamMzYT4Q9ACSe23yNo2ejtlu7yQ==",
+        "type": "BIG-IP",
+        "image": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+        "nodes": [
+            2
+        ],
+        "mgmt-ip": "10.10.30.30",
+        "prefix-length": 24,
+        "gateway": "10.10.30.1",
+        "cryptos": "enabled",
+        "tenant-auth-support": "disabled",
+        "vcpu-cores-per-node": 8,
+        "memory": "29184",
+        "storage": {
+            "size": 82
+        },
+        "running-state": "deployed",
+        "mac-data": {
+            "base-mac": "f4:15:63:fb:a0:1b",
+            "mac-pool-size": 1
+        },
+        "appliance-mode": {
+            "enabled": false
+        },
+        "status": "Pending",
+        "instances": {
+            "instance": [
+                {
+                    "node": 2,
+                    "pod-name": "test-tenant22-2",
+                    "instance-id": 2,
+                    "phase": "Insufficient slots to deploy tenant",
+                    "creation-time": "",
+                    "ready-time": "",
+                    "status": "Tenant deployment will be processed when the slot available in partition"
+                }
+            ]
+        }
+    }
+}
