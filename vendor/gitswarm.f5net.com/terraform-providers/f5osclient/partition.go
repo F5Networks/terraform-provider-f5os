@@ -20,84 +20,6 @@ const (
 	uriPartition = "/f5-system-partition:partitions"
 )
 
-type F5ReqPartition struct {
-	Name   string               `json:"name,omitempty"`
-	Config F5ReqPartitionConfig `json:"config,omitempty"`
-}
-
-type F5ReqPartitions struct {
-	Partition F5ReqPartition `json:"partition,omitempty"`
-}
-
-type F5ReqPartitionConfig struct {
-	Enabled    bool   `json:"enabled,omitempty"`
-	IsoVersion string `json:"iso-version,omitempty"`
-	MgmtIp     struct {
-		Ipv4 struct {
-			Address      string `json:"address,omitempty"`
-			PrefixLength int    `json:"prefix-length,omitempty"`
-			Gateway      string `json:"gateway,omitempty"`
-		} `json:"ipv4,omitempty"`
-		Ipv6 struct {
-			Address      string `json:"address,omitempty"`
-			PrefixLength int    `json:"prefix-length,omitempty"`
-			Gateway      string `json:"gateway,omitempty"`
-		} `json:"ipv6,omitempty"`
-	} `json:"mgmt-ip,omitempty"`
-}
-
-type F5RespPartitions struct {
-	Partition []F5RespPartition `json:"f5-system-partition:partition,omitempty"`
-}
-
-type F5RespPartition struct {
-	Name   string `json:"name,omitempty"`
-	Config struct {
-		Enabled             bool   `json:"enabled,omitempty"`
-		IsoVersion          string `json:"iso-version,omitempty"`
-		ConfigurationVolume int    `json:"configuration-volume,omitempty"`
-		ImagesVolume        int    `json:"images-volume,omitempty"`
-		SharedVolume        int    `json:"shared-volume,omitempty"`
-		MgmtIp              struct {
-			Ipv4 struct {
-				Address      string `json:"address,omitempty"`
-				PrefixLength int    `json:"prefix-length,omitempty"`
-				Gateway      string `json:"gateway,omitempty"`
-			} `json:"ipv4,omitempty"`
-			Ipv6 struct {
-				Address      string `json:"address,omitempty"`
-				PrefixLength int    `json:"prefix-length,omitempty"`
-				Gateway      string `json:"gateway,omitempty"`
-			} `json:"ipv6,omitempty"`
-		} `json:"mgmt-ip,omitempty"`
-	} `json:"config,omitempty"`
-	State struct {
-		Id                    int    `json:"id,omitempty"`
-		OsVersion             string `json:"os-version,omitempty"`
-		ServiceVersion        string `json:"service-version,omitempty"`
-		InstallOsVersion      string `json:"install-os-version,omitempty"`
-		InstallServiceVersion string `json:"install-service-version,omitempty"`
-		InstallStatus         string `json:"install-status,omitempty"`
-		Controllers           struct {
-			Controller []struct {
-				Controller            int    `json:"controller,omitempty"`
-				PartitionId           int    `json:"partition-id,omitempty"`
-				PartitionStatus       string `json:"partition-status,omitempty"`
-				RunningServiceVersion string `json:"running-service-version,omitempty"`
-				StatusSeconds         string `json:"status-seconds,omitempty"`
-				StatusAge             string `json:"status-age,omitempty"`
-				Volumes               struct {
-					Volume []struct {
-						VolumeName    string `json:"volume-name,omitempty"`
-						TotalSize     string `json:"total-size,omitempty"`
-						AvailableSize string `json:"available-size,omitempty"`
-					} `json:"volume,omitempty"`
-				} `json:"volumes,omitempty"`
-			} `json:"controller,omitempty"`
-		} `json:"controllers,omitempty"`
-	} `json:"state,omitempty"`
-}
-
 func (p *F5os) CreatePartition(partitionObj *F5ReqPartitions) ([]byte, error) {
 	url := fmt.Sprintf("%s", uriPartition)
 	f5osLogger.Debug("[CreatePartition]", "Request path", hclog.Fmt("%+v", url))
@@ -193,7 +115,7 @@ func (p *F5os) CheckPartitionState(partitionName string, timeOut int) ([]byte, e
 		t2 := time.Now()
 		timeDiff := t2.Sub(t1)
 		if timeDiff.Seconds() > float64(timeOut) {
-			return []byte(""), fmt.Errorf("Partition Deployment still in in progress with timeout period, please increase timeout")
+			return []byte(""), fmt.Errorf("partition deployment still in in progress with timeout period, please increase timeout")
 		}
 		if check {
 			time.Sleep(20 * time.Second)
@@ -203,7 +125,6 @@ func (p *F5os) CheckPartitionState(partitionName string, timeOut int) ([]byte, e
 			return []byte("Partition Deployment Success."), nil
 		}
 	}
-	return []byte("Partition Deployment Success."), nil
 }
 
 // a quick and dirty all() python style function implementation for golang
