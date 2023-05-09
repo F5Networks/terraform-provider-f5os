@@ -172,7 +172,7 @@ func (p *F5os) CreateTenant(tenantObj *F5ReqTenants, timeOut int) ([]byte, error
 	for {
 		check, err := p.tenantWait(tenantObj.F5TenantsTenant[0].Name)
 		if err != nil {
-			return []byte(""), nil
+			return []byte(""), err
 		}
 		t2 := time.Now()
 		timeDiff := t2.Sub(t1)
@@ -207,7 +207,7 @@ func (p *F5os) UpdateTenant(tenantObj *F5ReqTenantsPatch, timeOut int) ([]byte, 
 	for {
 		check, err := p.tenantWait(tenantObj.F5TenantsTenants.Tenant[0].Name)
 		if err != nil {
-			return []byte(""), nil
+			return []byte(""), err
 		}
 		t2 := time.Now()
 		timeDiff := t2.Sub(t1)
@@ -263,6 +263,11 @@ func (p *F5os) tenantWait(tenantName string) (bool, error) {
 	}
 	if strings.Contains(tenantStatus, "Configured") {
 		return false, nil
+	}
+	if strings.Contains(tenantStatus, "Pending") {
+		if tenantMap["f5-tenants:state"].(map[string]interface{})["instances"] != nil {
+			return false, fmt.Errorf("%v", tenantMap["f5-tenants:state"].(map[string]interface{})["instances"])
+		}
 	}
 	return true, nil
 }
