@@ -300,7 +300,7 @@ func (r *TenantResource) ImportState(ctx context.Context, req resource.ImportSta
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
-func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respData *f5ossdk.TenantsStatusObj, data *TenantResourceModel) {
+func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respData *f5ossdk.F5RespTenants, data *TenantResourceModel) {
 	data.ImageName = types.StringValue(respData.F5TenantsTenant[0].State.Image)
 	data.Name = types.StringValue(respData.F5TenantsTenant[0].Name)
 	data.RunningState = types.StringValue(respData.F5TenantsTenant[0].State.RunningState)
@@ -311,12 +311,12 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	data.Cryptos = types.StringValue(respData.F5TenantsTenant[0].Config.Cryptos)
 }
 
-func getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.TenantsObj {
+func getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.F5ReqTenants {
 	var data *TenantResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
-	tenantSubbj := f5ossdk.TenantObjs{}
+	tenantSubbj := f5ossdk.F5ReqTenant{}
 	tenantSubbj.Name = data.Name.ValueString()
 	tenantSubbj.Config.Name = data.Name.ValueString()
 	tenantSubbj.Config.Image = data.ImageName.ValueString()
@@ -333,17 +333,17 @@ func getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp
 	data.Nodes.ElementsAs(ctx, &tenantSubbj.Config.Nodes, false)
 	tenantSubbj.Config.Storage.Size = int(data.VirtualdiskSize.ValueInt64())
 
-	tenantConfig := new(f5ossdk.TenantsObj)
+	tenantConfig := new(f5ossdk.F5ReqTenants)
 	tenantConfig.F5TenantsTenant = append(tenantConfig.F5TenantsTenant, tenantSubbj)
 	return tenantConfig
 }
 
-func getTenantUpdateConfig(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) *f5ossdk.TenantsPatchObj {
+func getTenantUpdateConfig(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) *f5ossdk.F5ReqTenantsPatch {
 	var data *TenantResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
-	tenantSubbj := f5ossdk.TenantObjs{}
+	tenantSubbj := f5ossdk.F5ReqTenant{}
 	tenantSubbj.Name = data.Name.ValueString()
 	tenantSubbj.Config.Name = data.Name.ValueString()
 	tenantSubbj.Config.Image = data.ImageName.ValueString()
@@ -360,7 +360,7 @@ func getTenantUpdateConfig(ctx context.Context, req resource.UpdateRequest, resp
 	tenantSubbj.Config.Cryptos = data.Cryptos.ValueString()
 	tenantSubbj.Config.Storage.Size = int(data.VirtualdiskSize.ValueInt64())
 
-	tenantpatchConfig := new(f5ossdk.TenantsPatchObj)
+	tenantpatchConfig := new(f5ossdk.F5ReqTenantsPatch)
 	tenantpatchConfig.F5TenantsTenants.Tenant = append(tenantpatchConfig.F5TenantsTenants.Tenant, tenantSubbj)
 	tflog.Info(ctx, fmt.Sprintf("getTenantUpdateConfig:%+v", tenantpatchConfig))
 	return tenantpatchConfig

@@ -145,7 +145,7 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 	tflog.Info(ctx, fmt.Sprintf("timeout data :%+v", timeout))
 
 	if len(resp1Byte.TenantImages) == 0 {
-		importConfig := &f5ossdk.F5TenantImage{}
+		importConfig := &f5ossdk.F5ReqTenantImage{}
 		importConfig.Insecure = ""
 		importConfig.RemoteHost = data.RemoteHost.ValueString()
 		importConfig.RemoteFile = fmt.Sprintf("%s/%s", data.RemotePath.ValueString(), data.ImageName.ValueString())
@@ -249,7 +249,7 @@ func (r *TenantImageResource) ImportState(ctx context.Context, req resource.Impo
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
-func (r *TenantImageResource) tenantImageResourceModeltoState(ctx context.Context, respData *f5ossdk.F5TenantImagesStatus, data *TenantImageResourceModel) {
+func (r *TenantImageResource) tenantImageResourceModeltoState(ctx context.Context, respData *f5ossdk.F5RespTenantImagesStatus, data *TenantImageResourceModel) {
 	tflog.Info(ctx, fmt.Sprintf("respData :%+v", respData))
 	data.ImageName = types.StringValue(respData.TenantImages[0].Name)
 	data.Status = types.StringValue(respData.TenantImages[0].Status)
