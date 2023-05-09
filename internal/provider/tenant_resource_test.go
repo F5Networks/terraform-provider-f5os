@@ -8,25 +8,8 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 )
 
-// HTTPGetter is an interface for an http client
-type HTTPGetter interface {
-	Get(url string) (*http.Response, error)
-	//Do(req *http.Request) (*http.Response, error)
-}
-
-// MockHTTPGetter is a mock implementation of an HTTPGetter
-type MockHTTPGetter struct {
-	mock.Mock
-}
-
-// Get is a mocked implementation of an HTTP Get request
-func (m *MockHTTPGetter) Get(url string) (*http.Response, error) {
-	args := m.Called(url)
-	return args.Get(0).(*http.Response), args.Error(1)
-}
 func TestAccTenantDeployResource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		//IsUnitTest:               true,
@@ -87,13 +70,11 @@ func TestUnitTenantDeployResource(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_config.json"))
 	})
-	// eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdXRoaW5mbyI6ImFkbWluIDEwMDAgOTAwMCBcL3ZhclwvRjVcL3BhcnRpdGlvbiIsImV4cCI6MTY4MDcyMDc4MiwiaWF0IjoxNjgwNzE5ODgyLCJyZW5ld2xpbWl0IjoiNSIsInVzZXJpbmZvIjoiYWRtaW4gMTcyLjE4LjIzMy4yMiJ9.c6Fw4AVm9dN4F-rRJZ1655Ks3xEWCzdAvum-Q3K7cwU
 
 	defer teardown()
 
 	resource.Test(t, resource.TestCase{
-		IsUnitTest: true,
-		//PreCheck:                 func() { testAccPreUnitCheck(t) },
+		IsUnitTest:               true,
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			// Read testing
