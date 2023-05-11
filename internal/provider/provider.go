@@ -44,7 +44,7 @@ func (p *F5osProvider) Metadata(ctx context.Context, req provider.MetadataReques
 
 func (p *F5osProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Terraform provider for Managing F5os Devices",
+		Description: "Terraform provider for Managing F5OS Devices: \n - Velos chassis \n - rSeries appliances",
 		Attributes: map[string]schema.Attribute{
 			"host": schema.StringAttribute{
 				MarkdownDescription: "URI/Host details for F5os Device,can be provided via `F5OS_HOST` environment variable.",
