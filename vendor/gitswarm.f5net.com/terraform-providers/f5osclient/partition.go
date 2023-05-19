@@ -76,6 +76,9 @@ func (p *F5os) GetPartition(partitionName string) (*F5RespPartitions, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(partitionStatus.Partition) == 0 {
+		return nil, fmt.Errorf("%s", string(byteData))
+	}
 	f5osLogger.Debug("[GetPartition]", "Partition Struct:", hclog.Fmt("%+v", partitionStatus))
 	return partitionStatus, nil
 }
@@ -110,7 +113,7 @@ func (p *F5os) CheckPartitionState(partitionName string, timeOut int) ([]byte, e
 	for {
 		check, err := p.partitionWait(partitionName)
 		if err != nil {
-			return []byte(""), nil
+			return []byte(""), err
 		}
 		t2 := time.Now()
 		timeDiff := t2.Sub(t1)
@@ -147,9 +150,12 @@ func (p *F5os) partitionWait(partitionName string) (bool, error) {
 	// Loop over each controller and add its partition status to the slice
 	controllers := partitionMap["f5-system-partition:state"].(map[string]interface{})["controllers"].(map[string]interface{})["controller"].([]interface{})
 	for _, controller := range controllers {
-		partitionStatus := controller.(map[string]interface{})["partition-status"].(string)
-		partitionStatusSlice = append(partitionStatusSlice, partitionStatus)
+		if controller.(map[string]interface{}) != nil && controller.(map[string]interface{})["partition-status"] != nil {
+			partitionStatus := controller.(map[string]interface{})["partition-status"].(string)
+			partitionStatusSlice = append(partitionStatusSlice, partitionStatus)
+		}
 	}
+	f5osLogger.Debug("[partitionWait]", "partitionStatusSlice", hclog.Fmt("%+v", partitionStatusSlice))
 
 	// Define a function to check if a partition status is valid
 	partitionStatusIsValid := func(status interface{}) bool {
