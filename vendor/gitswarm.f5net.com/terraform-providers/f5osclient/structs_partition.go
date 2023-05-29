@@ -84,3 +84,41 @@ type F5RespPartition struct {
 		} `json:"controllers,omitempty"`
 	} `json:"state,omitempty"`
 }
+
+type F5ReqPartitionPassChange struct {
+	OldPassword     string `json:"f5-system-aaa:old-password,omitempty"`
+	NewPassword     string `json:"f5-system-aaa:new-password,omitempty"`
+	ConfirmPassword string `json:"f5-system-aaa:confirm-password,omitempty"`
+}
+
+type F5ReqVlanConfig struct {
+	VlanId string `json:"vlan-id,omitempty"`
+	Config struct {
+		VlanId int    `json:"vlan-id,omitempty"`
+		Name   string `json:"name,omitempty"`
+	} `json:"config,omitempty"`
+	Members struct {
+		Member []struct {
+			State struct {
+				Interface string `json:"interface,omitempty"`
+			} `json:"state,omitempty"`
+		} `json:"member,omitempty"`
+	} `json:"members,omitempty"`
+}
+
+type F5ReqVlansConfig struct {
+	OpenconfigVlanVlans struct {
+		Vlan []F5ReqVlanConfig `json:"vlan,omitempty"`
+	} `json:"openconfig-vlan:vlans,omitempty"`
+}
+
+type F5RespVlanConfig struct {
+	VlanID int `json:"vlan-id,omitempty"`
+	Config struct {
+		VlanID int    `json:"vlan-id,omitempty"`
+		Name   string `json:"name,omitempty"`
+	} `json:"config,omitempty"`
+}
+type F5RespVlan struct {
+	OpenconfigVlanVlan []F5RespVlanConfig `json:"openconfig-vlan:vlan,omitempty"`
+}

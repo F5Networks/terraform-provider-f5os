@@ -18,6 +18,8 @@ const (
 	uriSlot      = "/f5-system-slot:slots/slot"
 	uriSlots     = "/f5-system-slot:slots"
 	uriPartition = "/f5-system-partition:partitions"
+	uriVlan      = "/openconfig-vlan:vlans"
+	uriAuth      = "/openconfig-system:system/aaa"
 )
 
 func (p *F5os) CreatePartition(partitionObj *F5ReqPartitions) ([]byte, error) {
@@ -241,4 +243,78 @@ func (p *F5os) SetSlot(partitionName string, slots []int64) ([]byte, error) {
 	}
 	f5osLogger.Debug("[SetSlot]", "Resp: ", hclog.Fmt("%+v", string(respData)))
 	return respData, nil
+}
+
+func (p *F5os) PartitionPasswordChange(userName string, passwordChangeConfig *F5ReqPartitionPassChange) ([]byte, error) {
+	url := fmt.Sprintf("%s/authentication/f5-system-aaa:users/f5-system-aaa:user=%s/f5-system-aaa:config/f5-system-aaa:change-password", uriAuth, userName)
+	f5osLogger.Debug("[PartitionPasswordChange]", "Request path", hclog.Fmt("%+v", url))
+	byteBody, err := json.Marshal(passwordChangeConfig)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[PartitionPasswordChange]", "Body", hclog.Fmt("%+v", string(byteBody)))
+	respData, err := p.PostRequest(url, byteBody)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[PartitionPasswordChange]", "Resp: ", hclog.Fmt("%+v", string(respData)))
+	return byteBody, nil
+}
+
+func (p *F5os) VlanConfig(vlanConfig *F5ReqVlansConfig) ([]byte, error) {
+	url := fmt.Sprintf("%s", uriVlan)
+	f5osLogger.Debug("[VlanConfig]", "Request path", hclog.Fmt("%+v", url))
+	byteBody, err := json.Marshal(vlanConfig)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[VlanConfig]", "Body", hclog.Fmt("%+v", string(byteBody)))
+	respData, err := p.PatchRequest(url, byteBody)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[VlanConfig]", "Resp: ", hclog.Fmt("%+v", string(respData)))
+	return byteBody, nil
+}
+
+func (p *F5os) GetVlan(vlanId int) (*F5RespVlan, error) {
+	url := fmt.Sprintf("%s/vlan=%d", uriVlan, vlanId)
+	f5osVlan := &F5RespVlan{}
+	byteData, err := p.GetRequest(url)
+	if err != nil {
+		return nil, err
+	}
+	json.Unmarshal(byteData, f5osVlan)
+	f5osLogger.Info("[GetVlan]", "f5osVlan", hclog.Fmt("%+v", f5osVlan))
+	return f5osVlan, nil
+}
+
+//
+//func (p *F5os) AddVlan(vlanId int) ([]byte, error) {
+//	f5osVlanid := F5osVlanId{}
+//	f5osVlanid.VlanID = vlanId
+//	f5osVlanid.Config.Name = fmt.Sprintf("vlan-%d", vlanId)
+//	f5osVlanid.Config.VlanID = vlanId
+//	f5osVlan := &F5osVlan{}
+//	f5osVlan.OpenconfigVlanVlan = append(f5osVlan.OpenconfigVlanVlan, f5osVlanid)
+//	f5osLogger.Debug("[AddVlan]", "AddVlan", hclog.Fmt("%+v", f5osVlan))
+//	byteBody, err := json.Marshal(f5osVlan)
+//	if err != nil {
+//		return byteBody, err
+//	}
+//	respData, err := p.PostRequest(uriVlan, byteBody)
+//	if err != nil {
+//		return respData, err
+//	}
+//	f5osLogger.Debug("[AddVlan]", "f5osVlan", hclog.Fmt("%+v", string(respData)))
+//	return respData, nil
+//}
+
+func (p *F5os) DeleteVlan(vlanId int) error {
+	url := fmt.Sprintf("%s/vlan=%d", uriVlan, vlanId)
+	err := p.DeleteRequest(url)
+	if err != nil {
+		return err
+	}
+	return nil
 }

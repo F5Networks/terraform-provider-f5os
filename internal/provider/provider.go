@@ -160,6 +160,8 @@ func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewTenantImageResource,
 		NewTenantResource,
 		NewPartitionResource,
+		NewPartitionChangePasswordResource,
+		NewVlanResource,
 	}
 }
 

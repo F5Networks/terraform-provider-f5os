@@ -159,7 +159,7 @@ func (r *PartitionResource) Create(ctx context.Context, req resource.CreateReque
 	}
 
 	if r.client.PlatformType != "Velos Controller" {
-		resp.Diagnostics.AddError("Client Error", "`velos_partition` resource is supported on Velos Controllers only")
+		resp.Diagnostics.AddError("Client Error", "`f5os_partition` resource is supported on Velos Controllers only")
 		return
 	}
 
