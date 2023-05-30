@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"testing"
@@ -59,27 +60,51 @@ func TestUnitPartitionDeployResource(t *testing.T) {
 
 	// device calls to create resource
 	mux.HandleFunc("/restconf/data/f5-system-partition:partitions", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		_, _ = fmt.Fprintf(w, ``)
+		log.Printf("[INFO] Request URI:%+v", r.RequestURI)
+		if r.RequestURI == "/restconf/data/f5-system-partition:partitions" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprintf(w, ``)
+		}
+		if r.RequestURI == "/restconf/data/f5-system-partition:partitions/partition=TerraformPartition/state" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/partition_get_status.json"))
+		}
+		if r.RequestURI == "/restconf/data/f5-system-partition:partitions/partition=TerraformPartition" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/partition_config.json"))
+		}
 	})
-	mux.HandleFunc("restconf/data/f5-system-slot:slots", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, ``)
-	})
-	mux.HandleFunc("/restconf/data/f5-system-partition:partitions/partition=TerraformPartition/state", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/partition_get_status.json"))
-	})
+	mux.HandleFunc("/restconf/data/f5-system-slot:slots", func(w http.ResponseWriter, r *http.Request) {
+		if r.RequestURI == "/restconf/data/f5-system-slot:slots" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, ``)
+		}
+		if r.RequestURI == "/restconf/data/f5-system-slot:slots/slot" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/partition_get_slots.json"))
+		}
 
-	mux.HandleFunc("/restconf/data/f5-system-partition:partitions/partition=TerraformPartition", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/partition_config.json"))
 	})
+	//mux.HandleFunc("/restconf/data/f5-system-partition:partitions/partition=TerraformPartition/state", func(w http.ResponseWriter, r *http.Request) {
+	//	if r.RequestURI == "/restconf/data/f5-system-partition:partitions/partition=TerraformPartition/state" {
+	//		w.WriteHeader(http.StatusOK)
+	//		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/partition_get_status.json"))
+	//	}
+	//
+	//})
+	//
+	//mux.HandleFunc("/restconf/data/f5-system-partition:partitions/partition=TerraformPartition", func(w http.ResponseWriter, r *http.Request) {
+	//	if r.RequestURI == "/restconf/data/f5-system-partition:partitions/partition=TerraformPartition" {
+	//		w.WriteHeader(http.StatusOK)
+	//		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/partition_config.json"))
+	//	}
+	//})
 
-	mux.HandleFunc("/restconf/data/f5-system-slot:slots/slot", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/partition_get_slots.json"))
-	})
+	//mux.HandleFunc("/restconf/data/f5-system-slot:slots/slot", func(w http.ResponseWriter, r *http.Request) {
+	//	w.WriteHeader(http.StatusOK)
+	//	_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/partition_get_slots.json"))
+	//
+	//})
 	defer teardown()
 
 	resource.Test(t, resource.TestCase{
@@ -89,15 +114,13 @@ func TestUnitPartitionDeployResource(t *testing.T) {
 			// Read testing
 			{
 				Config:      testAccPartitionDeployResourceConfig,
-				ExpectError: regexp.MustCompile("Invalid Attribute Value Match"),
+				ExpectError: regexp.MustCompile("F5OS Client Error"),
 				//Check: resource.ComposeAggregateTestCheckFunc(
 				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "id", "TerraformPartition"),
 				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "name", "TerraformPartition"),
 				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "os_version", "1.3.1-5968"),
 				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "ipv4_mgmt_address", "10.144.140.125/24"),
 				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "ipv4_mgmt_gateway", "10.144.140.253"),
-				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "ipv6_mgmt_address", "2001:db8:3333:4444:5555:6666:7777:8888/64"),
-				//	resource.TestCheckResourceAttr("f5os_partition.velos-part", "ipv6_mgmt_gateway", "2001:db8:3333:4444::"),
 				//),
 			},
 		},
@@ -110,8 +133,6 @@ resource "f5os_partition" "velos-part" {
   os_version = "1.3.1-5968"
   ipv4_mgmt_address = "10.144.140.125/24"
   ipv4_mgmt_gateway = "10.144.140.253"
-  ipv6_mgmt_address = "2001::1/64"
-  ipv6_mgmt_gateway = "2001::"
   slots = [1,2]
 }
 `

@@ -143,6 +143,7 @@ type F5RespTenant struct {
 		MgmtIp           string `json:"mgmt-ip,omitempty"`
 		PrefixLength     int    `json:"prefix-length,omitempty"`
 		Gateway          string `json:"gateway,omitempty"`
+		Nodes            []int  `json:"nodes"`
 		Cryptos          string `json:"cryptos,omitempty"`
 		VcpuCoresPerNode int    `json:"vcpu-cores-per-node,omitempty"`
 		Memory           string `json:"memory,omitempty"`
