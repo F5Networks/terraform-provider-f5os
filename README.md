@@ -53,9 +53,9 @@ We also provide:
 Compatibility table between this provider, the [Terraform Plugin Protocol](https://www.terraform.io/plugin/how-terraform-works#terraform-plugin-protocol)
 version it implements, and Terraform:
 
-| F5OS Provider |     Terraform Plugin Protocol      | Terraform |
-|:-------------:|:----------------------------------:|:---------:|
-|  `>= 0.8.x`   |                `6`                 | `>= 1.x`  |
+| F5OS Provider |     Terraform Plugin Protocol      | Terraform | F5OS Velos/rSeries Version |
+|:-------------:|:----------------------------------:|:---------:|:--------------------------:|
+|  `>= 1.0.0`   |                `6`                 | `>= 1.x`  |      `>= 1.5.1/1.4.0`      |
 
 Details can be found querying the [Registry API](https://www.terraform.io/internals/provider-registry-protocol#list-available-versions)
 that return all the details about which version are currently available for a particular provider.
