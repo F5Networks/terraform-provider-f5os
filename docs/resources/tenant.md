@@ -69,7 +69,14 @@ Required for create operations
 
 ### Read-Only
 
-- `id` (String) Tenant identifier
+- `id` (String) Unique F5OS Tenant identifier
 - `status` (String) Tenant status
 
+## Import
 
+Import is supported using the following syntax:
+
+```shell
+# Tenant can be imported by specifying the tenant Name identifier.
+terraform import f5os_tenant.tenant-import testtenant
+```

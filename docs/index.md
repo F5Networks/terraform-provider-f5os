@@ -3,14 +3,14 @@
 page_title: "f5os Provider"
 subcategory: ""
 description: |-
-  Terraform provider for Managing F5os Devices:
+  Terraform provider for Managing F5OS Devices:
    - Velos chassis
    - rSeries appliances
 ---
 
 # f5os Provider
 
-Terraform provider for Managing F5os Devices: 
+Terraform provider for Managing F5OS Devices: 
  - Velos chassis 
  - rSeries appliances
 

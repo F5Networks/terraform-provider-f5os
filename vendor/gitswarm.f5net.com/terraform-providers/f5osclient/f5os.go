@@ -13,8 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -30,7 +30,6 @@ const (
 	uriLogin          = "/restconf/data/openconfig-system:system/aaa"
 	contentTypeHeader = "application/yang-data+json"
 	uriPlatformType   = "/openconfig-platform:components/component=platform/state/description"
-	uriVlan           = "/openconfig-vlan:vlans"
 	uriInterface      = "/openconfig-interfaces:interfaces"
 )
 
@@ -76,17 +75,6 @@ type F5osError struct {
 			ErrorMessage string `json:"error-message"`
 		} `json:"error"`
 	} `json:"ietf-restconf:errors"`
-}
-
-type F5osVlanId struct {
-	VlanID int `json:"vlan-id,omitempty"`
-	Config struct {
-		VlanID int    `json:"vlan-id,omitempty"`
-		Name   string `json:"name,omitempty"`
-	} `json:"config,omitempty"`
-}
-type F5osVlan struct {
-	OpenconfigVlanVlan []F5osVlanId `json:"openconfig-vlan:vlan,omitempty"`
 }
 
 type OpenconfigInterfacesInterface struct {
@@ -416,47 +404,6 @@ func (p *F5os) RemoveTrunkVlans(intf string, vlanId int) error {
 	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
 	f5osLogger.Debug("[removeNativeVlans]", "Request path", hclog.Fmt("%+v", url))
 	// intFace := &F5osVlanSwitchedVlan{}
-	err := p.DeleteRequest(url)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (p *F5os) GetVlan(vlanId int) (*F5osVlan, error) {
-	url := fmt.Sprintf("%s/vlan=%d", uriVlan, vlanId)
-	f5osVlan := &F5osVlan{}
-	byteData, err := p.GetRequest(url)
-	if err != nil {
-		return nil, err
-	}
-	json.Unmarshal(byteData, f5osVlan)
-	f5osLogger.Info("[GetVlan]", "f5osVlan", hclog.Fmt("%+v", f5osVlan))
-	return f5osVlan, nil
-}
-
-func (p *F5os) AddVlan(vlanId int) ([]byte, error) {
-	f5osVlanid := F5osVlanId{}
-	f5osVlanid.VlanID = vlanId
-	f5osVlanid.Config.Name = fmt.Sprintf("vlan-%d", vlanId)
-	f5osVlanid.Config.VlanID = vlanId
-	f5osVlan := &F5osVlan{}
-	f5osVlan.OpenconfigVlanVlan = append(f5osVlan.OpenconfigVlanVlan, f5osVlanid)
-	f5osLogger.Debug("[AddVlan]", "AddVlan", hclog.Fmt("%+v", f5osVlan))
-	byteBody, err := json.Marshal(f5osVlan)
-	if err != nil {
-		return byteBody, err
-	}
-	respData, err := p.PostRequest(uriVlan, byteBody)
-	if err != nil {
-		return respData, err
-	}
-	f5osLogger.Debug("[AddVlan]", "f5osVlan", hclog.Fmt("%+v", string(respData)))
-	return respData, nil
-}
-
-func (p *F5os) DeleteVlan(vlanId int) error {
-	url := fmt.Sprintf("%s/vlan=%d", uriVlan, vlanId)
 	err := p.DeleteRequest(url)
 	if err != nil {
 		return err

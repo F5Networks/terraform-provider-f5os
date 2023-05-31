@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -87,8 +88,7 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 				Validators: []validator.String{
 					stringvalidator.OneOf([]string{"BIG-IP", "BIG-IP-Next"}...),
 				},
-				PlanModifiers: []planmodifier.String{
-					attribute_plan_modifier.StringDefaultValue(types.StringValue("BIG-IP"))},
+				Default: stringdefault.StaticString("BIG-IP"),
 			},
 			"cpu_cores": schema.Int64Attribute{
 				MarkdownDescription: "The number of vCPUs that should be added to the tenant.\nRequired for create operations.",
@@ -101,8 +101,7 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 				Validators: []validator.String{
 					stringvalidator.OneOf([]string{"configured", "deployed"}...),
 				},
-				PlanModifiers: []planmodifier.String{
-					attribute_plan_modifier.StringDefaultValue(types.StringValue("configured"))},
+				Default: stringdefault.StaticString("configured"),
 			},
 			"mgmt_ip": schema.StringAttribute{
 				MarkdownDescription: "IP address used to connect to the deployed tenant.\nRequired for create operations.",
@@ -123,8 +122,7 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 				Validators: []validator.String{
 					stringvalidator.OneOf([]string{"enabled", "disabled"}...),
 				},
-				PlanModifiers: []planmodifier.String{
-					attribute_plan_modifier.StringDefaultValue(types.StringValue("enabled"))},
+				Default: stringdefault.StaticString("enabled"),
 			},
 			"nodes": schema.ListAttribute{
 				MarkdownDescription: "List of integers. Specifies on which blades nodes the tenants are deployed.\nRequired for create operations.\nFor single blade platforms like rSeries only the value of 1 should be provided.",
@@ -163,7 +161,7 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 			},
 			"id": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "Tenant identifier",
+				MarkdownDescription: "Unique F5OS Tenant identifier",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -232,7 +230,8 @@ func (r *TenantResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 
-	respByte, err := r.client.GetTenant(data.Name.ValueString())
+	//respByte, err := r.client.GetTenant(data.Name.ValueString())
+	respByte, err := r.client.GetTenant(data.Id.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get Tenants, got error: %s", err))
 		return
@@ -305,6 +304,9 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	data.Name = types.StringValue(respData.F5TenantsTenant[0].Name)
 	data.RunningState = types.StringValue(respData.F5TenantsTenant[0].State.RunningState)
 	data.MgmtIP = types.StringValue(respData.F5TenantsTenant[0].State.MgmtIp)
+	data.MgmtPrefix = types.Int64Value(int64(respData.F5TenantsTenant[0].State.PrefixLength))
+	data.CpuCores = types.Int64Value(int64(respData.F5TenantsTenant[0].State.VcpuCoresPerNode))
+	data.Nodes, _ = types.ListValueFrom(ctx, types.Int64Type, respData.F5TenantsTenant[0].State.Nodes)
 	data.MgmtGateway = types.StringValue(respData.F5TenantsTenant[0].State.Gateway)
 	data.Status = types.StringValue(respData.F5TenantsTenant[0].State.Status)
 	data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].Config.Storage.Size))
