@@ -60,7 +60,9 @@ func (r *TenantResource) Metadata(ctx context.Context, req resource.MetadataRequ
 func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		// This description is used by the documentation generator and the language server.
-		MarkdownDescription: "Resource used for Manage F5OS tenant",
+		MarkdownDescription: "Resource used for Manage F5OS tenant on chassis partition/rSeries Appliance\n\n" +
+			"~> **NOTE** `f5os_tenant` resource is used with chassis partition/rSeries appliance, More info on [Tenant](https://techdocs.f5.com/en-us/velos-1-5-0/velos-systems-administration-configuration/title-tenant-management.html#title-tenant-management)." +
+			"\nProvider `f5os` credentials will be chassis partition/rSeries appliance `host`,`username` and `password`",
 
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{

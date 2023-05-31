@@ -3,12 +3,17 @@
 page_title: "f5os_tenant Resource - terraform-provider-f5os"
 subcategory: ""
 description: |-
-  Resource used for Manage F5OS tenant
+  Resource used for Manage F5OS tenant on chassis partition/rSeries Appliance
+  ~> NOTE f5os_tenant resource is used with chassis partition/rSeries appliance, More info on Tenant https://techdocs.f5.com/en-us/velos-1-5-0/velos-systems-administration-configuration/title-tenant-management.html#title-tenant-management.
+  Provider f5os credentials will be chassis partition/rSeries appliance host,username and password
 ---
 
 # f5os_tenant (Resource)
 
-Resource used for Manage F5OS tenant
+Resource used for Manage F5OS tenant on chassis partition/rSeries Appliance
+
+~> **NOTE** `f5os_tenant` resource is used with chassis partition/rSeries appliance, More info on [Tenant](https://techdocs.f5.com/en-us/velos-1-5-0/velos-systems-administration-configuration/title-tenant-management.html#title-tenant-management).
+Provider `f5os` credentials will be chassis partition/rSeries appliance `host`,`username` and `password`
 
 ## Example Usage
 
