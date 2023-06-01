@@ -41,25 +41,26 @@ resource "f5os_partition" "velos-part" {
 ### Required
 
 - `name` (String) Name of the chassis partition.
-The first character must be a letter.
-Only lowercase alphanumeric characters are allowed.
-No special or extended characters are allowed except for hyphens.
-The name cannot exceed 50 characters.
+Partition names must consist only of alphanumerics (0-9, a-z, A-Z), must begin with a letter, and are limited to 31 characters.
 
 ### Optional
 
+- `configuration_volume_size` (Number) select the desired configuration volume in increments of 1 GB.
+The default value is 10 GB, with a minimum of 5 GB and a maximum of 15 GB.After volume sizes are configured, their sizes can be increased but not reduced
 - `enabled` (Boolean) Enables or disables partition.
+- `images_volume_size` (Number) select the desired storage volume for all tenant images in increments of 1 GB.
+The default value is 15 GB, with a minimum of 5 GB and a maximum of 50 GB.After volume sizes are configured, their sizes can be increased but not reduced
 - `ipv4_mgmt_address` (String) Specifies the IPv4 address and subnet mask used to access the chassis partition.
 The address must be specified in CIDR notation e.g. 192.168.1.1/24.
-Required for create operations.
 - `ipv4_mgmt_gateway` (String) Specifies the IPv4 chassis partition management gateway.
-Required for create operations.
 - `ipv6_mgmt_address` (String) Specifies the IPv6 address and subnet mask used to access the chassis partition.
 The address must be specified in CIDR notation e.g. 2002::1234:abcd:ffff:c0a8:101/64.
 Required for create operations.
 - `ipv6_mgmt_gateway` (String) Specifies the IPv6 chassis partition management gateway.
 Required for create operations.
-- `os_version` (String) Specifies the partition F5OS-C OS version.
+- `os_version` (String) Specifies the partition F5OS-C OS Bundled version.(ISO image version)
+- `shared_volume_size` (Number) select the desired user data (tcpdump captures, QKView data, etc.) volume in increments of 1 GB.
+The default value is 10 GB, with a minimum of 5 GB and a maximum of 20 GBAfter volume sizes are configured, their sizes can be increased but not reduced
 - `slots` (List of Number) List of integers.
 Specifies which slots with which the chassis partition should associated.
 - `timeout` (Number) The number of seconds to wait for partition to transition to running state.
