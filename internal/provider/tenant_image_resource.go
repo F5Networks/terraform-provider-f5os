@@ -8,13 +8,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
-	"gitswarm.f5net.com/terraform-providers/terraform-provider-f5os/internal/provider/attribute_plan_modifier"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -95,8 +95,7 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 				MarkdownDescription: "The number of seconds to wait for image import to finish.",
 				Optional:            true,
 				Computed:            true,
-				PlanModifiers: []planmodifier.Int64{
-					attribute_plan_modifier.Int64DefaultValue(types.Int64Value(360))},
+				Default:             int64default.StaticInt64(360),
 			},
 			"id": schema.StringAttribute{
 				Computed:            true,

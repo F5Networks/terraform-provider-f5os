@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
@@ -17,7 +18,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
-	"gitswarm.f5net.com/terraform-providers/terraform-provider-f5os/internal/provider/attribute_plan_modifier"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -147,8 +147,7 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 				MarkdownDescription: "The number of seconds to wait for image import to finish.",
 				Optional:            true,
 				Computed:            true,
-				PlanModifiers: []planmodifier.Int64{
-					attribute_plan_modifier.Int64DefaultValue(types.Int64Value(360))},
+				Default:             int64default.StaticInt64(360),
 			},
 			"virtual_disk_size": schema.Int64Attribute{
 				MarkdownDescription: "Minimum virtual disk size required for Tenant deployment",

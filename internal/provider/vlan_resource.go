@@ -41,7 +41,7 @@ func (r *VlanResource) Metadata(ctx context.Context, req resource.MetadataReques
 func (r *VlanResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		// This description is used by the documentation generator and the language server.
-		MarkdownDescription: "Resource to Manage VLANs on F5OS based systems like VELOS partitions or rSeries platforms",
+		MarkdownDescription: "Resource to Manage VLANs on F5OS based systems like chassis partitions or rSeries platforms",
 
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{
@@ -54,7 +54,7 @@ func (r *VlanResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 			},
 			"id": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "Unique Vlan resource identifier",
+				MarkdownDescription: "Unique identifier for Vlan resource.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},

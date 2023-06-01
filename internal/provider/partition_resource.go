@@ -11,13 +11,14 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
-	"gitswarm.f5net.com/terraform-providers/terraform-provider-f5os/internal/provider/attribute_plan_modifier"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -34,16 +35,19 @@ type PartitionResource struct {
 }
 
 type PartitionResourceModel struct {
-	Name            types.String `tfsdk:"name"`
-	IPv4MgmtAddress types.String `tfsdk:"ipv4_mgmt_address"`
-	IPv4MgmtGateway types.String `tfsdk:"ipv4_mgmt_gateway"`
-	IPv6MgmtAddress types.String `tfsdk:"ipv6_mgmt_address"`
-	IPv6MgmtGateway types.String `tfsdk:"ipv6_mgmt_gateway"`
-	OsVersion       types.String `tfsdk:"os_version"`
-	Slots           types.List   `tfsdk:"slots"`
-	Enabled         types.Bool   `tfsdk:"enabled"`
-	Timeout         types.Int64  `tfsdk:"timeout"`
-	Id              types.String `tfsdk:"id"`
+	Name                    types.String `tfsdk:"name"`
+	IPv4MgmtAddress         types.String `tfsdk:"ipv4_mgmt_address"`
+	IPv4MgmtGateway         types.String `tfsdk:"ipv4_mgmt_gateway"`
+	IPv6MgmtAddress         types.String `tfsdk:"ipv6_mgmt_address"`
+	IPv6MgmtGateway         types.String `tfsdk:"ipv6_mgmt_gateway"`
+	OsVersion               types.String `tfsdk:"os_version"`
+	Slots                   types.List   `tfsdk:"slots"`
+	Enabled                 types.Bool   `tfsdk:"enabled"`
+	ConfigurationVolumeSize types.Int64  `tfsdk:"configuration_volume_size"`
+	ImagesVolumeSize        types.Int64  `tfsdk:"images_volume_size"`
+	SharedVolumeSize        types.Int64  `tfsdk:"shared_volume_size"`
+	Timeout                 types.Int64  `tfsdk:"timeout"`
+	Id                      types.String `tfsdk:"id"`
 }
 
 func (r *PartitionResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -58,14 +62,14 @@ func (r *PartitionResource) Schema(ctx context.Context, req resource.SchemaReque
 			"\nProvider `f5os` credentials will be chassis controller `host`,`username` and `password`",
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{
-				MarkdownDescription: "Name of the chassis partition.\nThe first character must be a letter.\nOnly lowercase alphanumeric characters are allowed.\nNo special or extended characters are allowed except for hyphens.\nThe name cannot exceed 50 characters.",
+				MarkdownDescription: "Name of the chassis partition.\nPartition names must consist only of alphanumerics (0-9, a-z, A-Z), must begin with a letter, and are limited to 31 characters.",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"ipv4_mgmt_address": schema.StringAttribute{
-				MarkdownDescription: "Specifies the IPv4 address and subnet mask used to access the chassis partition.\nThe address must be specified in CIDR notation e.g. 192.168.1.1/24.\nRequired for create operations.",
+				MarkdownDescription: "Specifies the IPv4 address and subnet mask used to access the chassis partition.\nThe address must be specified in CIDR notation e.g. 192.168.1.1/24.",
 				Optional:            true,
 				Validators: []validator.String{
 					stringvalidator.RegexMatches(
@@ -75,7 +79,7 @@ func (r *PartitionResource) Schema(ctx context.Context, req resource.SchemaReque
 				},
 			},
 			"ipv4_mgmt_gateway": schema.StringAttribute{
-				MarkdownDescription: "Specifies the IPv4 chassis partition management gateway.\nRequired for create operations.",
+				MarkdownDescription: "Specifies the IPv4 chassis partition management gateway.",
 				Optional:            true,
 				Validators: []validator.String{
 					stringvalidator.RegexMatches(
@@ -105,7 +109,7 @@ func (r *PartitionResource) Schema(ctx context.Context, req resource.SchemaReque
 				//},
 			},
 			"os_version": schema.StringAttribute{
-				MarkdownDescription: "Specifies the partition F5OS-C OS version.",
+				MarkdownDescription: "Specifies the partition F5OS-C OS Bundled version.(ISO image version)",
 				Optional:            true,
 				Computed:            true,
 			},
@@ -122,17 +126,32 @@ func (r *PartitionResource) Schema(ctx context.Context, req resource.SchemaReque
 				MarkdownDescription: "Enables or disables partition.",
 				Optional:            true,
 				Computed:            true,
-				PlanModifiers: []planmodifier.Bool{
-					attribute_plan_modifier.BoolDefaultValue(types.BoolValue(true)),
-				},
+				Default:             booldefault.StaticBool(true),
+			},
+			"configuration_volume_size": schema.Int64Attribute{
+				MarkdownDescription: "select the desired configuration volume in increments of 1 GB.\nThe default value is 10 GB, with a minimum of 5 GB and a maximum of 15 GB.After volume sizes are configured, their sizes can be increased but not reduced",
+				Optional:            true,
+				Computed:            true,
+				Default:             int64default.StaticInt64(10),
+			},
+			"images_volume_size": schema.Int64Attribute{
+				MarkdownDescription: "select the desired storage volume for all tenant images in increments of 1 GB.\nThe default value is 15 GB, with a minimum of 5 GB and a maximum of 50 GB.After volume sizes are configured, their sizes can be increased but not reduced",
+				Optional:            true,
+				Computed:            true,
+				Default:             int64default.StaticInt64(15),
+			},
+			"shared_volume_size": schema.Int64Attribute{
+				MarkdownDescription: "select the desired user data (tcpdump captures, QKView data, etc.) volume in increments of 1 GB.\nThe default value is 10 GB, with a minimum of 5 GB and a maximum of 20 GB" +
+					"After volume sizes are configured, their sizes can be increased but not reduced",
+				Optional: true,
+				Computed: true,
+				Default:  int64default.StaticInt64(10),
 			},
 			"timeout": schema.Int64Attribute{
 				MarkdownDescription: "The number of seconds to wait for partition to transition to running state.",
 				Optional:            true,
 				Computed:            true,
-				PlanModifiers: []planmodifier.Int64{
-					attribute_plan_modifier.Int64DefaultValue(types.Int64Value(360)),
-				},
+				Default:             int64default.StaticInt64(360),
 			},
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -406,6 +425,9 @@ func getPartitionUpdateConfig(ctx context.Context, req resource.UpdateRequest, r
 	partitionReq := f5ossdk.F5ReqPartition{}
 	partitionReq.Config.IsoVersion = data.OsVersion.ValueString()
 	partitionReq.Config.Enabled = data.Enabled.ValueBool()
+	partitionReq.Config.ConfigurationVolume = int(data.ConfigurationVolumeSize.ValueInt64())
+	partitionReq.Config.ImagesVolume = int(data.ImagesVolumeSize.ValueInt64())
+	partitionReq.Config.SharedVolume = int(data.SharedVolumeSize.ValueInt64())
 
 	if !data.IPv4MgmtAddress.IsNull() && !data.IPv4MgmtAddress.IsUnknown() {
 		prefix, ip, err := extractSubnet(data.IPv4MgmtAddress.ValueString())
@@ -437,6 +459,9 @@ func (r *PartitionResource) partitionResourceModelToState(ctx context.Context, r
 	data.Name = types.StringValue(respData.Partition[0].Name)
 	data.Enabled = types.BoolValue(respData.Partition[0].Config.Enabled)
 	data.OsVersion = types.StringValue(respData.Partition[0].Config.IsoVersion)
+	data.ConfigurationVolumeSize = types.Int64Value(int64(respData.Partition[0].Config.ConfigurationVolume))
+	data.ImagesVolumeSize = types.Int64Value(int64(respData.Partition[0].Config.ImagesVolume))
+	data.SharedVolumeSize = types.Int64Value(int64(respData.Partition[0].Config.SharedVolume))
 
 	if respData.Partition[0].Config.MgmtIp.Ipv4.PrefixLength != 0 {
 		data.IPv4MgmtAddress = types.StringValue(fmt.Sprintf("%s/%d", respData.Partition[0].Config.MgmtIp.Ipv4.Address, int64(respData.Partition[0].Config.MgmtIp.Ipv4.PrefixLength)))
@@ -458,6 +483,9 @@ func getPartitionCreateConfig(ctx context.Context, req resource.CreateRequest, r
 	partitionReq.Name = data.Name.ValueString()
 	partitionReq.Config.IsoVersion = data.OsVersion.ValueString()
 	partitionReq.Config.Enabled = data.Enabled.ValueBool()
+	partitionReq.Config.ConfigurationVolume = int(data.ConfigurationVolumeSize.ValueInt64())
+	partitionReq.Config.ImagesVolume = int(data.ImagesVolumeSize.ValueInt64())
+	partitionReq.Config.SharedVolume = int(data.SharedVolumeSize.ValueInt64())
 
 	if !data.IPv4MgmtAddress.IsNull() && !data.IPv4MgmtAddress.IsUnknown() {
 		prefix, ip, err := extractSubnet(data.IPv4MgmtAddress.ValueString())

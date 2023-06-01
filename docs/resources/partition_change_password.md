@@ -3,12 +3,12 @@
 page_title: "f5os_partition_change_password Resource - terraform-provider-f5os"
 subcategory: ""
 description: |-
-  Provides access to VELOS chassis partition user authentication change password methods
+  Resource used to manage password of a specific user on a velos chassis partition.
 ---
 
 # f5os_partition_change_password (Resource)
 
-Provides access to VELOS chassis partition user authentication change password methods
+Resource used to manage password of a specific user on a velos chassis partition.
 
 ## Example Usage
 
@@ -26,16 +26,12 @@ resource "f5os_partition_change_password" "changepass" {
 
 ### Required
 
-- `user_name` (String) Name of the chassis partition user account.
-
-### Optional
-
 - `new_password` (String, Sensitive) New password for the specified user account.
 - `old_password` (String, Sensitive) Current password for the specified user account.
-- `timeout` (Number) The number of seconds to wait for partition to transition to running state.
+- `user_name` (String) Name of the chassis partition user account.
 
 ### Read-Only
 
-- `id` (String) Tenant identifier
+- `id` (String) Unique identifier for resource.
 
 

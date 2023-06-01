@@ -11,7 +11,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
-	"gitswarm.f5net.com/terraform-providers/terraform-provider-f5os/internal/provider/attribute_plan_modifier"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -30,7 +29,6 @@ type PartitionChangePasswordResourceModel struct {
 	UserName    types.String `tfsdk:"user_name"`
 	OldPassword types.String `tfsdk:"old_password"`
 	NewPassword types.String `tfsdk:"new_password"`
-	Timeout     types.Int64  `tfsdk:"timeout"`
 	Id          types.String `tfsdk:"id"`
 }
 
@@ -41,7 +39,7 @@ func (r *PartitionChangePasswordResource) Metadata(ctx context.Context, req reso
 func (r *PartitionChangePasswordResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		// This description is used by the documentation generator and the language server.
-		MarkdownDescription: "Provides access to VELOS chassis partition user authentication change password methods",
+		MarkdownDescription: "Resource used to manage password of a specific user on a velos chassis partition.",
 
 		Attributes: map[string]schema.Attribute{
 			"user_name": schema.StringAttribute{
@@ -53,24 +51,16 @@ func (r *PartitionChangePasswordResource) Schema(ctx context.Context, req resour
 			},
 			"old_password": schema.StringAttribute{
 				MarkdownDescription: "Current password for the specified user account.",
-				Optional:            true,
+				Required:            true,
 				Sensitive:           true,
 			},
 			"new_password": schema.StringAttribute{
 				MarkdownDescription: "New password for the specified user account.",
-				Optional:            true,
+				Required:            true,
 				Sensitive:           true,
 			},
-			"timeout": schema.Int64Attribute{
-				MarkdownDescription: "The number of seconds to wait for partition to transition to running state.",
-				Optional:            true,
-				Computed:            true,
-				PlanModifiers: []planmodifier.Int64{
-					attribute_plan_modifier.Int64DefaultValue(types.Int64Value(360)),
-				},
-			},
 			"id": schema.StringAttribute{
-				MarkdownDescription: "Tenant identifier",
+				MarkdownDescription: "Unique identifier for resource.",
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),

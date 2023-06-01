@@ -17,9 +17,12 @@ type F5ReqPartitions struct {
 }
 
 type F5ReqPartitionConfig struct {
-	Enabled    bool   `json:"enabled,omitempty"`
-	IsoVersion string `json:"iso-version,omitempty"`
-	MgmtIp     struct {
+	Enabled             bool   `json:"enabled,omitempty"`
+	IsoVersion          string `json:"iso-version,omitempty"`
+	ConfigurationVolume int    `json:"configuration-volume,omitempty"`
+	ImagesVolume        int    `json:"images-volume,omitempty"`
+	SharedVolume        int    `json:"shared-volume,omitempty"`
+	MgmtIp              struct {
 		Ipv4 struct {
 			Address      string `json:"address,omitempty"`
 			PrefixLength int    `json:"prefix-length,omitempty"`

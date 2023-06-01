@@ -3,12 +3,12 @@
 page_title: "f5os_vlan Resource - terraform-provider-f5os"
 subcategory: ""
 description: |-
-  Resource to Manage VLANs on F5OS based systems like VELOS partitions or rSeries platforms
+  Resource to Manage VLANs on F5OS based systems like chassis partitions or rSeries platforms
 ---
 
 # f5os_vlan (Resource)
 
-Resource to Manage VLANs on F5OS based systems like VELOS partitions or rSeries platforms
+Resource to Manage VLANs on F5OS based systems like chassis partitions or rSeries platforms
 
 ## Example Usage
 
@@ -38,7 +38,7 @@ The name cannot exceed 58 characters.
 
 ### Read-Only
 
-- `id` (String) Unique Vlan resource identifier
+- `id` (String) Unique identifier for Vlan resource.
 
 ## Import
 
