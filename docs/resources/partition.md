@@ -4,15 +4,25 @@ page_title: "f5os_partition Resource - terraform-provider-f5os"
 subcategory: ""
 description: |-
   Resource used for Manage VELOS chassis partition
+  ~> NOTE f5os_partition resource is used with Velos Chassis controller only, More info on chassis partition https://techdocs.f5.com/en-us/velos-1-5-0/velos-systems-administration-configuration/title-partition-mgmt.html#about-partitions.
+  Provider f5os credentials will be chassis controller host,username and password
 ---
 
 # f5os_partition (Resource)
 
 Resource used for Manage VELOS chassis partition
 
+~> **NOTE** `f5os_partition` resource is used with Velos Chassis controller only, More info on [chassis partition](https://techdocs.f5.com/en-us/velos-1-5-0/velos-systems-administration-configuration/title-partition-mgmt.html#about-partitions).
+Provider `f5os` credentials will be chassis controller `host`,`username` and `password`
+
 ## Example Usage
 
 ```terraform
+provider "f5os" {
+  username = "<chassis_controller_username>"
+  password = "<chassis_controller_password>"
+  host     = "<chassis_controller_ip>"
+}
 # Manages F5OS partition
 resource "f5os_partition" "velos-part" {
   name              = "TerraformPartition"
@@ -56,6 +66,6 @@ Specifies which slots with which the chassis partition should associated.
 
 ### Read-Only
 
-- `id` (String) Tenant identifier
+- `id` (String) Unique Partition identifier
 
 

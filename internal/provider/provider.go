@@ -87,6 +87,7 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	host := os.Getenv("F5OS_HOST")
 	username := os.Getenv("F5OS_USERNAME")
 	password := os.Getenv("F5OS_PASSWORD")
+	hostPort := 8888
 
 	if !config.Host.IsNull() {
 		host = config.Host.ValueString()
@@ -98,6 +99,9 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 
 	if !config.Password.IsNull() {
 		password = config.Password.ValueString()
+	}
+	if !config.Port.IsNull() {
+		hostPort = int(config.Port.ValueInt64())
 	}
 	if host == "" {
 		resp.Diagnostics.AddError(
@@ -134,7 +138,7 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		Host:     host,
 		User:     username,
 		Password: password,
-		Port:     8888,
+		Port:     hostPort,
 	}
 
 	//tflog.Info(ctx, fmt.Sprintf("f5osConfig client:%+v", f5osConfig))

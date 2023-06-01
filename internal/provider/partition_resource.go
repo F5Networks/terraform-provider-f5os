@@ -53,8 +53,9 @@ func (r *PartitionResource) Metadata(ctx context.Context, req resource.MetadataR
 func (r *PartitionResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		// This description is used by the documentation generator and the language server.
-		MarkdownDescription: "Resource used for Manage VELOS chassis partition",
-
+		MarkdownDescription: "Resource used for Manage VELOS chassis partition\n\n" +
+			"~> **NOTE** `f5os_partition` resource is used with Velos Chassis controller only, More info on [chassis partition](https://techdocs.f5.com/en-us/velos-1-5-0/velos-systems-administration-configuration/title-partition-mgmt.html#about-partitions)." +
+			"\nProvider `f5os` credentials will be chassis controller `host`,`username` and `password`",
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{
 				MarkdownDescription: "Name of the chassis partition.\nThe first character must be a letter.\nOnly lowercase alphanumeric characters are allowed.\nNo special or extended characters are allowed except for hyphens.\nThe name cannot exceed 50 characters.",
@@ -135,7 +136,7 @@ func (r *PartitionResource) Schema(ctx context.Context, req resource.SchemaReque
 			},
 			"id": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "Tenant identifier",
+				MarkdownDescription: "Unique Partition identifier",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
