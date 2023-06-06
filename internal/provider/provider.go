@@ -2,12 +2,7 @@ package provider
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
-	"os"
-	"strings"
-
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -16,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
+	"os"
 )
 
 // Ensure F5osProvider satisfies various provider interfaces.
@@ -170,9 +166,7 @@ func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource
 }
 
 func (p *F5osProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{
-		NewSoftwareInfoDataSource,
-	}
+	return []func() datasource.DataSource{}
 }
 
 func New(version string) func() provider.Provider {
@@ -207,12 +201,12 @@ func toF5osProvider(in any) (*f5ossdk.F5os, diag.Diagnostics) {
 	return p, diags
 }
 
-// hashForState computes the hexadecimal representation of the SHA1 checksum of a string.
-// This is used by most resources/data-sources here to compute their Unique Identifier (ID).
-func hashForState(value string) string {
-	if value == "" {
-		return ""
-	}
-	hash := sha1.Sum([]byte(strings.TrimSpace(value)))
-	return hex.EncodeToString(hash[:])
-}
+//// hashForState computes the hexadecimal representation of the SHA1 checksum of a string.
+//// This is used by most resources/data-sources here to compute their Unique Identifier (ID).
+//func hashForState(value string) string {
+//	if value == "" {
+//		return ""
+//	}
+//	hash := sha1.Sum([]byte(strings.TrimSpace(value)))
+//	return hex.EncodeToString(hash[:])
+//}

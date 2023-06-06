@@ -202,6 +202,7 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 	respByte, err := r.client.CreateTenant(tenantConfig, int(data.Timeout.ValueInt64()))
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Tenant Deploy failed, got error: %s", err))
+		_ = r.client.DeleteTenant(data.Name.ValueString())
 		return
 	}
 	tflog.Info(ctx, fmt.Sprintf("tenantConfig Response:%+v", string(respByte)))
