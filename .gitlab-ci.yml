@@ -4,8 +4,6 @@ variables:
 
 default:
   image: "${DOCKER_HUB_PROXY}/golang:latest"
-#   tags:
-#     - saas-linux-medium-amd64
 
 stages:
   - lint
@@ -22,8 +20,6 @@ workflow:
         - .go-version
       variables:
         IMAGE_TAG: ${CI_COMMIT_REF_SLUG}
-    # Apparently including the merged workflow rules in addition to the custom rule above doesn't work.
-    # This comes from https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/gitlab/ci/templates/Workflows/MergeRequest-Pipelines.gitlab-ci.yml
     - if: $CI_MERGE_REQUEST_IID
     - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
@@ -33,39 +29,7 @@ cache:
     files:
       - GNUMakefile
 
-# .run-for-supported-versions:
-#   parallel:
-#     matrix:
-#       - GITLAB_VERSION:
-#           - "15.8.4-${GITLAB_EDITION}.0"
-#           - "15.9.3-${GITLAB_EDITION}.0"
-#           - "15.10.0-${GITLAB_EDITION}.0"
-
-# Disabling code navigatino with LSIF, until the upload issue is solved.
-# see https://gitlab.com/gitlab-org/gitlab/-/issues/365885#note_1219840952
-# code_navigation:
-#   needs: []
-#   stage: build
-#   image: sourcegraph/lsif-go:v1
-#   allow_failure: true # recommended
-#   script:
-#     - lsif-go
-#     - ls -lh dump.lsif
-#   artifacts:
-#     reports:
-#       lsif: dump.lsif
-#   rules:
-#     - if: $CI_DEFAULT_BRANCH == $CI_COMMIT_REF_NAME
-#     - if: $CI_COMMIT_TAG
-
-# danger-review:
-#   needs: []
-#   stage: lint
-#   allow_failure: true
-#   variables:
-#     GITLAB_DANGERFILES_VERSION: "3.6.4"
-
-make:lint:
+makelint:
   needs: []
   stage: lint
   script:
@@ -114,8 +78,7 @@ goreleaser:
   only:
     - tags
   image:
-    name: goreleaser/goreleaser:v1.12.1
-    entrypoint: [""]
+    name: "${DOCKER_HUB_PROXY}/goreleaser/goreleaser"
   variables:
     # Disable shallow cloning so that goreleaser can diff between tags to
     # generate a changelog.
@@ -123,13 +86,13 @@ goreleaser:
     GITLAB_TOKEN: $CI_JOB_TOKEN
   before_script:
     - apk add gpg-agent
+    - chmod +x setup_deps.bash
+    - ./setup_deps.bash
     - gpg --batch --no-tty --import $GPG_PRIVATE_KEY
     - "export GPG_FINGERPRINT=$(gpg --with-colons --list-keys | awk -F: '/^pub/ { print $5 }')"
   script:
+    - echo $GPG_FINGERPRINT
     - goreleaser release
-    # NOTE(@timofurrer): goreleaser doesn't write `release.extra_files` to the `dist/` folder
-    #                    before upload, therefore, we are going to create it for now.
-    #                    Note that it also strips the first character (the leading `v`) from the tag
     - cp terraform-registry-manifest.json dist/${CI_PROJECT_NAME}_${CI_COMMIT_TAG:1}_manifest.json
   artifacts:
     paths:
@@ -137,7 +100,6 @@ goreleaser:
       - dist/$CI_PROJECT_NAME_*_SHA256SUMS*
       - dist/$CI_PROJECT_NAME_*_manifest.json
       - docs/
-      - CHANGELOG.md
 
 github-for-terraform-registry:
   stage: publish
@@ -148,19 +110,18 @@ github-for-terraform-registry:
     GIT_STRATEGY: none
     GITHUB_ORG: RavinderReddyF5
     GITHUB_REPO: $CI_PROJECT_NAME
+    GITHUB_USER: RavinderReddyF5
   before_script:
     - apk add --update curl jq file git
     - ls dist/
   script:
-    # NOTE(@timofurrer): publish docs to GitHub, so that they end up in the GitHub release Source code assets,
-    #                    ready for the Terraform Registry to discover.
     - |
-      git clone --depth 1 https://gitlab-terraform-provider-bot:$GITHUB_TOKEN_FOR_SYNC@github.com/$GITHUB_ORG/$GITHUB_REPO.git /tmp/github-repo
-      cp -rf docs CHANGELOG.md /tmp/github-repo
+      git clone --depth 1 https://$GITHUB_USER:$GITHUB_TOKEN_FOR_SYNC@github.com/$GITHUB_ORG/$GITHUB_REPO.git /tmp/github-repo
+      cp -rf docs /tmp/github-repo
       cd /tmp/github-repo
-      git config user.email "Terraform-Provider-Bot@gitlab.com"
-      git config user.name "gitlab-terraform-provider-bot"
-      git add docs CHANGELOG.md
+      git config user.email $GITHUB_MAIL
+      git config user.name $GITHUB_USER
+      git add docs
       git commit --message "Update docs for $CI_COMMIT_TAG release" --allow-empty
       git push
       cd -
@@ -181,7 +142,6 @@ github-for-terraform-registry:
         }'
       )
     - gh_release_id=$(echo $gh_release | jq -r '.id')
-    # NOTE(@timofurrer): cannot use `.upload_url` from `$gh_release`, because it contains the query parameters in some weird unusable way ...
     - gh_release_upload_url="https://uploads.github.com/repos/$GITHUB_ORG/$GITHUB_REPO/releases/$gh_release_id/assets"
     - 'echo "GitHub Release URL: $gh_release_upload_url"'
     # uploading release assets for GitHub release created in previous step
