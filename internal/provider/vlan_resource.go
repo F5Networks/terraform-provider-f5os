@@ -76,8 +76,8 @@ func (r *VlanResource) Create(ctx context.Context, req resource.CreateRequest, r
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if r.client.PlatformType != "Velos Partition" {
-		resp.Diagnostics.AddError("Client Error", "`f5os_vlan` resource is supported with Velos Partition level.")
+	if r.client.PlatformType == "Velos Controller" {
+		resp.Diagnostics.AddError("Client Error", "`f5os_vlan` resource is supported with Velos Partition level/rSeries appliance.")
 		return
 	}
 	tflog.Info(ctx, fmt.Sprintf("[CREATE] Vlan ID:%+v", data.VlanId.ValueInt64()))
@@ -144,7 +144,7 @@ func (r *VlanResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	if r.client.PlatformType != "Velos Partition" {
+	if r.client.PlatformType == "Velos Controller" {
 		resp.Diagnostics.AddError("Client Error", "`f5os_vlan` resource is supported with Velos Partition level.")
 		return
 	}

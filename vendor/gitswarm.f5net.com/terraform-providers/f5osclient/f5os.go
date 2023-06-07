@@ -214,7 +214,10 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	}
 	defer res.Body.Close()
 	f5osSession.Token = res.Header.Get("X-Auth-Token")
-	_, err = io.ReadAll(res.Body)
+	respData, err := io.ReadAll(res.Body)
+	if res.StatusCode == 401 {
+		return nil, fmt.Errorf("%+v with error:%+v", res.Status, string(respData))
+	}
 	if err != nil {
 		return nil, err
 	}

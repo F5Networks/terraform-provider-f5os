@@ -29,7 +29,7 @@ unit_test:
     paths:
       - "$CI_PROJECT_DIR/coverage_report.html"
     expire_in: "1 days"
-  coverage: "/\\(statements\\)\\s+\\d+.?\\d+%/"
+  coverage: '/coverage: \d+\.\d+\% of statements/'
 
 pages:
   stage: report
