@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -50,6 +51,7 @@ type TenantResourceModel struct {
 	Status          types.String `tfsdk:"status"`
 	Timeout         types.Int64  `tfsdk:"timeout"`
 	VirtualdiskSize types.Int64  `tfsdk:"virtual_disk_size"`
+	Memory          types.Int64  `tfsdk:"memory"`
 	Id              types.String `tfsdk:"id"`
 }
 
@@ -153,12 +155,13 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 				MarkdownDescription: "Minimum virtual disk size required for Tenant deployment",
 				Required:            true,
 			},
+			"memory": schema.Int64Attribute{
+				MarkdownDescription: "The amount of memory that should be provided to the tenant in MB.\n More information on memory sizing for [Velos](https://clouddocs.f5.com/training/community/velos-training/html/velos_performance_and_sizing.html#memory-sizing)/[rSeries](https://clouddocs.f5.com/training/community/rseries-training/html/rseries_performance_and_sizing.html#memory-sizing)",
+				Required:            true,
+			},
 			"status": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Tenant status",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -191,9 +194,6 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 
 	tenantConfig := getTenantCreateConfig(ctx, req, resp)
 
-	if r.client.PlatformType == "Velos Partition" {
-		tenantConfig.F5TenantsTenant[0].Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
-	}
 	if data.Type.ValueString() == "BIG-IP-Next" {
 		tenantConfig.F5TenantsTenant[0].Config.DeploymentFile = data.DeploymentFile.ValueString()
 	}
@@ -255,19 +255,17 @@ func (r *TenantResource) Update(ctx context.Context, req resource.UpdateRequest,
 	}
 	tenantConfig := getTenantUpdateConfig(ctx, req, resp)
 
-	if r.client.PlatformType == "Velos Partition" {
-		tenantConfig.F5TenantsTenants.Tenant[0].Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
-	}
 	if data.Type.ValueString() == "BIG-IP-Next" {
 		tenantConfig.F5TenantsTenants.Tenant[0].Config.DeploymentFile = data.DeploymentFile.ValueString()
 	}
-
+	tflog.Info(ctx, fmt.Sprintf("[Update] tenantConfig :%+v", tenantConfig))
 	respByte, err := r.client.UpdateTenant(tenantConfig, int(data.Timeout.ValueInt64()))
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Tenant Deploy failed, got error: %s", err))
 		return
 	}
-	tflog.Info(ctx, fmt.Sprintf("tenantConfig Data:%+v", string(respByte)))
+	tflog.Info(ctx, fmt.Sprintf("[Update] tenantConfig resp :%+v", string(respByte)))
+
 	respByte2, err := r.client.GetTenant(data.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get Tenants, got error: %s", err))
@@ -308,11 +306,13 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	data.MgmtIP = types.StringValue(respData.F5TenantsTenant[0].State.MgmtIp)
 	data.MgmtPrefix = types.Int64Value(int64(respData.F5TenantsTenant[0].State.PrefixLength))
 	data.CpuCores = types.Int64Value(int64(respData.F5TenantsTenant[0].State.VcpuCoresPerNode))
-	data.Nodes, _ = types.ListValueFrom(ctx, types.Int64Type, respData.F5TenantsTenant[0].State.Nodes)
+	data.Nodes, _ = types.ListValueFrom(ctx, types.Int64Type, respData.F5TenantsTenant[0].Config.Nodes)
 	data.MgmtGateway = types.StringValue(respData.F5TenantsTenant[0].State.Gateway)
 	data.Status = types.StringValue(respData.F5TenantsTenant[0].State.Status)
-	data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].Config.Storage.Size))
-	data.Cryptos = types.StringValue(respData.F5TenantsTenant[0].Config.Cryptos)
+	data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].State.Storage.Size))
+	memoryInt, _ := strconv.Atoi(respData.F5TenantsTenant[0].State.Memory)
+	data.Memory = types.Int64Value(int64(memoryInt))
+	data.Cryptos = types.StringValue(respData.F5TenantsTenant[0].State.Cryptos)
 }
 
 func getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.F5ReqTenants {
@@ -329,7 +329,8 @@ func getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp
 	tenantSubbj.Config.MgmtIp = data.MgmtIP.ValueString()
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.VcpuCoresPerNode = int(data.CpuCores.ValueInt64())
-	tenantSubbj.Config.Memory = 3 * 1024 * int(data.CpuCores.ValueInt64())
+	//tenantSubbj.Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
+	tenantSubbj.Config.Memory = int(data.Memory.ValueInt64())
 	data.Vlans.ElementsAs(ctx, &tenantSubbj.Config.Vlans, false)
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.RunningState = data.RunningState.ValueString()
@@ -356,7 +357,8 @@ func getTenantUpdateConfig(ctx context.Context, req resource.UpdateRequest, resp
 	tenantSubbj.Config.MgmtIp = data.MgmtIP.ValueString()
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.VcpuCoresPerNode = int(data.CpuCores.ValueInt64())
-	tenantSubbj.Config.Memory = 3 * 1024 * int(data.CpuCores.ValueInt64())
+	//tenantSubbj.Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
+	tenantSubbj.Config.Memory = int(data.Memory.ValueInt64())
 	data.Nodes.ElementsAs(ctx, &tenantSubbj.Config.Nodes, false)
 	data.Vlans.ElementsAs(ctx, &tenantSubbj.Config.Vlans, false)
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())

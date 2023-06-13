@@ -43,6 +43,8 @@ resource "f5os_tenant" "test3" {
 Required for create operations.
 - `image_name` (String) Name of the tenant image to be used.
 Required for create operations
+- `memory` (Number) The amount of memory that should be provided to the tenant in MB.
+ More information on memory sizing for [Velos](https://clouddocs.f5.com/training/community/velos-training/html/velos_performance_and_sizing.html#memory-sizing)/[rSeries](https://clouddocs.f5.com/training/community/rseries-training/html/rseries_performance_and_sizing.html#memory-sizing)
 - `mgmt_gateway` (String) Tenant management gateway.
 - `mgmt_ip` (String) IP address used to connect to the deployed tenant.
 Required for create operations.

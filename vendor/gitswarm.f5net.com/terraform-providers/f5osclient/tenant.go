@@ -236,6 +236,9 @@ func (p *F5os) GetTenant(tenantName string) (*F5RespTenants, error) {
 	}
 	f5osLogger.Info("[GetTenant]", "Tenant Info:", hclog.Fmt("%+v", string(byteData)))
 	json.Unmarshal(byteData, tenantStatus)
+	if len(tenantStatus.F5TenantsTenant) == 0 {
+		return nil, fmt.Errorf("GetTenant failed with :%+v", string(byteData))
+	}
 	f5osLogger.Info("[GetTenant]", "Tenant Struct:", hclog.Fmt("%+v", tenantStatus))
 	return tenantStatus, nil
 }
