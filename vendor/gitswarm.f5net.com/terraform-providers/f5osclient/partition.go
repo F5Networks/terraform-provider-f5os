@@ -318,3 +318,22 @@ func (p *F5os) DeleteVlan(vlanId int) error {
 	}
 	return nil
 }
+
+func (p *F5os) InterfaceConfig(interfaceConfig *F5ReqOpenconfigInterface) ([]byte, error) {
+	url := fmt.Sprintf("%s", uriVlan)
+	f5osLogger.Debug("[InterfaceConfig]", "Request path", hclog.Fmt("%+v", url))
+	byteBody, err := json.Marshal(interfaceConfig)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[InterfaceConfig]", "Body", hclog.Fmt("%+v", string(byteBody)))
+	respData, err := p.PatchRequest(url, byteBody)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[InterfaceConfig]", "Resp: ", hclog.Fmt("%+v", string(respData)))
+	return byteBody, nil
+}
+
+
+
