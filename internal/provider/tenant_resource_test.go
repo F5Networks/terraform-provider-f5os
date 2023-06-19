@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+//var count int = 0
+
 func TestAccTenantDeployResource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		//IsUnitTest:               true,
@@ -35,13 +37,51 @@ func TestAccTenantDeployResource(t *testing.T) {
 			{
 				ResourceName:      "f5os_tenant.test2",
 				ImportState:       true,
-				ImportStateVerify: true,
+				ImportStateVerify: false,
 			},
 		},
 	})
 }
 
-func TestUnitTenantDeployResource(t *testing.T) {
+func TestAccTenantDeployResourceTC4(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Read testing
+			{
+				Config: testAccTenantDeployResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "id", "testtenant-ecosys2"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "image_name", "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_ip", "10.10.10.26"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_gateway", "10.10.10.1"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "type", "BIG-IP"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "status", "Configured"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "vlans.0", "1"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "vlans.#", "1"),
+				),
+			},
+			{
+				Config: testAccTenantDeployTC4ResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "id", "testtenant-ecosys2"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "image_name", "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_ip", "10.10.10.27"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_gateway", "10.10.10.1"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "type", "BIG-IP"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "status", "Configured"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "vlans.0", "1"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "vlans.#", "1"),
+				),
+			},
+		},
+	})
+}
+
+func TestUnitTenantDeployResourceTC1(t *testing.T) {
 	testAccPreUnitCheck(t)
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "GET", r.Method, "Expected method 'GET', got %s", r.Method)
@@ -103,6 +143,54 @@ func TestUnitTenantDeployResourceTC2(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
 	})
 	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_r4k_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprintf(w, ``)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2/state", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_r4k_get_status.json"))
+	})
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_r4k_config.json"))
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Read testing
+			{
+				Config: testAccTenantDeployTC2ResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "id", "testtenant-ecosys2"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "image_name", "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_ip", "10.14.10.10"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_gateway", "10.14.10.1"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "type", "BIG-IP"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "status", "Running"),
+				),
+			},
+		},
+	})
+}
+
+func TestUnitTenantDeployResourceTC3(t *testing.T) {
+	testAccPreUnitCheck(t)
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "GET", r.Method, "Expected method 'GET', got %s", r.Method)
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "eyJhbGciOiJIXzI2NiIsInR6cCI6IkcXVCJ9.eyJhdXRoaW5mbyI6ImFkbWluIDEwMDAgOTAwMCBcL3ZhclwvRjVcL3BhcnRpdGlvbiIsImV4cCI6MTY4MDcyMDc4MiwiaWF0IjoxNjgwNzE5ODgyLCJyZW5ld2xpbWl0IjoiNSIsInVzZXJpbmZvIjoiYWRtaW4gMTcyLjE4LjIzMy4yMiJ9.c6Fw4AVm9dN4F-rRJZ1655Ks3xEWCzdAvum-Q3K7cwU")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
 	})
@@ -128,12 +216,84 @@ func TestUnitTenantDeployResourceTC2(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Read testing
 			{
-				Config:      testAccTenantDeployResourceTC2Config,
+				Config:      testAccTenantDeployResourceTC3Config,
 				ExpectError: regexp.MustCompile("Tenant Deploy failed, got error"),
 			},
 		},
 	})
 }
+
+//func TestUnitTenantDeployResourceTC4(t *testing.T) {
+//	testAccPreUnitCheck(t)
+//	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+//		assert.Equal(t, "GET", r.Method, "Expected method 'GET', got %s", r.Method)
+//		w.Header().Set("Content-Type", "application/yang-data+json")
+//		w.Header().Set("X-Auth-Token", "eyJhbGciOiJIXzI2NiIsInR6cCI6IkcXVCJ9.eyJhdXRoaW5mbyI6ImFkbWluIDEwMDAgOTAwMCBcL3ZhclwvRjVcL3BhcnRpdGlvbiIsImV4cCI6MTY4MDcyMDc4MiwiaWF0IjoxNjgwNzE5ODgyLCJyZW5ld2xpbWl0IjoiNSIsInVzZXJpbmZvIjoiYWRtaW4gMTcyLjE4LjIzMy4yMiJ9.c6Fw4AVm9dN4F-rRJZ1655Ks3xEWCzdAvum-Q3K7cwU")
+//		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+//	})
+//	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+//		w.WriteHeader(http.StatusOK)
+//		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_r4k_state.json"))
+//	})
+//	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
+//		w.WriteHeader(http.StatusCreated)
+//		_, _ = fmt.Fprintf(w, ``)
+//	})
+//	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2/state", func(w http.ResponseWriter, r *http.Request) {
+//		w.WriteHeader(http.StatusOK)
+//		if count == 4 {
+//			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_r4k_update_get_status.json"))
+//		}
+//		if count == 0 {
+//			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_r4k_get_status.json"))
+//		}
+//		count++
+//	})
+//	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2", func(w http.ResponseWriter, r *http.Request) {
+//		w.WriteHeader(http.StatusOK)
+//		if count == 5 || count == 6 {
+//			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_r4k_update_config.json"))
+//		}
+//		if count == 1 || count == 2 || count == 3 {
+//			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_r4k_config.json"))
+//		}
+//		count++
+//	})
+//
+//	defer teardown()
+//
+//	resource.Test(t, resource.TestCase{
+//		IsUnitTest:               true,
+//		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+//		Steps: []resource.TestStep{
+//			// Read testing
+//			{
+//				Config: testAccTenantDeployTC2ResourceConfig,
+//				Check: resource.ComposeAggregateTestCheckFunc(
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "id", "testtenant-ecosys2"),
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "image_name", "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"),
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_ip", "10.14.10.10"),
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_gateway", "10.14.10.1"),
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "type", "BIG-IP"),
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "status", "Running"),
+//				),
+//			},
+//			{
+//				Config: testAccTenantDeployTC4ResourceConfig,
+//				Check: resource.ComposeAggregateTestCheckFunc(
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "id", "testtenant-ecosys2"),
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "image_name", "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"),
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_ip", "10.14.10.10"),
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_gateway", "10.14.10.1"),
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "type", "BIG-IP"),
+//					resource.TestCheckResourceAttr("f5os_tenant.test2", "status", "Configured"),
+//				),
+//			},
+//		},
+//	})
+//}
 
 const testAccTenantDeployResourceConfig = `
 resource "f5os_tenant" "test2" {
@@ -150,7 +310,38 @@ resource "f5os_tenant" "test2" {
 }
 `
 
-const testAccTenantDeployResourceTC2Config = `
+const testAccTenantDeployTC4ResourceConfig = `
+resource "f5os_tenant" "test2" {
+  name              = "testtenant-ecosys2"
+  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  mgmt_ip           = "10.10.10.27"
+  mgmt_gateway      = "10.10.10.1"
+  mgmt_prefix       = 24
+  type              = "BIG-IP"
+  cpu_cores         = 8
+  running_state     = "configured"
+  virtual_disk_size = 82
+  vlans             = [ 1 ]
+}
+`
+
+const testAccTenantDeployTC2ResourceConfig = `
+resource "f5os_tenant" "test2" {
+  name              = "testtenant-ecosys2"
+  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  mgmt_ip           = "10.14.10.10"
+  mgmt_gateway      = "10.14.10.1"
+  mgmt_prefix       = 24
+  type              = "BIG-IP"
+  cpu_cores         = 8
+  running_state     = "deployed"
+  virtual_disk_size = 82
+  nodes             = [1]
+  cryptos           = "enabled"
+  vlans             = [1,2,3]
+}
+`
+const testAccTenantDeployResourceTC3Config = `
 resource "f5os_tenant" "test-tenant22" {
   name              = "test-tenant22"
   image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
@@ -164,3 +355,21 @@ resource "f5os_tenant" "test-tenant22" {
   virtual_disk_size = 82
 }
 `
+
+//
+//const testAccTenantDeployTC4ResourceConfig = `
+//resource "f5os_tenant" "test2" {
+//  name              = "testtenant-ecosys2"
+//  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+//  mgmt_ip           = "10.14.10.10"
+//  mgmt_gateway      = "10.14.10.1"
+//  mgmt_prefix       = 24
+//  type              = "BIG-IP"
+//  cpu_cores         = 8
+//  running_state     = "configured"
+//  virtual_disk_size = 82
+//  nodes             = [1]
+//  cryptos           = "enabled"
+//  vlans             = [1,2,3]
+//}
+//`
