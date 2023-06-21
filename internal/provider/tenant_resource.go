@@ -196,6 +196,12 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 		resp.Diagnostics.AddError("Client Error", "`f5os_tenant` resource is supported with Velos Partition level (or) rSeries appliance")
 		return
 	}
+	if data.Type.ValueString() == "BIG-IP-Next" {
+		if data.DeploymentFile.IsNull() {
+			resp.Diagnostics.AddError("Config Error", "if `f5os_tenant` resource attribute `type` is `BIG-IP-Next`,then `deployment_file` option should also be specified")
+			return
+		}
+	}
 
 	tenantConfig := getTenantCreateConfig(ctx, req, resp)
 
@@ -317,7 +323,12 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	data.Nodes, _ = types.ListValueFrom(ctx, types.Int64Type, respData.F5TenantsTenant[0].Config.Nodes)
 	data.MgmtGateway = types.StringValue(respData.F5TenantsTenant[0].State.Gateway)
 	data.Status = types.StringValue(respData.F5TenantsTenant[0].State.Status)
-	data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].State.Storage.Size))
+	if respData.F5TenantsTenant[0].State.Storage.Size == respData.F5TenantsTenant[0].Config.Storage.Size {
+		data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].State.Storage.Size))
+	} else {
+		data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].Config.Storage.Size))
+	}
+
 	memoryInt, _ := strconv.Atoi(respData.F5TenantsTenant[0].State.Memory)
 	if !data.Memory.IsNull() {
 		data.Memory = types.Int64Value(int64(memoryInt))
