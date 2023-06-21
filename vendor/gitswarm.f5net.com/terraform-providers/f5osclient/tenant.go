@@ -170,7 +170,7 @@ func (p *F5os) CreateTenant(tenantObj *F5ReqTenants, timeOut int) ([]byte, error
 	f5osLogger.Info("[CreateTenant]", "Resp: ", hclog.Fmt("%+v", string(respData)))
 	t1 := time.Now()
 	for {
-		check, err := p.tenantWait(tenantObj.F5TenantsTenant[0].Name)
+		check, err := p.tenantWait(tenantObj.F5TenantsTenant[0].Name, tenantObj.F5TenantsTenant[0].Config.RunningState)
 		if err != nil {
 			return []byte(""), err
 		}
@@ -205,7 +205,7 @@ func (p *F5os) UpdateTenant(tenantObj *F5ReqTenantsPatch, timeOut int) ([]byte, 
 	f5osLogger.Info("[UpdateTenant]", "Resp: ", hclog.Fmt("%+v", string(respData)))
 	t1 := time.Now()
 	for {
-		check, err := p.tenantWait(tenantObj.F5TenantsTenants.Tenant[0].Name)
+		check, err := p.tenantWait(tenantObj.F5TenantsTenants.Tenant[0].Name, tenantObj.F5TenantsTenants.Tenant[0].Config.RunningState)
 		if err != nil {
 			return []byte(""), err
 		}
@@ -252,7 +252,7 @@ func (p *F5os) DeleteTenant(tenantName string) error {
 	}
 	return nil
 }
-func (p *F5os) tenantWait(tenantName string) (bool, error) {
+func (p *F5os) tenantWait(tenantName, runningState string) (bool, error) {
 	tenantMap, err := p.getTenantDeployStatus(tenantName)
 	if err != nil {
 		return true, err
@@ -261,11 +261,14 @@ func (p *F5os) tenantWait(tenantName string) (bool, error) {
 		return true, nil
 	}
 	tenantStatus := tenantMap["f5-tenants:state"].(map[string]interface{})["status"].(string)
-	if strings.Contains(tenantStatus, "Running") {
+	if strings.Contains(tenantStatus, "Running") && runningState == "deployed" {
 		return false, nil
 	}
-	if strings.Contains(tenantStatus, "Configured") {
+	if strings.Contains(tenantStatus, "Configured") && runningState == "configured" {
 		return false, nil
+	}
+	if strings.Contains(tenantStatus, "Starting") {
+		return true, nil
 	}
 	if strings.Contains(tenantStatus, "Pending") {
 		if tenantMap["f5-tenants:state"].(map[string]interface{})["instances"] != nil {
