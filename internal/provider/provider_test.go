@@ -11,12 +11,13 @@ import (
 )
 
 const (
-// providerConfig is a shared configuration to combine with the actual
-// test configuration so the HashiCups client is properly configured.
-// It is also possible to use the HASHICUPS_ environment variables instead,
-// such as updating the Makefile and running the testing through that tool.
-// providerConfig = “
-// f5osURI = "https://localhost"
+	// providerConfig is a shared configuration to combine with the actual
+	// test configuration so the HashiCups client is properly configured.
+	// It is also possible to use the HASHICUPS_ environment variables instead,
+	// such as updating the Makefile and running the testing through that tool.
+	// providerConfig = “
+	// f5osURI = "https://localhost"
+	f5osURI = "http://192.168.10.10:8888"
 )
 
 var (
@@ -54,7 +55,8 @@ func testAccPreUnitCheck(t *testing.T) {
 	// about the appropriate environment variables being set are common to see in a pre-check
 	// function.
 	setup()
-	_ = os.Setenv("F5OS_HOST", server.URL)
+	//_ = os.Setenv("F5OS_HOST", server.URL)
+	_ = os.Setenv("F5OS_HOST", f5osURI)
 	_ = os.Setenv("F5OS_USERNAME", "testuser")
 	_ = os.Setenv("F5OS_PASSWORD", "testpass")
 	//defer teardown()

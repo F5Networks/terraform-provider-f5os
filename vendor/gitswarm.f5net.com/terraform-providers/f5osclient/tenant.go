@@ -54,7 +54,7 @@ func (p *F5os) ImportImage(tenantImage *F5ReqTenantImage, timeOut int) ([]byte, 
 
 	t1 := time.Now()
 	for {
-		check, err := p.importWait()
+		check, err := p.importWait(tenantImage)
 		if err != nil {
 			return []byte(""), err
 		}
@@ -73,9 +73,12 @@ func (p *F5os) ImportImage(tenantImage *F5ReqTenantImage, timeOut int) ([]byte, 
 	}
 }
 
-func (p *F5os) importWait() (bool, error) {
+func (p *F5os) importWait(tenantImage *F5ReqTenantImage) (bool, error) {
 	transferMap, err := p.getImporttransferStatus()
 	for _, val := range transferMap["f5-utils-file-transfer:transfer-operation"].([]interface{}) {
+		if val.(map[string]interface{})["remote-file-path"].(string) != tenantImage.RemoteFile {
+			continue
+		}
 		transStatus := val.(map[string]interface{})["status"].(string)
 		f5osLogger.Info("[importWait]", "Trans Status: ", hclog.Fmt("%+v", transStatus))
 		if err != nil {
@@ -103,7 +106,7 @@ func (p *F5os) importWait() (bool, error) {
 func (p *F5os) getImporttransferStatus() (map[string]interface{}, error) {
 	url := fmt.Sprintf("%s/transfer-operations/transfer-operation", uriFileTransfer)
 	f5osLogger.Info("[getImporttransferStatus]", "Request path", hclog.Fmt("%+v", url))
-	var ss map[string]interface{}
+	ss := make(map[string]interface{})
 	byteData, err := p.GetRequest(url)
 	if err != nil {
 		return nil, err
