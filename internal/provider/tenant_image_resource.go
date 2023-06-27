@@ -107,9 +107,6 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 			"status": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Status of Imported Image",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 		},
 	}
@@ -134,6 +131,12 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 	if r.client.PlatformType == "Velos Controller" {
 		resp.Diagnostics.AddError("Client Error", "`f5os_tenant_image` resource is supported with Velos Partition level (or) rSeries appliance")
 		return
+	}
+	if r.client.PlatformType == "Velos Partition" {
+		if data.LocalPath.ValueString() != "images" {
+			resp.Diagnostics.AddError("Config Error", "`f5os_tenant_image` resource `local_path` should be `images` for Velos Partition")
+			return
+		}
 	}
 	resp1Byte, err := r.client.GetImage(data.ImageName.ValueString())
 	if err != nil {
@@ -190,7 +193,7 @@ func (r *TenantImageResource) Read(ctx context.Context, req resource.ReadRequest
 
 	// If applicable, this is a great opportunity to initialize any necessary
 	// provider client data and make a call using it.
-	respByte, err := r.client.GetImage(data.ImageName.ValueString())
+	respByte, err := r.client.GetImage(data.Id.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Read/Get Imported Image, got error: %s", err))
 		return
@@ -212,14 +215,6 @@ func (r *TenantImageResource) Update(ctx context.Context, req resource.UpdateReq
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
-	// If applicable, this is a great opportunity to initialize any necessary
-	// provider client data and make a call using it.
-	// httpResp, err := r.client.Do(httpReq)
-	// if err != nil {
-	//     resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update example, got error: %s", err))
-	//     return
-	// }
 
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
