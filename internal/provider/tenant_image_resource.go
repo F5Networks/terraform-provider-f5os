@@ -215,6 +215,14 @@ func (r *TenantImageResource) Update(ctx context.Context, req resource.UpdateReq
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	respByte, err := r.client.GetImage(data.Id.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Read/Get Imported Image, got error: %s", err))
+		return
+	}
+	if len(respByte.TenantImages) > 0 {
+		r.tenantImageResourceModeltoState(ctx, respByte, data)
+	}
 
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
