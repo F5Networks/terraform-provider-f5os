@@ -1,0 +1,95 @@
+
+{
+    "f5-utils-file-transfer:transfer-operation": [
+        {
+            "local-file-path": "",
+            "remote-host": "",
+            "remote-file-path": "",
+            "operation": "",
+            "protocol": "",
+            "status": "         Completed",
+            "timestamp": "Mon Jun 19 13:46:08 2023"
+        },
+        {
+            "local-file-path": "images/import/iso/F5OS-A-1.5.0-5781.R5R10.iso",
+            "remote-host": "sea.artifactory.f5net.com",
+            "remote-file-path": "artifactory/velocity-os-generic-release/F5OS-A/1.5.0-5781/results/R5R10/images/F5OS-A-1.5.0-5781.R5R10.iso",
+            "operation": "Import file",
+            "protocol": "HTTPS   ",
+            "status": "         Completed",
+            "timestamp": "Thu May 25 22:05:37 2023"
+        },
+        {
+            "local-file-path": "images/import/iso/F5OS-A-1.5.1-8819.R5R10.CANDIDATE.iso",
+            "remote-host": "sea.artifactory.f5net.com",
+            "remote-file-path": "artifactory/velocity-os-generic-dev/F5OS-A/candidate-testing/1.5.1-8819.F5OS-A-1.5.1-Candidate.cb073363/results/R5R10/images/F5OS-A-1.5.1-8819.R5R10.CANDIDATE.iso",
+            "operation": "Import file",
+            "protocol": "HTTPS   ",
+            "status": "         Completed",
+            "timestamp": "Wed Jun 28 23:36:22 2023"
+        },
+        {
+            "local-file-path": "images/import/iso/F5OS-A-1.6.0-3361.R5R10.DEV.iso",
+            "remote-host": "sea.artifactory.f5net.com",
+            "remote-file-path": "artifactory/velocity-os-generic-dev/F5OS-A/builds/1.6.0-3361.more_bug_fixes_gk_fe67467b.429bc66b/results/R5R10/images/F5OS-A-1.6.0-3361.R5R10.DEV.iso",
+            "operation": "Import file",
+            "protocol": "HTTPS   ",
+            "status": "         Completed",
+            "timestamp": "Mon Jun 19 13:47:11 2023"
+        },
+        {
+            "local-file-path": "images/tenant/BIG-IP-Next-0.14.0-4.119.0.tar.bundle",
+            "remote-host": "publish.artifactory.f5net.com",
+            "remote-file-path": "artifactory/f5-mbip-generic/velos/test-candidate/BIG-IP-Next-0.14.0-4.119.0.tar.bundle",
+            "operation": "Import file",
+            "protocol": "HTTPS   ",
+            "status": "         Completed",
+            "timestamp": "Mon Jun 19 14:26:54 2023"
+        },
+        {
+            "local-file-path": "images/tenant/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "remote-host": "spkapexsrvc01.olympus.f5net.com",
+            "remote-file-path": "v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "operation": "Import file",
+            "protocol": "HTTPS   ",
+            "status": "         Completed",
+            "timestamp": "Mon Jun 26 16:05:22 2023"
+        },
+        {
+            "local-file-path": "images/tenant/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "remote-host": "spkapexsrvc01.olympus.f5net.com",
+            "remote-file-path": "v17.1.0.1/daily/release/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "operation": "Import file",
+            "protocol": "HTTPS   ",
+            "status": "         Completed",
+            "timestamp": "Wed Jun 21 10:34:04 2023"
+        },
+        {
+            "local-file-path": "images/tenant/BIGIP-bigip15.1.x-europa-15.1.9-0.0.441.ALL-F5OS.qcow2.zip.bundle",
+            "remote-host": "nibs.olympus.f5net.com",
+            "remote-file-path": "build/bigip/v15.1.x-europa/daily/build441.0/VM/BIGIP-bigip15.1.x-europa-15.1.9-0.0.441.ALL-F5OS.qcow2.zip.bundle",
+            "operation": "Import file",
+            "protocol": "HTTPS   ",
+            "status": "    HTTP Error 302",
+            "timestamp": "Tue Jun 13 23:51:42 2023"
+        },
+        {
+            "local-file-path": "images/tenant/BIGIP-bigip15.1.x-europa-15.1.9-0.0.441.T4-F5OS.qcow2.zip.bundle",
+            "remote-host": "nibs.olympus.f5net.com",
+            "remote-file-path": "build/bigip/v15.1.x-europa/daily/build441.0/VM/BIGIP-bigip15.1.x-europa-15.1.9-0.0.441.T4-F5OS.qcow2.zip.bundle",
+            "operation": "Import file",
+            "protocol": "HTTPS   ",
+            "status": "    HTTP Error 302",
+            "timestamp": "Tue Jun 13 23:54:37 2023"
+        },
+        {
+            "local-file-path": "images/tenant/F5OS-A-1.6.0-3361.R5R10.DEV.iso",
+            "remote-host": "sea.artifactory.f5net.com",
+            "remote-file-path": "artifactory/velocity-os-generic-dev/F5OS-A/builds/1.6.0-3361.more_bug_fixes_gk_fe67467b.429bc66b/results/R5R10/images/F5OS-A-1.6.0-3361.R5R10.DEV.iso",
+            "operation": "Import file",
+            "protocol": "HTTPS   ",
+            "status": "         Completed",
+            "timestamp": "Mon Jun 19 13:46:08 2023"
+        }
+    ]
+}

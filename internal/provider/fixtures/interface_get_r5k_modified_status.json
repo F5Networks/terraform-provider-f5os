@@ -1,0 +1,67 @@
+{
+    "openconfig-interfaces:interface": [
+        {
+            "name": "1.0",
+            "config": {
+                "name": "1.0",
+                "type": "iana-if-type:ethernetCsmacd",
+                "enabled": true
+            },
+            "state": {
+                "name": "1.0",
+                "type": "iana-if-type:ethernetCsmacd",
+                "mtu": 9600,
+                "enabled": true,
+                "oper-status": "UP",
+                "counters": {
+                    "in-octets": "11067281",
+                    "in-unicast-pkts": "0",
+                    "in-broadcast-pkts": "0",
+                    "in-multicast-pkts": "50398",
+                    "in-discards": "10075",
+                    "in-errors": "0",
+                    "in-fcs-errors": "0",
+                    "out-octets": "0",
+                    "out-unicast-pkts": "0",
+                    "out-broadcast-pkts": "0",
+                    "out-multicast-pkts": "0",
+                    "out-discards": "0",
+                    "out-errors": "0"
+                },
+                "f5-interface:forward-error-correction": "auto",
+                "f5-lacp:lacp_state": "LACP_DEFAULTED"
+            },
+            "openconfig-if-ethernet:ethernet": {
+                "state": {
+                    "port-speed": "openconfig-if-ethernet:SPEED_100GB",
+                    "hw-mac-address": "00:94:a1:69:5d:03",
+                    "counters": {
+                        "in-mac-control-frames": "0",
+                        "in-mac-pause-frames": "0",
+                        "in-oversize-frames": "0",
+                        "in-jabber-frames": "0",
+                        "in-fragment-frames": "0",
+                        "in-8021q-frames": "0",
+                        "in-crc-errors": "0",
+                        "out-mac-control-frames": "0",
+                        "out-mac-pause-frames": "0",
+                        "out-8021q-frames": "0"
+                    },
+                    "f5-if-ethernet:flow-control": {
+                        "rx": "on"
+                    }
+                },
+                "openconfig-vlan:switched-vlan": {
+                    "config": {
+                        "native-vlan": 12,
+                        "trunk-vlans": [
+                            10,
+                            11,
+                            13
+                        ]
+                    }
+                }
+            }
+        }
+    ]
+}
