@@ -7,8 +7,12 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 package f5os
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"os"
 	"strings"
 	"time"
 
@@ -18,6 +22,8 @@ import (
 const (
 	uriComponent    = "/openconfig-platform:components"
 	uriTenantImage  = "/f5-tenant-images:images"
+	uriStartUpload  = "/f5-utils-file-transfer:file/f5-file-upload-meta-data:upload/start-upload"
+	uriImageUpload  = "/openconfig-system:system/f5-image-upload:image/upload-image"
 	uriTenantImport = "/f5-utils-file-transfer:file/import"
 	uriFileTransfer = "/f5-utils-file-transfer:file"
 	uriTenant       = "/f5-tenants:tenants"
@@ -35,6 +41,76 @@ func (p *F5os) GetImage(imageName string) (*F5RespTenantImagesStatus, error) {
 	json.Unmarshal(byteData, imagesStatus)
 	f5osLogger.Debug("[GetImage]", "Image Struct:", hclog.Fmt("%+v", imagesStatus))
 	return imagesStatus, nil
+}
+
+func (p *F5os) UploadImage(filePath string) ([]byte, error) {
+	fileObj, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	fileInfo, err := fileObj.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	uploadId, err := p.getUploadId(fileObj)
+	f5osLogger.Debug("[Upload Image]", "Upload ID:", hclog.Fmt(uploadId))
+	if err != nil {
+		return nil, err
+	}
+	if uploadId == "" {
+		return nil, fmt.Errorf("failed to get the upload ID")
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	formData, err := writer.CreateFormFile("image", fileInfo.Name())
+	if err != nil {
+		return nil, err
+	}
+
+	io.Copy(formData, fileObj)
+	writer.Close()
+
+	headers := map[string]string{
+		"File-Upload-Id": uploadId,
+		"Content-Type":   writer.FormDataContentType(),
+	}
+
+	resp, err := p.UploadImagePostRequest(uriImageUpload, body, headers)
+	if err != nil {
+		return nil, err
+	}
+	time.Sleep(time.Second * 10)
+	return resp, nil
+}
+
+func (p *F5os) getUploadId(fileObj *os.File) (string, error) {
+	fileStat, err := fileObj.Stat()
+	if err != nil {
+		return "", err
+	}
+
+	payload, err := json.Marshal(
+		map[string]any{
+			"size":      fileStat.Size(),
+			"name":      fileStat.Name(),
+			"file-path": "images/",
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+
+	ret := make(map[string]map[string]string)
+	resp, err := p.PostRequest(uriStartUpload, payload)
+	if err != nil {
+		return "", err
+	}
+
+	json.NewDecoder(bytes.NewReader(resp)).Decode(&ret)
+	return ret["f5-file-upload-meta-data:output"]["upload-id"], nil
 }
 
 func (p *F5os) ImportImage(tenantImage *F5ReqTenantImage, timeOut int) ([]byte, error) {
