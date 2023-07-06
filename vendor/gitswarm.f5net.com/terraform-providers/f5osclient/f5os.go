@@ -345,6 +345,34 @@ func (p *F5os) RemoveTrunkVlans(intf string, vlanId int) error {
 	return nil
 }
 
+func (p *F5os) UploadImagePostRequest(path string, formData io.Reader, headers map[string]string) ([]byte, error) {
+	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	req, err := http.NewRequest(
+		http.MethodPost,
+		url,
+		formData,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("File-Upload-Id", headers["File-Upload-Id"])
+	req.Header.Set("Content-Type", headers["Content-Type"])
+	req.Header.Set("X-Auth-Token", p.Token)
+
+	client := &http.Client{
+		Transport: p.Transport,
+		Timeout:   p.ConfigOptions.APICallTimeout,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	return io.ReadAll(resp.Body)
+}
+
 func (p *F5os) setPlaformType() ([]byte, error) {
 	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, uriPlatformType)
 	f5osLogger.Debug("[setPlaformType]", "Request path", hclog.Fmt("%+v", url))
