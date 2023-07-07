@@ -32,7 +32,7 @@ resource "f5os_tenant_image" "test" {
 
 ### Optional
 
-- `local_path` (String) The path on the F5OS where the the tenant image is to be uploaded.
+- `local_path` (String) The path on the F5OS where the the tenant image is to be imported to.
 - `protocol` (String) Protocol for image transfer.
 - `remote_host` (String) The hostname or IP address of the remote server on which the tenant image is stored.
 The server must make the image accessible via the specified protocol.
@@ -42,6 +42,7 @@ The server must make the image accessible via the specified protocol.
 If the port is not provided, a default port for the selected protocol is used.
 - `remote_user` (String) User name for the remote server on which the tenant image is stored.
 - `timeout` (Number) The number of seconds to wait for image import to finish.
+- `upload_from_path` (String) The path to image on the local machine which is to be uploaded
 
 ### Read-Only
 
