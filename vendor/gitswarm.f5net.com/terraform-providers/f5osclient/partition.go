@@ -334,6 +334,3 @@ func (p *F5os) InterfaceConfig(interfaceConfig *F5ReqOpenconfigInterface) ([]byt
 	f5osLogger.Debug("[InterfaceConfig]", "Resp: ", hclog.Fmt("%+v", string(respData)))
 	return byteBody, nil
 }
-
-
-

@@ -221,4 +221,3 @@ type F5RespInterface struct {
 		} `json:"config,omitempty"`
 	} `json:"openconfig-if-ethernet:ethernet,omitempty"`
 }
-
