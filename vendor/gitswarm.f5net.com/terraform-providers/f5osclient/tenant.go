@@ -277,7 +277,7 @@ func (p *F5os) UpdateTenant(tenantObj *F5ReqTenantsPatch, timeOut int) ([]byte, 
 		return byteBody, err
 	}
 	f5osLogger.Info("[UpdateTenant]", "Body", hclog.Fmt("%+v", string(byteBody)))
-	respData, err := p.PatchRequest(uriTenant, byteBody)
+	respData, err := p.PutRequest(uriTenant, byteBody)
 	if err != nil {
 		return respData, err
 	}

@@ -149,7 +149,6 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	}
 	resp.DataSourceData = client
 	resp.ResourceData = client
-	tflog.Info(ctx, fmt.Sprintf("f5osConfig client:%+v", client))
 	tflog.Info(ctx, "Configured F5OS client", map[string]any{"success": true})
 }
 

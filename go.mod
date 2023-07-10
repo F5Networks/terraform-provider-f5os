@@ -10,7 +10,7 @@ require (
 	github.com/hashicorp/terraform-plugin-log v0.8.0
 	github.com/hashicorp/terraform-plugin-testing v1.2.0
 	github.com/stretchr/testify v1.8.4
-	gitswarm.f5net.com/terraform-providers/f5osclient v1.0.1-0.20230707104536-d44e4678a2d4
+	gitswarm.f5net.com/terraform-providers/f5osclient v1.0.1-0.20230710123506-4d05eb79b8ac
 )
 
 require (

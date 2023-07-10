@@ -252,6 +252,12 @@ func (p *F5os) DeleteRequest(path string) error {
 	return nil
 }
 
+func (p *F5os) PutRequest(path string, body []byte) ([]byte, error) {
+	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	f5osLogger.Debug("[PutRequest]", "Request path", hclog.Fmt("%+v", url))
+	return p.doRequest("PUT", url, body)
+}
+
 func (p *F5os) PatchRequest(path string, body []byte) ([]byte, error) {
 	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
 	f5osLogger.Debug("[PatchRequest]", "Request path", hclog.Fmt("%+v", url))
