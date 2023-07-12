@@ -8,6 +8,7 @@ default:
 stages:
   - lint
   - build
+  - Mend
   - unittest
   - release
   - publish
@@ -56,6 +57,24 @@ go:build:
   script:
     - export GOFLAGS=-mod=vendor
     - make build
+
+# Run any dependency tasks before this to ensure you have installed all your dependencies
+run-Mend:
+  stage: Mend
+  image: artifactory.f5net.com/f5-cedi-docker/sst/tc-mend
+  script:
+    - java -jar /opt/mend/wss-unified-agent.jar -noConfig true -wss.url https://f5.whitesourcesoftware.com/agent -apiKey ${WS_APIKEY_SANDBOX} -product "Eco - Terraform-Ansible" -project ${CI_PROJECT_PATH} -d .
+  allow_failure: true
+
+#run whitesource:
+#  stage: whitesource
+#  image: artifactory.f5net.com/f5-f5dev-docker/tc-whitesource
+#  script: |
+#    # Run any dependency tasks to ensure you have installed all your dependencies
+#    # Ex: npm install
+#    # You will need a Whitesource API key in your CI/CD variables. If you're working in an existing Gitlab group, you might already have one.
+#    java -jar /opt/whitesource/wss-unified-agent.jar -noConfig true -wss.url https://f5.whitesourcesoftware.com/agent -apiKey ${WS_APIKEY_SANDBOX} -product "Eco - Terraform-Ansible" -project ${CI_PROJECT_PATH} -d .
+#  allow_failure: true
 
 unit-tests:
   rules:
