@@ -47,7 +47,7 @@ func (p *F5osProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 				Optional:            true,
 			},
 			"username": schema.StringAttribute{
-				MarkdownDescription: "Username for F5os Device,can be provided via `F5OS_USERNAME` environment variable.",
+				MarkdownDescription: "Username for F5os Device,can be provided via `F5OS_USERNAME` environment variable.User provided here need to have required permission as per [UserManagement](https://techdocs.f5.com/en-us/f5os-a-1-4-0/f5-rseries-systems-administration-configuration/title-user-mgmt.html)",
 				Optional:            true,
 			},
 			"password": schema.StringAttribute{
