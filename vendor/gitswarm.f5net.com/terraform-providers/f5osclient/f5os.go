@@ -77,49 +77,6 @@ type F5osError struct {
 	} `json:"ietf-restconf:errors"`
 }
 
-type OpenconfigInterfacesInterface struct {
-	Name   string `json:"name,omitempty"`
-	Config struct {
-		Name    string `json:"name,omitempty"`
-		Type    string `json:"type,omitempty"`
-		Enabled bool   `json:"enabled"`
-	} `json:"config,omitempty"`
-	OpenconfigIfEthernetEthernet struct {
-		// Config struct {
-		// 	PortSpeed string `json:"port-speed,omitempty"`
-		// } `json:"config,omitempty"`
-		// State struct {
-		// 	PortSpeed    string `json:"port-speed,omitempty"`
-		// 	HwMacAddress string `json:"hw-mac-address,omitempty"`
-		// } `json:"state,omitempty"`
-		OpenconfigVlanSwitchedVlan struct {
-			Config struct {
-				NativeVlan int   `json:"native-vlan,omitempty"`
-				TrunkVlans []int `json:"trunk-vlans,omitempty"`
-			} `json:"config,omitempty"`
-		} `json:"openconfig-vlan:switched-vlan,omitempty"`
-	} `json:"openconfig-if-ethernet:ethernet,omitempty"`
-}
-
-type F5osInterface struct {
-	OpenconfigInterfacesInterfaces struct {
-		Interface []OpenconfigInterfacesInterface `json:"interface,omitempty"`
-	} `json:"openconfig-interfaces:interfaces,omitempty"`
-}
-
-type F5osVlanSwitchedVlan struct {
-	OpenconfigVlanSwitchedVlan struct {
-		Config struct {
-			NativeVlan int   `json:"native-vlan,omitempty"`
-			TrunkVlans []int `json:"trunk-vlans,omitempty"`
-		} `json:"config,omitempty"`
-	} `json:"openconfig-vlan:switched-vlan,omitempty"`
-}
-
-type F5osInterfaces struct {
-	OpenconfigInterfacesInterfaces []OpenconfigInterfacesInterface `json:"openconfig-interfaces:interface,omitempty"`
-}
-
 // APIRequest builds our request before sending it to the server.
 type APIRequest struct {
 	Method      string
@@ -167,7 +124,6 @@ func init() {
 		Level: hclog.LevelFromString(val),
 	})
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
-	// fmt.Println("Welcome to init() function")
 }
 
 // NewSession sets up connection to the F5os system.
@@ -226,34 +182,10 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	return f5osSession, nil
 }
 
-// // APICall is used to query the BIG-IP web API.
-// func (p *F5os) APICall(options *APIRequest) ([]byte, error) {
-// 	var req *http.Request
-// 	client := &http.Client{
-// 		Transport: p.Transport,
-// 		Timeout:   p.ConfigOptions.APICallTimeout,
-// 	}
-// 	url := fmt.Sprintf("%s%s", p.Host, options.URL)
-// 	body := bytes.NewReader([]byte(options.Body))
-// 	req, _ = http.NewRequest(strings.ToUpper(options.Method), url, body)
-// 	req.Header.Set("X-Auth-Token", p.Token)
-// 	if len(options.ContentType) > 0 {
-// 		req.Header.Set("Content-Type", options.ContentType)
-// 	}
-// 	res, err := client.Do(req)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	defer res.Body.Close()
-// 	return io.ReadAll(res.Body)
-// }
-
 func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 	f5osLogger.Debug("[doRequest]", "Request path", hclog.Fmt("%+v", path))
-	// log.Trace().Msgf("path = %s", path)
 	if len(body) > 0 {
 		f5osLogger.Debug("[doRequest]", "Request body", hclog.Fmt("%+v", string(body)))
-		// log.Trace().Msgf("body = %s", string(body))
 	}
 	req, err := http.NewRequest(op, path, bytes.NewBuffer(body))
 	if err != nil {
@@ -265,7 +197,6 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 		Transport: p.Transport,
 		Timeout:   p.ConfigOptions.APICallTimeout,
 	}
-	// req.Header.Add("Content-Type", "application/yang-data+json")
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -321,6 +252,12 @@ func (p *F5os) DeleteRequest(path string) error {
 	return nil
 }
 
+func (p *F5os) PutRequest(path string, body []byte) ([]byte, error) {
+	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	f5osLogger.Debug("[PutRequest]", "Request path", hclog.Fmt("%+v", url))
+	return p.doRequest("PUT", url, body)
+}
+
 func (p *F5os) PatchRequest(path string, body []byte) ([]byte, error) {
 	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
 	f5osLogger.Debug("[PatchRequest]", "Request path", hclog.Fmt("%+v", url))
@@ -333,11 +270,11 @@ func (p *F5os) PostRequest(path string, body []byte) ([]byte, error) {
 	return p.doRequest("POST", url, body)
 }
 
-func (p *F5os) GetInterface(intf string) (*F5osInterfaces, error) {
+func (p *F5os) GetInterface(intf string) (*F5RespOpenconfigInterface, error) {
 	intfnew := fmt.Sprintf("/interface=%s", intf)
 	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
 	f5osLogger.Info("[GetInterface]", "Request path", hclog.Fmt("%+v", url))
-	intFace := &F5osInterfaces{}
+	intFace := &F5RespOpenconfigInterface{}
 	byteData, err := p.GetRequest(url)
 	if err != nil {
 		return nil, err
@@ -347,27 +284,30 @@ func (p *F5os) GetInterface(intf string) (*F5osInterfaces, error) {
 	return intFace, nil
 }
 
-func (p *F5os) UpdateInterface(intf string, body *F5osInterface) ([]byte, error) {
+func (p *F5os) UpdateInterface(intf string, body *F5ReqOpenconfigInterface) ([]byte, error) {
 	f5osLogger.Debug("[UpdateInterface]", "Request path", hclog.Fmt("%+v", uriInterface))
 	vlans, err := p.getSwitchedVlans(intf)
+	if err != nil {
+		return []byte(""), err
+	}
 	nativeVlan := vlans.OpenconfigVlanSwitchedVlan.Config.NativeVlan
 	trunkVlans := vlans.OpenconfigVlanSwitchedVlan.Config.TrunkVlans
 	for _, val := range body.OpenconfigInterfacesInterfaces.Interface {
 		innativeVlan := val.OpenconfigIfEthernetEthernet.OpenconfigVlanSwitchedVlan.Config.NativeVlan
-		_ = val.OpenconfigIfEthernetEthernet.OpenconfigVlanSwitchedVlan.Config.TrunkVlans
+		newTrunkvlans := val.OpenconfigIfEthernetEthernet.OpenconfigVlanSwitchedVlan.Config.TrunkVlans
+		diffTrunkvlans := listDifference(trunkVlans, newTrunkvlans)
 		if nativeVlan != 0 && innativeVlan != nativeVlan {
 			p.RemoveNativeVlans(intf)
 		}
-		for _, intfVal := range trunkVlans {
+		for _, intfVal := range diffTrunkvlans {
 			p.RemoveTrunkVlans(intf, intfVal)
 		}
 	}
-	f5osLogger.Trace("[UpdateInterface]", "nativeVlan", hclog.Fmt("%+v", nativeVlan))
-	f5osLogger.Trace("[UpdateInterface]", "trunkVlans", hclog.Fmt("%+v", trunkVlans))
 	byteBody, err := json.Marshal(body)
 	if err != nil {
 		return byteBody, err
 	}
+	f5osLogger.Debug("[UpdateInterface]", "Request Body", hclog.Fmt("%+v", body))
 	resp, err := p.PatchRequest(uriInterface, byteBody)
 	if err != nil {
 		return resp, err
@@ -375,16 +315,15 @@ func (p *F5os) UpdateInterface(intf string, body *F5osInterface) ([]byte, error)
 	f5osLogger.Debug("[UpdateInterface]", "Resp:", hclog.Fmt("%+v", string(resp)))
 	return resp, nil
 }
-func (p *F5os) getSwitchedVlans(intf string) (*F5osVlanSwitchedVlan, error) {
+func (p *F5os) getSwitchedVlans(intf string) (*F5ReqVlanSwitchedVlan, error) {
 	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan", intf)
 	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
 	f5osLogger.Debug("[getSwitchedVlans]", "Request path", hclog.Fmt("%+v", url))
-	intFace := &F5osVlanSwitchedVlan{}
+	intFace := &F5ReqVlanSwitchedVlan{}
 	byteData, err := p.GetRequest(url)
 	if err != nil {
 		return nil, err
 	}
-	// f5osLogger.Debug("[getSwitchedVlans]", "SwitchedVlans", hclog.Fmt("%+v", string(byteData)))
 	json.Unmarshal(byteData, intFace)
 	f5osLogger.Debug("[getSwitchedVlans]", "intFace", hclog.Fmt("%+v", intFace))
 	return intFace, nil
@@ -393,8 +332,7 @@ func (p *F5os) getSwitchedVlans(intf string) (*F5osVlanSwitchedVlan, error) {
 func (p *F5os) RemoveNativeVlans(intf string) error {
 	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:native-vlan", intf)
 	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
-	f5osLogger.Debug("[removeNativeVlans]", "Request path", hclog.Fmt("%+v", url))
-	// intFace := &F5osVlanSwitchedVlan{}
+	f5osLogger.Debug("[RemoveNativeVlans]", "Request path", hclog.Fmt("%+v", url))
 	err := p.DeleteRequest(url)
 	if err != nil {
 		return err
@@ -405,13 +343,40 @@ func (p *F5os) RemoveNativeVlans(intf string) error {
 func (p *F5os) RemoveTrunkVlans(intf string, vlanId int) error {
 	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:trunk-vlans=%d", intf, vlanId)
 	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
-	f5osLogger.Debug("[removeNativeVlans]", "Request path", hclog.Fmt("%+v", url))
-	// intFace := &F5osVlanSwitchedVlan{}
+	f5osLogger.Debug("[RemoveTrunkVlans]", "Request path", hclog.Fmt("%+v", url))
 	err := p.DeleteRequest(url)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func (p *F5os) UploadImagePostRequest(path string, formData io.Reader, headers map[string]string) ([]byte, error) {
+	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	req, err := http.NewRequest(
+		http.MethodPost,
+		url,
+		formData,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("File-Upload-Id", headers["File-Upload-Id"])
+	req.Header.Set("Content-Type", headers["Content-Type"])
+	req.Header.Set("X-Auth-Token", p.Token)
+
+	client := &http.Client{
+		Transport: p.Transport,
+		Timeout:   p.ConfigOptions.APICallTimeout,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	return io.ReadAll(resp.Body)
 }
 
 func (p *F5os) setPlaformType() ([]byte, error) {
@@ -478,4 +443,22 @@ func contains(s []int, str int) bool {
 		}
 	}
 	return false
+}
+
+func listDifference(s1 []int, s2 []int) []int {
+	difference := make([]int, 0)
+	map1 := make(map[int]bool)
+	map2 := make(map[int]bool)
+	for _, val := range s1 {
+		map1[val] = true
+	}
+	for _, val := range s2 {
+		map2[val] = true
+	}
+	for key := range map1 {
+		if _, ok := map2[key]; !ok {
+			difference = append(difference, key) //if element not present in map2 append elements in difference slice
+		}
+	}
+	return difference
 }

@@ -18,6 +18,7 @@ const (
 	uriSlot      = "/f5-system-slot:slots/slot"
 	uriSlots     = "/f5-system-slot:slots"
 	uriPartition = "/f5-system-partition:partitions"
+	uriNodes     = "/f5-cluster:cluster/nodes/node"
 	uriVlan      = "/openconfig-vlan:vlans"
 	uriAuth      = "/openconfig-system:system/aaa"
 )
@@ -108,6 +109,28 @@ func (p *F5os) GetPartitionSlots(partitionName string) ([]int64, error) {
 		return nil, nil
 	}
 	return partitionSlots, nil
+}
+
+func (p *F5os) GetPartitionNode() (*int64, error) {
+	f5osLogger.Debug("[GetPartitionNodes]", "Request path", hclog.Fmt("%+v", uriNodes))
+	var ss map[string]interface{}
+	byteData, err := p.GetRequest(uriNodes)
+	if err != nil {
+		return nil, err
+	}
+	f5osLogger.Debug("[GetPartitionNodes]", "Resp", hclog.Fmt("%+v", string(byteData)))
+	err = json.Unmarshal(byteData, &ss)
+	if err != nil {
+		return nil, err
+	}
+	var partitionNode int64
+	allNodes := ss["f5-cluster:node"].([]interface{})
+	for _, node := range allNodes {
+		if node.(map[string]interface{})["state"].(map[string]interface{})["assigned"].(bool) {
+			partitionNode = int64(node.(map[string]interface{})["state"].(map[string]interface{})["slot-number"].(int))
+		}
+	}
+	return &partitionNode, nil
 }
 
 func (p *F5os) CheckPartitionState(partitionName string, timeOut int) ([]byte, error) {
@@ -317,4 +340,20 @@ func (p *F5os) DeleteVlan(vlanId int) error {
 		return err
 	}
 	return nil
+}
+
+func (p *F5os) InterfaceConfig(interfaceConfig *F5ReqOpenconfigInterface) ([]byte, error) {
+	url := fmt.Sprintf("%s", uriVlan)
+	f5osLogger.Debug("[InterfaceConfig]", "Request path", hclog.Fmt("%+v", url))
+	byteBody, err := json.Marshal(interfaceConfig)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[InterfaceConfig]", "Body", hclog.Fmt("%+v", string(byteBody)))
+	respData, err := p.PatchRequest(url, byteBody)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[InterfaceConfig]", "Resp: ", hclog.Fmt("%+v", string(respData)))
+	return byteBody, nil
 }

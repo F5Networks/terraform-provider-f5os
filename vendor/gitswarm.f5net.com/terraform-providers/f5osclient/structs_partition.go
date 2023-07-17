@@ -125,3 +125,99 @@ type F5RespVlanConfig struct {
 type F5RespVlan struct {
 	OpenconfigVlanVlan []F5RespVlanConfig `json:"openconfig-vlan:vlan,omitempty"`
 }
+
+type F5ReqInterface struct {
+	Name   string `json:"name,omitempty"`
+	Config struct {
+		Name    string `json:"name,omitempty"`
+		Type    string `json:"type,omitempty"`
+		Enabled bool   `json:"enabled"`
+	} `json:"config,omitempty"`
+	OpenconfigIfEthernetEthernet struct {
+		OpenconfigVlanSwitchedVlan struct {
+			Config struct {
+				NativeVlan int   `json:"native-vlan,omitempty"`
+				TrunkVlans []int `json:"trunk-vlans,omitempty"`
+			} `json:"config,omitempty"`
+		} `json:"openconfig-vlan:switched-vlan,omitempty"`
+		Config struct {
+			AutoNegotiate bool   `json:"auto-negotiate,omitempty"`
+			DuplexMode    string `json:"duplex-mode,omitempty"`
+			PortSpeed     string `json:"port-speed,omitempty"`
+		} `json:"config,omitempty,omitempty"`
+	} `json:"openconfig-if-ethernet:ethernet,omitempty"`
+}
+
+type F5ReqOpenconfigInterface struct {
+	OpenconfigInterfacesInterfaces struct {
+		Interface []F5ReqInterface `json:"interface,omitempty"`
+	} `json:"openconfig-interfaces:interfaces,omitempty"`
+}
+
+type F5ReqVlanSwitchedVlan struct {
+	OpenconfigVlanSwitchedVlan struct {
+		Config struct {
+			NativeVlan int   `json:"native-vlan,omitempty"`
+			TrunkVlans []int `json:"trunk-vlans,omitempty"`
+		} `json:"config,omitempty"`
+	} `json:"openconfig-vlan:switched-vlan,omitempty"`
+}
+
+//type F5osInterfaces struct {
+//	OpenconfigInterfacesInterfaces []OpenconfigInterfacesInterface `json:"openconfig-interfaces:interface,omitempty"`
+//}
+//
+//type F5RespOpenconfigInterface struct {
+//	OpenconfigInterfacesInterfaces struct {
+//		Interface []F5RespInterface `json:"interface,omitempty"`
+//	} `json:"openconfig-interfaces:interfaces,omitempty"`
+//}
+
+type F5RespOpenconfigInterface struct {
+	OpenconfigInterfacesInterface []F5RespInterface `json:"openconfig-interfaces:interface,omitempty"`
+}
+type F5RespInterface struct {
+	Name   string `json:"name,omitempty"`
+	Config struct {
+		Name    string `json:"name,omitempty"`
+		Type    string `json:"type,omitempty"`
+		Enabled bool   `json:"enabled,omitempty"`
+	} `json:"config,omitempty"`
+	State struct {
+		Name       string `json:"name,omitempty"`
+		Type       string `json:"type,omitempty"`
+		Mtu        int    `json:"mtu,omitempty"`
+		Enabled    bool   `json:"enabled,omitempty"`
+		OperStatus string `json:"oper-status,omitempty"`
+		Counters   struct {
+			InOctets         string `json:"in-octets,omitempty"`
+			InUnicastPkts    string `json:"in-unicast-pkts,omitempty"`
+			InBroadcastPkts  string `json:"in-broadcast-pkts,omitempty"`
+			InMulticastPkts  string `json:"in-multicast-pkts,omitempty"`
+			InDiscards       string `json:"in-discards,omitempty"`
+			InErrors         string `json:"in-errors,omitempty"`
+			InFcsErrors      string `json:"in-fcs-errors,omitempty"`
+			OutOctets        string `json:"out-octets,omitempty"`
+			OutUnicastPkts   string `json:"out-unicast-pkts,omitempty"`
+			OutBroadcastPkts string `json:"out-broadcast-pkts,omitempty"`
+			OutMulticastPkts string `json:"out-multicast-pkts,omitempty"`
+			OutDiscards      string `json:"out-discards,omitempty"`
+			OutErrors        string `json:"out-errors,omitempty"`
+		} `json:"counters,omitempty"`
+		F5InterfaceForwardErrorCorrection string `json:"f5-interface:forward-error-correction,omitempty"`
+		F5LacpLacpState                   string `json:"f5-lacp:lacp_state,omitempty"`
+	} `json:"state,omitempty"`
+	OpenconfigIfEthernetEthernet struct {
+		OpenconfigVlanSwitchedVlan struct {
+			Config struct {
+				NativeVlan int   `json:"native-vlan,omitempty"`
+				TrunkVlans []int `json:"trunk-vlans,omitempty"`
+			} `json:"config,omitempty"`
+		} `json:"openconfig-vlan:switched-vlan,omitempty"`
+		Config struct {
+			AutoNegotiate bool   `json:"auto-negotiate,omitempty"`
+			DuplexMode    string `json:"duplex-mode,omitempty"`
+			PortSpeed     string `json:"port-speed,omitempty"`
+		} `json:"config,omitempty"`
+	} `json:"openconfig-if-ethernet:ethernet,omitempty"`
+}

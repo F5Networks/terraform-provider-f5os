@@ -47,7 +47,7 @@ func (p *F5osProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 				Optional:            true,
 			},
 			"username": schema.StringAttribute{
-				MarkdownDescription: "Username for F5os Device,can be provided via `F5OS_USERNAME` environment variable.",
+				MarkdownDescription: "Username for F5os Device,can be provided via `F5OS_USERNAME` environment variable.User provided here need to have required permission as per [UserManagement](https://techdocs.f5.com/en-us/f5os-a-1-4-0/f5-rseries-systems-administration-configuration/title-user-mgmt.html)",
 				Optional:            true,
 			},
 			"password": schema.StringAttribute{
@@ -126,8 +126,8 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 
 	//ctx = tflog.SetField(ctx, "f5os_host", host)
 	//ctx = tflog.SetField(ctx, "f5os_username", username)
-	////ctx = tflog.SetField(ctx, "f5os_password", password)
-	//ctx = tflog.MaskFieldValuesWithFieldKeys(ctx, "f5os_password")
+	//ctx = tflog.SetField(ctx, "password", password)
+	//ctx = tflog.MaskFieldValuesWithFieldKeys(ctx, "password")
 
 	// Example client configuration for data sources and resources
 	f5osConfig := &f5ossdk.F5osConfig{
@@ -136,9 +136,7 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		Password: password,
 		Port:     hostPort,
 	}
-
-	//tflog.Info(ctx, fmt.Sprintf("f5osConfig client:%+v", f5osConfig))
-
+	tflog.Info(ctx, fmt.Sprintf("[F5OS Provider] f5os client config:%+v", f5osConfig))
 	client, err := f5ossdk.NewSession(f5osConfig)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -151,7 +149,6 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	}
 	resp.DataSourceData = client
 	resp.ResourceData = client
-	tflog.Info(ctx, fmt.Sprintf("f5osConfig client:%+v", client))
 	tflog.Info(ctx, "Configured F5OS client", map[string]any{"success": true})
 }
 
@@ -162,6 +159,7 @@ func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewPartitionResource,
 		NewPartitionChangePasswordResource,
 		NewVlanResource,
+		NewInterfaceResource,
 	}
 }
 

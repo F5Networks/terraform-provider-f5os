@@ -1,8 +1,12 @@
 package provider
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	go_path "path"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -34,6 +38,7 @@ type TenantImageResource struct {
 type TenantImageResourceModel struct {
 	ImageName      types.String `tfsdk:"image_name"`
 	LocalPath      types.String `tfsdk:"local_path"`
+	UploadFromPath types.String `tfsdk:"upload_from_path"`
 	Protocol       types.String `tfsdk:"protocol"`
 	RemoteHost     types.String `tfsdk:"remote_host"`
 	RemoteUser     types.String `tfsdk:"remote_user"`
@@ -60,10 +65,21 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 				Required:            true,
 			},
 			"local_path": schema.StringAttribute{
-				MarkdownDescription: "The path on the F5OS where the the tenant image is to be uploaded.",
+				MarkdownDescription: "The path on the F5OS where the the tenant image is to be imported to.",
 				Optional:            true,
 				Validators: []validator.String{
 					stringvalidator.OneOf([]string{"images/tenant", "images", "images/staging", "images/import/iso"}...),
+				},
+			},
+			"upload_from_path": schema.StringAttribute{
+				MarkdownDescription: "The path to image on the local machine which is to be uploaded",
+				Optional:            true,
+				Validators: []validator.String{
+					stringvalidator.ConflictsWith(path.MatchRoot("local_path")),
+					stringvalidator.ConflictsWith(path.MatchRoot("remote_host")),
+					stringvalidator.ConflictsWith(path.MatchRoot("remote_port")),
+					stringvalidator.ConflictsWith(path.MatchRoot("remote_user")),
+					stringvalidator.ConflictsWith(path.MatchRoot("remote_password")),
 				},
 			},
 			"protocol": schema.StringAttribute{
@@ -107,9 +123,6 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 			"status": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Status of Imported Image",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 		},
 	}
@@ -135,29 +148,44 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 		resp.Diagnostics.AddError("Client Error", "`f5os_tenant_image` resource is supported with Velos Partition level (or) rSeries appliance")
 		return
 	}
+
 	resp1Byte, err := r.client.GetImage(data.ImageName.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Import Image, got error: %s", err))
 		return
 	}
-	timeout := int(data.Timeout.ValueInt64())
-	tflog.Info(ctx, fmt.Sprintf("timeout data :%+v", timeout))
 
 	if len(resp1Byte.TenantImages) == 0 {
-		importConfig := &f5ossdk.F5ReqTenantImage{}
-		importConfig.Insecure = ""
-		importConfig.RemoteHost = data.RemoteHost.ValueString()
-		importConfig.RemoteFile = fmt.Sprintf("%s/%s", data.RemotePath.ValueString(), data.ImageName.ValueString())
-		importConfig.LocalFile = data.LocalPath.ValueString()
-		tflog.Info(ctx, fmt.Sprintf("Create Data:%+v", importConfig))
-		respByte, err := r.client.ImportImage(importConfig, timeout)
-		if err != nil {
-			resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Unable to Import Image, got error: %s", err))
-			return
-		}
-		if string(respByte) != "Import Image Transfer Success" {
-			resp.Diagnostics.AddError("Client Error", "Import Image failed")
-			return
+		if data.UploadFromPath.IsNull() {
+			respByte, err := r.importImage(ctx, data)
+			if err != nil {
+				resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Unable to Import Image, got error: %s", err))
+				return
+			}
+			if string(respByte) != "Import Image Transfer Success" {
+				resp.Diagnostics.AddError("Client Error", "Import Image failed")
+				return
+			}
+		} else {
+			respByte, err := r.uploadImage(ctx, data)
+			if err != nil {
+				resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("unable to upload image, got error: %s", err))
+				return
+			}
+			ret := make(map[string]string)
+			err = json.NewDecoder(bytes.NewReader(respByte)).Decode(&ret)
+			if err != nil {
+				resp.Diagnostics.AddError("F5OS Client Error:", "could not parse the response from image upload endpoint")
+			}
+			result, ok := ret["result-tag"]
+			if !ok {
+				resp.Diagnostics.AddError("F5OS Client Error:", "unable to get image upload status")
+				return
+			}
+			if result != "uploaded-successfully" {
+				resp.Diagnostics.AddError("F5OS Client Error:", "image upload failed")
+				return
+			}
 		}
 	}
 
@@ -178,6 +206,29 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
+func (r *TenantImageResource) importImage(ctx context.Context, data *TenantImageResourceModel) ([]byte, error) {
+	timeout := int(data.Timeout.ValueInt64())
+	tflog.Info(ctx, fmt.Sprintf("timeout data :%+v", timeout))
+	importConfig := &f5ossdk.F5ReqTenantImage{}
+	importConfig.Insecure = ""
+	importConfig.RemoteHost = data.RemoteHost.ValueString()
+	importConfig.RemoteFile = fmt.Sprintf("%s/%s", data.RemotePath.ValueString(), data.ImageName.ValueString())
+	importConfig.LocalFile = data.LocalPath.ValueString()
+	tflog.Info(ctx, fmt.Sprintf("Create Data:%+v", importConfig))
+	return r.client.ImportImage(importConfig, timeout)
+}
+
+func (r *TenantImageResource) uploadImage(ctx context.Context, data *TenantImageResourceModel) ([]byte, error) {
+	timeout := int(data.Timeout.ValueInt64())
+	tflog.Info(ctx, fmt.Sprintf("timeout data :%+v", timeout))
+	imageDir := data.UploadFromPath.ValueString()
+	imageName := data.ImageName.ValueString()
+	filePath := go_path.Join(imageDir, imageName)
+	tflog.Info(ctx, "Uploading image")
+	r.client.ConfigOptions.APICallTimeout = time.Duration(time.Duration(timeout).Seconds())
+	return r.client.UploadImage(filePath)
+}
+
 func (r *TenantImageResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var data *TenantImageResourceModel
 
@@ -190,7 +241,7 @@ func (r *TenantImageResource) Read(ctx context.Context, req resource.ReadRequest
 
 	// If applicable, this is a great opportunity to initialize any necessary
 	// provider client data and make a call using it.
-	respByte, err := r.client.GetImage(data.ImageName.ValueString())
+	respByte, err := r.client.GetImage(data.Id.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Read/Get Imported Image, got error: %s", err))
 		return
@@ -212,14 +263,14 @@ func (r *TenantImageResource) Update(ctx context.Context, req resource.UpdateReq
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
-	// If applicable, this is a great opportunity to initialize any necessary
-	// provider client data and make a call using it.
-	// httpResp, err := r.client.Do(httpReq)
-	// if err != nil {
-	//     resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update example, got error: %s", err))
-	//     return
-	// }
+	respByte, err := r.client.GetImage(data.Id.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Read/Get Imported Image, got error: %s", err))
+		return
+	}
+	if len(respByte.TenantImages) > 0 {
+		r.tenantImageResourceModeltoState(ctx, respByte, data)
+	}
 
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

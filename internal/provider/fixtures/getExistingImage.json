@@ -1,0 +1,12 @@
+{
+    "f5-tenant-images:image": [
+        {
+            "name": "dumm_image_unit_test.qcow2.zip.bundle",
+            "in-use": false,
+            "type": "vm-image",
+            "status": "replicating",
+            "date": "2023-6-30",
+            "size": "1.93 GB"
+        }
+    ]
+}
