@@ -7,8 +7,12 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 package f5os
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"os"
 	"strings"
 	"time"
 
@@ -18,6 +22,8 @@ import (
 const (
 	uriComponent    = "/openconfig-platform:components"
 	uriTenantImage  = "/f5-tenant-images:images"
+	uriStartUpload  = "/f5-utils-file-transfer:file/f5-file-upload-meta-data:upload/start-upload"
+	uriImageUpload  = "/openconfig-system:system/f5-image-upload:image/upload-image"
 	uriTenantImport = "/f5-utils-file-transfer:file/import"
 	uriFileTransfer = "/f5-utils-file-transfer:file"
 	uriTenant       = "/f5-tenants:tenants"
@@ -37,6 +43,76 @@ func (p *F5os) GetImage(imageName string) (*F5RespTenantImagesStatus, error) {
 	return imagesStatus, nil
 }
 
+func (p *F5os) UploadImage(filePath string) ([]byte, error) {
+	fileObj, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	fileInfo, err := fileObj.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	uploadId, err := p.getUploadId(fileObj)
+	f5osLogger.Debug("[Upload Image]", "Upload ID:", hclog.Fmt(uploadId))
+	if err != nil {
+		return nil, err
+	}
+	if uploadId == "" {
+		return nil, fmt.Errorf("failed to get the upload ID")
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	formData, err := writer.CreateFormFile("image", fileInfo.Name())
+	if err != nil {
+		return nil, err
+	}
+
+	io.Copy(formData, fileObj)
+	writer.Close()
+
+	headers := map[string]string{
+		"File-Upload-Id": uploadId,
+		"Content-Type":   writer.FormDataContentType(),
+	}
+
+	resp, err := p.UploadImagePostRequest(uriImageUpload, body, headers)
+	if err != nil {
+		return nil, err
+	}
+	time.Sleep(time.Second * 10)
+	return resp, nil
+}
+
+func (p *F5os) getUploadId(fileObj *os.File) (string, error) {
+	fileStat, err := fileObj.Stat()
+	if err != nil {
+		return "", err
+	}
+
+	payload, err := json.Marshal(
+		map[string]any{
+			"size":      fileStat.Size(),
+			"name":      fileStat.Name(),
+			"file-path": "images/",
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+
+	ret := make(map[string]map[string]string)
+	resp, err := p.PostRequest(uriStartUpload, payload)
+	if err != nil {
+		return "", err
+	}
+
+	json.NewDecoder(bytes.NewReader(resp)).Decode(&ret)
+	return ret["f5-file-upload-meta-data:output"]["upload-id"], nil
+}
+
 func (p *F5os) ImportImage(tenantImage *F5ReqTenantImage, timeOut int) ([]byte, error) {
 	f5osLogger.Debug("[ImportImage]", "Image struct:", hclog.Fmt("%+v", tenantImage))
 	byteBody, err := json.Marshal(tenantImage)
@@ -54,7 +130,7 @@ func (p *F5os) ImportImage(tenantImage *F5ReqTenantImage, timeOut int) ([]byte, 
 
 	t1 := time.Now()
 	for {
-		check, err := p.importWait()
+		check, err := p.importWait(tenantImage)
 		if err != nil {
 			return []byte(""), err
 		}
@@ -73,9 +149,12 @@ func (p *F5os) ImportImage(tenantImage *F5ReqTenantImage, timeOut int) ([]byte, 
 	}
 }
 
-func (p *F5os) importWait() (bool, error) {
+func (p *F5os) importWait(tenantImage *F5ReqTenantImage) (bool, error) {
 	transferMap, err := p.getImporttransferStatus()
 	for _, val := range transferMap["f5-utils-file-transfer:transfer-operation"].([]interface{}) {
+		if val.(map[string]interface{})["remote-file-path"].(string) != tenantImage.RemoteFile {
+			continue
+		}
 		transStatus := val.(map[string]interface{})["status"].(string)
 		f5osLogger.Info("[importWait]", "Trans Status: ", hclog.Fmt("%+v", transStatus))
 		if err != nil {
@@ -103,7 +182,7 @@ func (p *F5os) importWait() (bool, error) {
 func (p *F5os) getImporttransferStatus() (map[string]interface{}, error) {
 	url := fmt.Sprintf("%s/transfer-operations/transfer-operation", uriFileTransfer)
 	f5osLogger.Info("[getImporttransferStatus]", "Request path", hclog.Fmt("%+v", url))
-	var ss map[string]interface{}
+	ss := make(map[string]interface{})
 	byteData, err := p.GetRequest(url)
 	if err != nil {
 		return nil, err
@@ -170,7 +249,7 @@ func (p *F5os) CreateTenant(tenantObj *F5ReqTenants, timeOut int) ([]byte, error
 	f5osLogger.Info("[CreateTenant]", "Resp: ", hclog.Fmt("%+v", string(respData)))
 	t1 := time.Now()
 	for {
-		check, err := p.tenantWait(tenantObj.F5TenantsTenant[0].Name)
+		check, err := p.tenantWait(tenantObj.F5TenantsTenant[0].Name, tenantObj.F5TenantsTenant[0].Config.RunningState)
 		if err != nil {
 			return []byte(""), err
 		}
@@ -198,14 +277,14 @@ func (p *F5os) UpdateTenant(tenantObj *F5ReqTenantsPatch, timeOut int) ([]byte, 
 		return byteBody, err
 	}
 	f5osLogger.Info("[UpdateTenant]", "Body", hclog.Fmt("%+v", string(byteBody)))
-	respData, err := p.PatchRequest(uriTenant, byteBody)
+	respData, err := p.PutRequest(uriTenant, byteBody)
 	if err != nil {
 		return respData, err
 	}
 	f5osLogger.Info("[UpdateTenant]", "Resp: ", hclog.Fmt("%+v", string(respData)))
 	t1 := time.Now()
 	for {
-		check, err := p.tenantWait(tenantObj.F5TenantsTenants.Tenant[0].Name)
+		check, err := p.tenantWait(tenantObj.F5TenantsTenants.Tenant[0].Name, tenantObj.F5TenantsTenants.Tenant[0].Config.RunningState)
 		if err != nil {
 			return []byte(""), err
 		}
@@ -236,6 +315,9 @@ func (p *F5os) GetTenant(tenantName string) (*F5RespTenants, error) {
 	}
 	f5osLogger.Info("[GetTenant]", "Tenant Info:", hclog.Fmt("%+v", string(byteData)))
 	json.Unmarshal(byteData, tenantStatus)
+	if len(tenantStatus.F5TenantsTenant) == 0 {
+		return nil, fmt.Errorf("GetTenant failed with :%+v", string(byteData))
+	}
 	f5osLogger.Info("[GetTenant]", "Tenant Struct:", hclog.Fmt("%+v", tenantStatus))
 	return tenantStatus, nil
 }
@@ -249,7 +331,7 @@ func (p *F5os) DeleteTenant(tenantName string) error {
 	}
 	return nil
 }
-func (p *F5os) tenantWait(tenantName string) (bool, error) {
+func (p *F5os) tenantWait(tenantName, runningState string) (bool, error) {
 	tenantMap, err := p.getTenantDeployStatus(tenantName)
 	if err != nil {
 		return true, err
@@ -258,11 +340,14 @@ func (p *F5os) tenantWait(tenantName string) (bool, error) {
 		return true, nil
 	}
 	tenantStatus := tenantMap["f5-tenants:state"].(map[string]interface{})["status"].(string)
-	if strings.Contains(tenantStatus, "Running") {
+	if strings.Contains(tenantStatus, "Running") && runningState == "deployed" {
 		return false, nil
 	}
-	if strings.Contains(tenantStatus, "Configured") {
+	if strings.Contains(tenantStatus, "Configured") && runningState == "configured" {
 		return false, nil
+	}
+	if strings.Contains(tenantStatus, "Starting") {
+		return true, nil
 	}
 	if strings.Contains(tenantStatus, "Pending") {
 		if tenantMap["f5-tenants:state"].(map[string]interface{})["instances"] != nil {

@@ -16,7 +16,8 @@ const (
 // It is also possible to use the HASHICUPS_ environment variables instead,
 // such as updating the Makefile and running the testing through that tool.
 // providerConfig = “
-// f5osURI = "https://localhost"
+// f5osURI = "https://localhost:60155"
+// f5osURI = "http://192.168.10.10:8888"
 )
 
 var (

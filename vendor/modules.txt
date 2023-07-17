@@ -234,7 +234,7 @@ github.com/imdario/mergo
 # github.com/mattn/go-colorable v0.1.13
 ## explicit; go 1.15
 github.com/mattn/go-colorable
-# github.com/mattn/go-isatty v0.0.18
+# github.com/mattn/go-isatty v0.0.19
 ## explicit; go 1.15
 github.com/mattn/go-isatty
 # github.com/mitchellh/cli v1.1.5
@@ -307,7 +307,7 @@ github.com/zclconf/go-cty/cty/function/stdlib
 github.com/zclconf/go-cty/cty/gocty
 github.com/zclconf/go-cty/cty/json
 github.com/zclconf/go-cty/cty/set
-# gitswarm.f5net.com/terraform-providers/f5osclient v1.0.0
+# gitswarm.f5net.com/terraform-providers/f5osclient v1.0.1
 ## explicit; go 1.19
 gitswarm.f5net.com/terraform-providers/f5osclient
 # golang.org/x/crypto v0.7.0
@@ -338,7 +338,7 @@ golang.org/x/net/http2/hpack
 golang.org/x/net/idna
 golang.org/x/net/internal/timeseries
 golang.org/x/net/trace
-# golang.org/x/sys v0.7.0
+# golang.org/x/sys v0.10.0
 ## explicit; go 1.17
 golang.org/x/sys/internal/unsafeheader
 golang.org/x/sys/unix
