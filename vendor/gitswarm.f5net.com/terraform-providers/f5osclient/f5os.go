@@ -27,7 +27,7 @@ import (
 
 const (
 	uriRoot           = "/restconf/data"
-	uriLogin          = "/restconf/data/openconfig-system:system/aaa"
+	uriLogin          = "/openconfig-system:system/aaa"
 	contentTypeHeader = "application/yang-data+json"
 	uriPlatformType   = "/openconfig-platform:components/component=platform/state/description"
 	uriInterface      = "/openconfig-interfaces:interfaces"
@@ -65,6 +65,7 @@ type F5os struct {
 	Teem          bool
 	ConfigOptions *ConfigOptions
 	PlatformType  string
+	UriRoot       string
 }
 type F5osError struct {
 	IetfRestconfErrors struct {
@@ -75,14 +76,6 @@ type F5osError struct {
 			ErrorMessage string `json:"error-message"`
 		} `json:"error"`
 	} `json:"ietf-restconf:errors"`
-}
-
-// APIRequest builds our request before sending it to the server.
-type APIRequest struct {
-	Method      string
-	URL         string
-	Body        string
-	ContentType string
 }
 
 // Upload contains information about a file upload status
@@ -139,9 +132,15 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	f5osLogger.Info("[NewSession]", "URL", hclog.Fmt("%+v", urlString))
 	u, _ := url.Parse(urlString)
 	_, port, _ := net.SplitHostPort(u.Host)
-
+	f5osSession.UriRoot = uriRoot
+	if port == "443" {
+		f5osSession.UriRoot = "/api/data"
+	}
 	if f5osObj.Port != 0 && port == "" {
 		urlString = fmt.Sprintf("%s:%d", urlString, f5osObj.Port)
+		if f5osObj.Port == 443 {
+			f5osSession.UriRoot = "/api/data"
+		}
 	}
 	if f5osObj.ConfigOptions == nil {
 		f5osObj.ConfigOptions = defaultConfigOptions
@@ -158,7 +157,7 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 		Transport: tr,
 	}
 	method := "GET"
-	urlString = fmt.Sprintf("%s%s", urlString, uriLogin)
+	urlString = fmt.Sprintf("%s%s%s", urlString, f5osSession.UriRoot, uriLogin)
 
 	f5osLogger.Debug("[NewSession]", "URL", hclog.Fmt("%+v", urlString))
 	req, err := http.NewRequest(method, urlString, nil)
@@ -176,6 +175,9 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if strings.Contains(fmt.Sprintf("%s", string(respData)), "enable JavaScript to run this app") {
+		return nil, fmt.Errorf("Failed with %s", string(respData))
 	}
 	f5osSession.setPlaformType()
 	f5osLogger.Info("[NewSession] Session creation Success")
@@ -214,18 +216,6 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 		// f5osLogger.Debug("[doRequest]", "Resp CODE", hclog.Fmt("%+v", string(byteData)))
 		return io.ReadAll(resp.Body)
 	}
-	// if resp.StatusCode == 400 {
-	// 	return io.ReadAll(resp.Body)
-	// 	// var f5osError F5osError
-	// 	// bodyResp, err := io.ReadAll(resp.Body)
-	// 	// if err != nil {
-	// 	// 	return bodyResp, err
-	// 	// }
-	// 	// json.Unmarshal(bodyResp, &f5osError)
-	// 	// if f5osError.IetfRestconfErrors.Error[0].ErrorMessage == "" {
-	// 	// 	return
-	// 	// }
-	// }
 	if resp.StatusCode >= 400 {
 		byteData, _ := io.ReadAll(resp.Body)
 		var errorNew F5osError
@@ -236,13 +226,13 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 }
 
 func (p *F5os) GetRequest(path string) ([]byte, error) {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	f5osLogger.Info("[GetRequest]", "Request path", hclog.Fmt("%+v", url))
 	return p.doRequest("GET", url, nil)
 }
 
 func (p *F5os) DeleteRequest(path string) error {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	f5osLogger.Debug("[DeleteRequest]", "Request path", hclog.Fmt("%+v", url))
 	if resp, err := p.doRequest("DELETE", url, nil); err != nil {
 		return err
@@ -253,19 +243,19 @@ func (p *F5os) DeleteRequest(path string) error {
 }
 
 func (p *F5os) PutRequest(path string, body []byte) ([]byte, error) {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	f5osLogger.Debug("[PutRequest]", "Request path", hclog.Fmt("%+v", url))
 	return p.doRequest("PUT", url, body)
 }
 
 func (p *F5os) PatchRequest(path string, body []byte) ([]byte, error) {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	f5osLogger.Debug("[PatchRequest]", "Request path", hclog.Fmt("%+v", url))
 	return p.doRequest("PATCH", url, body)
 }
 
 func (p *F5os) PostRequest(path string, body []byte) ([]byte, error) {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	f5osLogger.Debug("[PostRequest]", "Request path", hclog.Fmt("%+v", url))
 	return p.doRequest("POST", url, body)
 }
@@ -352,7 +342,7 @@ func (p *F5os) RemoveTrunkVlans(intf string, vlanId int) error {
 }
 
 func (p *F5os) UploadImagePostRequest(path string, formData io.Reader, headers map[string]string) ([]byte, error) {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	req, err := http.NewRequest(
 		http.MethodPost,
 		url,
@@ -380,7 +370,7 @@ func (p *F5os) UploadImagePostRequest(path string, formData io.Reader, headers m
 }
 
 func (p *F5os) setPlaformType() ([]byte, error) {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, uriPlatformType)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, uriPlatformType)
 	f5osLogger.Debug("[setPlaformType]", "Request path", hclog.Fmt("%+v", url))
 	req, err := http.NewRequest("GET", url, bytes.NewBuffer(nil))
 	if err != nil {
@@ -402,7 +392,7 @@ func (p *F5os) setPlaformType() ([]byte, error) {
 		return io.ReadAll(resp.Body)
 	}
 	if resp.StatusCode == 404 {
-		url1 := fmt.Sprintf("%s%s%s", p.Host, uriRoot, uriVlan)
+		url1 := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, uriVlan)
 		req, err := http.NewRequest("GET", url1, bytes.NewBuffer(nil))
 		if err != nil {
 			return nil, err
