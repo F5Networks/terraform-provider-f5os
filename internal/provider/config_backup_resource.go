@@ -148,7 +148,14 @@ func (r *CfgBackupResource) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 
 	obj := make(map[string]map[string][]map[string]string)
-	json.NewDecoder(bytes.NewReader(res)).Decode(&obj)
+	err = json.NewDecoder(bytes.NewReader(res)).Decode(&obj)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error parsing Config Backup Response",
+			"unexpected error occurred while trying to get the list of config backup files: "+err.Error(),
+		)
+		return
+	}
 
 	entries := obj["f5-utils-file-transfer:output"]["entries"]
 	exists := false
