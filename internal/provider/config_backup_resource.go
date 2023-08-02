@@ -147,7 +147,8 @@ func (r *CfgBackupResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	obj := make(map[string]map[string][]map[string]string)
+	// obj := make(map[string]map[string][]map[string]string)
+	obj := make(map[string]any)
 	err = json.NewDecoder(bytes.NewReader(res)).Decode(&obj)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -157,10 +158,11 @@ func (r *CfgBackupResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	entries := obj["f5-utils-file-transfer:output"]["entries"]
+	entries := obj["f5-utils-file-transfer:output"].(map[string]any)["entries"].([]any)
 	exists := false
 	for _, v := range entries {
-		if v["name"] == name {
+		m := v.(map[string]any)
+		if m["name"].(string) == name {
 			exists = true
 			break
 		}

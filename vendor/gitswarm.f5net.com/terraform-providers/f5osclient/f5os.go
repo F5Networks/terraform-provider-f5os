@@ -422,6 +422,7 @@ func (p *F5os) CreateConfigBackup(backupName string, timeout int64, exportCfg Fi
 	if err != nil {
 		return nil, fmt.Errorf("unable to decode response from file export endpoint")
 	}
+	f5osLogger.Debug("[CreateConfigBackup]", "file transfer response: ", hclog.Fmt("%s", string(resp)))
 
 	result := obj["f5-utils-file-transfer:output"].(map[string]any)["result"].(string)
 	if !strings.HasPrefix(result, "File transfer is initiated") {
@@ -470,10 +471,11 @@ func (p *F5os) DeleteConfigBackup(backup string) error {
 		return err
 	}
 
-	obj := make(map[string]map[string]string)
+	obj := make(map[string]any)
 	json.NewDecoder(bytes.NewReader(resp)).Decode(&obj)
+	msg := obj["f5-utils-file-transfer:output"].(map[string]any)["result"].(string)
 
-	if obj["f5-utils-file-transfer:output"]["result"] != "Deleting the file" {
+	if msg != "Deleting the file" {
 		return fmt.Errorf("unable to delete the config backup file")
 	} else {
 		f5osLogger.Info("[DeleteConfigBackup]", "successfully deleted config backup file", hclog.Fmt("%+v", backup))
@@ -519,17 +521,20 @@ func (p *F5os) fileTransferStatus(key, transferId string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	obj := make(map[string][]map[string]string)
+
+	obj := make(map[string]any)
 
 	err = json.NewDecoder(bytes.NewReader(resp)).Decode(&obj)
 	if err != nil {
 		return "", fmt.Errorf("unable to read file transfer status")
 	}
 
-	transfers := obj["f5-utils-file-transfer:transfer-operation"]
+	transfers := obj["f5-utils-file-transfer:transfer-operation"].([]any)
 	for _, v := range transfers {
-		if v[key] == transferId {
-			return strings.Trim(v["status"], " "), nil
+		m := v.(map[string]any)
+		opID, ok := m[key].(string)
+		if ok && opID == transferId {
+			return strings.Trim(m["status"].(string), " "), nil
 		}
 	}
 
