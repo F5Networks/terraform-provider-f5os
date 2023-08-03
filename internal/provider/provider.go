@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
+	"os"
+
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -11,7 +13,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
-	"os"
 )
 
 // Ensure F5osProvider satisfies various provider interfaces.
@@ -160,6 +161,7 @@ func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewPartitionChangePasswordResource,
 		NewVlanResource,
 		NewInterfaceResource,
+		NewCfgBackupResource,
 	}
 }
 
