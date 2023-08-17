@@ -28,7 +28,6 @@ type F5ReqTenantImage struct {
 	RemoteFile string `json:"remote-file,omitempty"`
 	RemoteHost string `json:"remote-host,omitempty"`
 }
-
 type F5ReqTenant struct {
 	Name           string `json:"name,omitempty"`
 	Image          string `json:"image,omitempty"`
@@ -51,7 +50,11 @@ type F5ReqTenant struct {
 		MgmtIp                  string `json:"mgmt-ip,omitempty"`
 		PrefixLength            int    `json:"prefix-length,omitempty"`
 		Gateway                 string `json:"gateway,omitempty"`
-		MacNdiSet               []struct {
+		MacData                 struct {
+			F5TenantL2InlineMacBlockSize string `json:"f5-tenant-l2-inline:mac-block-size,omitempty"`
+		} `json:"mac-data,omitempty"`
+		DagIpv6PrefixLength int `json:"dag-ipv6-prefix-length,omitempty"`
+		MacNdiSet           []struct {
 			Ndi string `json:"ndi,omitempty"`
 			Mac string `json:"mac,omitempty"`
 		} `json:"mac-ndi-set,omitempty"`
@@ -150,9 +153,10 @@ type F5RespTenant struct {
 		Storage          struct {
 			Size int `json:"size,omitempty"`
 		} `json:"storage,omitempty"`
-		RunningState string `json:"running-state,omitempty"`
-		TrustMode    bool   `json:"trust-mode,omitempty"`
-		MacData      struct {
+		RunningState        string `json:"running-state,omitempty"`
+		TrustMode           bool   `json:"trust-mode,omitempty"`
+		DagIpv6PrefixLength int    `json:"dag-ipv6-prefix-length,omitempty"`
+		MacData             struct {
 			BaseMac                  string `json:"base-mac,omitempty"`
 			MacPoolSize              int    `json:"mac-pool-size,omitempty"`
 			F5TenantL2InlineMacBlock []struct {

@@ -58,8 +58,11 @@ The name cannot exceed 50 characters.
 
 - `cryptos` (String) Whether crypto and compression hardware offload should be enabled on the tenant.
 We recommend it is enabled, otherwise crypto and compression may be processed in CPU.
+- `dag_ipv6_prefix_length` (Number) Configuring DAG Global IPv6 Prefix Length,value Range from `1` to `128`.Default is `128`.
 - `deployment_file` (String) Deployment file used for BIG-IP-Next .
 Required for if `type` is `BIG-IP-Next`.
+- `mac_block_size` (String) Configure a BIG-IP tenant on these systems to use contiguous block of MAC allocation.
+Default value is `one`.
 - `memory` (Number) The amount of memory that should be provided to the tenant in MB.
  More information on memory sizing for [Velos](https://clouddocs.f5.com/training/community/velos-training/html/velos_performance_and_sizing.html#memory-sizing)/[rSeries](https://clouddocs.f5.com/training/community/rseries-training/html/rseries_performance_and_sizing.html#memory-sizing)
 - `nodes` (List of Number) List of integers. Specifies on which blades nodes the tenants are deployed.

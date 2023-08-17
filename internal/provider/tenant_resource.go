@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -41,23 +42,25 @@ type TenantResource struct {
 
 // TenantResourceModel describes the resource data model.
 type TenantResourceModel struct {
-	Name            types.String `tfsdk:"name"`
-	DeploymentFile  types.String `tfsdk:"deployment_file"`
-	ImageName       types.String `tfsdk:"image_name"`
-	Cryptos         types.String `tfsdk:"cryptos"`
-	Type            types.String `tfsdk:"type"`
-	RunningState    types.String `tfsdk:"running_state"`
-	MgmtIP          types.String `tfsdk:"mgmt_ip"`
-	MgmtGateway     types.String `tfsdk:"mgmt_gateway"`
-	MgmtPrefix      types.Int64  `tfsdk:"mgmt_prefix"`
-	CpuCores        types.Int64  `tfsdk:"cpu_cores"`
-	Nodes           types.List   `tfsdk:"nodes"`
-	Vlans           types.List   `tfsdk:"vlans"`
-	Status          types.String `tfsdk:"status"`
-	Timeout         types.Int64  `tfsdk:"timeout"`
-	VirtualdiskSize types.Int64  `tfsdk:"virtual_disk_size"`
-	Memory          types.Int64  `tfsdk:"memory"`
-	Id              types.String `tfsdk:"id"`
+	Name                types.String `tfsdk:"name"`
+	DeploymentFile      types.String `tfsdk:"deployment_file"`
+	ImageName           types.String `tfsdk:"image_name"`
+	Cryptos             types.String `tfsdk:"cryptos"`
+	Type                types.String `tfsdk:"type"`
+	RunningState        types.String `tfsdk:"running_state"`
+	MgmtIP              types.String `tfsdk:"mgmt_ip"`
+	MgmtGateway         types.String `tfsdk:"mgmt_gateway"`
+	MgmtPrefix          types.Int64  `tfsdk:"mgmt_prefix"`
+	CpuCores            types.Int64  `tfsdk:"cpu_cores"`
+	Nodes               types.List   `tfsdk:"nodes"`
+	Vlans               types.List   `tfsdk:"vlans"`
+	Status              types.String `tfsdk:"status"`
+	MacBlockSize        types.String `tfsdk:"mac_block_size"`
+	DagIpv6prefixLength types.Int64  `tfsdk:"dag_ipv6_prefix_length"`
+	Timeout             types.Int64  `tfsdk:"timeout"`
+	VirtualdiskSize     types.Int64  `tfsdk:"virtual_disk_size"`
+	Memory              types.Int64  `tfsdk:"memory"`
+	Id                  types.String `tfsdk:"id"`
 }
 
 func (r *TenantResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -98,6 +101,24 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 					stringvalidator.OneOf([]string{"BIG-IP", "BIG-IP-Next"}...),
 				},
 				Default: stringdefault.StaticString("BIG-IP"),
+			},
+			"mac_block_size": schema.StringAttribute{
+				MarkdownDescription: "Configure a BIG-IP tenant on these systems to use contiguous block of MAC allocation.\nDefault value is `one`.",
+				Optional:            true,
+				Computed:            true,
+				Validators: []validator.String{
+					stringvalidator.OneOf([]string{"one", "small", "medium", "large"}...),
+				},
+				Default: stringdefault.StaticString("one"),
+			},
+			"dag_ipv6_prefix_length": schema.Int64Attribute{
+				MarkdownDescription: "Configuring DAG Global IPv6 Prefix Length,value Range from `1` to `128`.Default is `128`.",
+				Optional:            true,
+				Default:             int64default.StaticInt64(128),
+				Computed:            true,
+				Validators: []validator.Int64{
+					int64validator.Between(1, 128),
+				},
 			},
 			"cpu_cores": schema.Int64Attribute{
 				MarkdownDescription: "The number of vCPUs that should be added to the tenant.\nRequired for create operations.",
@@ -193,14 +214,29 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 	if r.client.PlatformType == "Velos Controller" {
-		resp.Diagnostics.AddError("Client Error", "`f5os_tenant` resource is supported with Velos Partition level (or) rSeries appliance")
+		resp.Diagnostics.AddError("Unsupported platform for resource", "`f5os_tenant` resource is supported with Velos Partition level (or) rSeries appliance")
 		return
 	}
 	if data.Type.ValueString() == "BIG-IP-Next" {
 		if data.DeploymentFile.IsNull() {
-			resp.Diagnostics.AddError("Config Error", "if `f5os_tenant` resource attribute `type` is `BIG-IP-Next`,then `deployment_file` option should also be specified")
+			resp.Diagnostics.AddError("Invalid Config for resource", "if `f5os_tenant` resource attribute `type` is `BIG-IP-Next`,then `deployment_file` option should also be specified")
 			return
 		}
+	}
+	imageObj, err := r.client.GetImage(data.ImageName.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to Get Image Details", fmt.Sprintf("Error:%s", err))
+		return
+	}
+	var availableFlag = true
+	for _, val := range imageObj.TenantImages {
+		if val.Name == data.ImageName.ValueString() && val.Status == "not-present" {
+			availableFlag = false
+		}
+	}
+	if !availableFlag {
+		resp.Diagnostics.AddError("Unable to Get Image Details", fmt.Sprintf("Get Image: %s failed with error:%s", data.ImageName.ValueString(), "not-present"))
+		return
 	}
 
 	tenantConfig := getTenantCreateConfig(ctx, req, resp)
@@ -314,6 +350,7 @@ func (r *TenantResource) ImportState(ctx context.Context, req resource.ImportSta
 }
 
 func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respData *f5ossdk.F5RespTenants, data *TenantResourceModel) {
+	tflog.Info(ctx, fmt.Sprintf("tenantResourceModeltoState:%+v", respData))
 	data.ImageName = types.StringValue(respData.F5TenantsTenant[0].State.Image)
 	data.Name = types.StringValue(respData.F5TenantsTenant[0].Name)
 	data.RunningState = types.StringValue(respData.F5TenantsTenant[0].State.RunningState)
@@ -323,12 +360,24 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	data.Nodes, _ = types.ListValueFrom(ctx, types.Int64Type, respData.F5TenantsTenant[0].Config.Nodes)
 	data.MgmtGateway = types.StringValue(respData.F5TenantsTenant[0].State.Gateway)
 	data.Status = types.StringValue(respData.F5TenantsTenant[0].State.Status)
+	data.DagIpv6prefixLength = types.Int64Value(int64(respData.F5TenantsTenant[0].State.DagIpv6PrefixLength))
+	if respData.F5TenantsTenant[0].State.MacData.MacPoolSize == 1 {
+		data.MacBlockSize = types.StringValue("one")
+	}
+	if respData.F5TenantsTenant[0].State.MacData.MacPoolSize == 8 {
+		data.MacBlockSize = types.StringValue("small")
+	}
+	if respData.F5TenantsTenant[0].State.MacData.MacPoolSize == 16 {
+		data.MacBlockSize = types.StringValue("medium")
+	}
+	if respData.F5TenantsTenant[0].State.MacData.MacPoolSize == 32 {
+		data.MacBlockSize = types.StringValue("large")
+	}
 	if respData.F5TenantsTenant[0].State.Storage.Size == respData.F5TenantsTenant[0].Config.Storage.Size {
 		data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].State.Storage.Size))
 	} else {
 		data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].Config.Storage.Size))
 	}
-
 	memoryInt, _ := strconv.Atoi(respData.F5TenantsTenant[0].State.Memory)
 	if !data.Memory.IsNull() {
 		data.Memory = types.Int64Value(int64(memoryInt))
@@ -350,6 +399,8 @@ func getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp
 	tenantSubbj.Config.MgmtIp = data.MgmtIP.ValueString()
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.VcpuCoresPerNode = int(data.CpuCores.ValueInt64())
+	tenantSubbj.Config.DagIpv6PrefixLength = int(data.DagIpv6prefixLength.ValueInt64())
+	tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
 	if data.Memory.IsNull() {
 		tenantSubbj.Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
 	} else {
@@ -381,6 +432,8 @@ func getTenantUpdateConfig(ctx context.Context, req resource.UpdateRequest, resp
 	tenantSubbj.Config.MgmtIp = data.MgmtIP.ValueString()
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.VcpuCoresPerNode = int(data.CpuCores.ValueInt64())
+	tenantSubbj.Config.DagIpv6PrefixLength = int(data.DagIpv6prefixLength.ValueInt64())
+	tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
 	if data.Memory.IsNull() {
 		tenantSubbj.Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
 	} else {

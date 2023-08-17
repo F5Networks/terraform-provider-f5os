@@ -38,6 +38,9 @@ func (p *F5os) GetImage(imageName string) (*F5RespTenantImagesStatus, error) {
 	if err != nil {
 		return nil, err
 	}
+	if strings.Contains(string(byteData), "uri keypath not found") {
+		return nil, fmt.Errorf("Tenant Image (%s) not found", imageName)
+	}
 	json.Unmarshal(byteData, imagesStatus)
 	f5osLogger.Debug("[GetImage]", "Image Struct:", hclog.Fmt("%+v", imagesStatus))
 	return imagesStatus, nil
