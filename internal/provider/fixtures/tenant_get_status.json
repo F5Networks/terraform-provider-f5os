@@ -9,6 +9,7 @@
         ],
         "mgmt-ip": "10.10.10.26",
         "prefix-length": 24,
+        "dag-ipv6-prefix-length": 128,
         "gateway": "10.10.10.1",
         "cryptos": "enabled",
         "tenant-auth-support": "disabled",

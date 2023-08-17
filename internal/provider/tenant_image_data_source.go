@@ -73,7 +73,7 @@ func (d *ImageInfoDataSource) Read(ctx context.Context, req datasource.ReadReque
 	}
 	imageObj, err := d.client.GetImage(data.ImageName.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("TF-001:Unable to Get Image Details", fmt.Sprintf("Error:%s", err))
+		resp.Diagnostics.AddError("Unable to Get Image Details", fmt.Sprintf("Error:%s", err))
 		return
 	}
 	var availableFlag = true
@@ -83,7 +83,7 @@ func (d *ImageInfoDataSource) Read(ctx context.Context, req datasource.ReadReque
 		}
 	}
 	if !availableFlag {
-		resp.Diagnostics.AddError("TF-001:Unable to Get Image Details", fmt.Sprintf("Get Image: %s failed with error:%s", data.ImageName.ValueString(), "not-present"))
+		resp.Diagnostics.AddError("Unable to Get Image Details", fmt.Sprintf("Get Image: %s failed with error:%s", data.ImageName.ValueString(), "not-present"))
 		return
 	}
 

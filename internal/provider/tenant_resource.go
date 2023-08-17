@@ -214,18 +214,18 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 	if r.client.PlatformType == "Velos Controller" {
-		resp.Diagnostics.AddError("TF-001:Unsupported platform for resource", "`f5os_tenant` resource is supported with Velos Partition level (or) rSeries appliance")
+		resp.Diagnostics.AddError("Unsupported platform for resource", "`f5os_tenant` resource is supported with Velos Partition level (or) rSeries appliance")
 		return
 	}
 	if data.Type.ValueString() == "BIG-IP-Next" {
 		if data.DeploymentFile.IsNull() {
-			resp.Diagnostics.AddError("TF-001:Invalid Config for resource", "if `f5os_tenant` resource attribute `type` is `BIG-IP-Next`,then `deployment_file` option should also be specified")
+			resp.Diagnostics.AddError("Invalid Config for resource", "if `f5os_tenant` resource attribute `type` is `BIG-IP-Next`,then `deployment_file` option should also be specified")
 			return
 		}
 	}
 	imageObj, err := r.client.GetImage(data.ImageName.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("TF-001:Unable to Get Image Details", fmt.Sprintf("Error:%s", err))
+		resp.Diagnostics.AddError("Unable to Get Image Details", fmt.Sprintf("Error:%s", err))
 		return
 	}
 	var availableFlag = true
@@ -235,7 +235,7 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 		}
 	}
 	if !availableFlag {
-		resp.Diagnostics.AddError("TF-001:Unable to Get Image Details", fmt.Sprintf("Get Image: %s failed with error:%s", data.ImageName.ValueString(), "not-present"))
+		resp.Diagnostics.AddError("Unable to Get Image Details", fmt.Sprintf("Get Image: %s failed with error:%s", data.ImageName.ValueString(), "not-present"))
 		return
 	}
 
