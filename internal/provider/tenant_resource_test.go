@@ -40,6 +40,28 @@ func TestAccTenantDeployResource(t *testing.T) {
 	})
 }
 
+func TestAccTenantDeployResourceTC5(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Read testing
+			{
+				Config: testAccTenantDeployTC5,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "id", "testtenant-ecosys03"),
+					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "name", "testtenant-ecosys03"),
+					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "image_name", "BIG-IP-Next-20.0.1-2.123.17"),
+					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "mgmt_ip", "100.10.100.110"),
+					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "mgmt_gateway", "100.10.100.1"),
+					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "type", "BIG-IP-Next"),
+					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "status", "Configured"),
+				),
+			},
+		},
+	})
+}
+
 func TestAccTenantDeployResourceTC4(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -345,3 +367,23 @@ resource "f5os_tenant" "test-tenant22" {
 //  vlans             = [1,2,3]
 //}
 //`
+
+const testAccTenantDeployTC5 = `
+resource "f5os_tenant" "velos_bigip_next_tenant_tc5" {
+	cpu_cores       = 4
+	cryptos         = "enabled"
+	deployment_file = "BIG-IP-Next-20.0.1-2.123.17.yaml"
+	image_name = "BIG-IP-Next-20.0.1-2.123.17"
+	mgmt_gateway           = "100.10.100.1"
+	mgmt_ip                = "100.10.100.110"
+	mgmt_prefix            = 24
+	dag_ipv6_prefix_length = 100
+	mac_block_size         = "medium"
+	name                   = "testtenant-ecosys03"
+	nodes                  = [2]
+	running_state          = "configured"
+	timeout           = 600
+	type              = "BIG-IP-Next"
+	virtual_disk_size = 30
+  }
+`
