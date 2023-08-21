@@ -115,7 +115,7 @@ func TestUnitCfgBackup(t *testing.T) {
 
 	defer teardown()
 
-	tf_cfg := `
+	tfCfg := `
 resource "f5os_config_backup" "test" {
   name            = "test_cfg_backup"
   remote_host     = "1.2.3.4"
@@ -131,7 +131,7 @@ resource "f5os_config_backup" "test" {
 		IsUnitTest:               true,
 		Steps: []resource.TestStep{
 			{
-				Config: tf_cfg,
+				Config: tfCfg,
 			},
 		},
 	})
