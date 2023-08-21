@@ -16,6 +16,8 @@ website/.bundle
 website/build
 website/node_modules
 .vagrant/
+.terraform.lock.hcl
+cover.out
 *.backup
 ./*.tfstate
 .terraform/

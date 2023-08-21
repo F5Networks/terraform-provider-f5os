@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
+	"os"
+
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -11,7 +13,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
-	"os"
 )
 
 // Ensure F5osProvider satisfies various provider interfaces.
@@ -124,11 +125,6 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		)
 	}
 
-	//ctx = tflog.SetField(ctx, "f5os_host", host)
-	//ctx = tflog.SetField(ctx, "f5os_username", username)
-	//ctx = tflog.SetField(ctx, "password", password)
-	//ctx = tflog.MaskFieldValuesWithFieldKeys(ctx, "password")
-
 	// Example client configuration for data sources and resources
 	f5osConfig := &f5ossdk.F5osConfig{
 		Host:     host,
@@ -136,12 +132,11 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		Password: password,
 		Port:     hostPort,
 	}
-	tflog.Info(ctx, fmt.Sprintf("[F5OS Provider] f5os client config:%+v", f5osConfig))
 	client, err := f5ossdk.NewSession(f5osConfig)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Create f5os Client",
-			"An unexpected error occurred when creating the f5os client. "+
+			"An unexpected error occurred when creating the f5os client connection."+
 				"If the error is not clear, please contact the provider developers.\n\n"+
 				"f5os Client Error: "+err.Error(),
 		)
@@ -160,11 +155,14 @@ func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewPartitionChangePasswordResource,
 		NewVlanResource,
 		NewInterfaceResource,
+		NewCfgBackupResource,
 	}
 }
 
 func (p *F5osProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{}
+	return []func() datasource.DataSource{
+		NewImageInfoDataSource,
+	}
 }
 
 func New(version string) func() provider.Provider {
