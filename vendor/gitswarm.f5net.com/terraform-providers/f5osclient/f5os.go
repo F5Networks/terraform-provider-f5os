@@ -26,11 +26,16 @@ import (
 )
 
 const (
-	uriRoot           = "/restconf/data"
-	uriLogin          = "/restconf/data/openconfig-system:system/aaa"
-	contentTypeHeader = "application/yang-data+json"
-	uriPlatformType   = "/openconfig-platform:components/component=platform/state/description"
-	uriInterface      = "/openconfig-interfaces:interfaces"
+	uriRoot               = "/restconf/data"
+	uriLogin              = "/openconfig-system:system/aaa"
+	contentTypeHeader     = "application/yang-data+json"
+	uriPlatformType       = "/openconfig-platform:components/component=platform/state/description"
+	uriInterface          = "/openconfig-interfaces:interfaces"
+	uriConfigBackup       = "/openconfig-system:system/f5-database:database/f5-database:config-backup"
+	uriFileExport         = "/f5-utils-file-transfer:file/export"
+	uriFileDelete         = "/f5-utils-file-transfer:file/delete"
+	uriFileList           = "/f5-utils-file-transfer:file/list"
+	uriFileTransferStatus = "/f5-utils-file-transfer:file/transfer-operations/transfer-operation"
 )
 
 var f5osLogger hclog.Logger
@@ -65,6 +70,7 @@ type F5os struct {
 	Teem          bool
 	ConfigOptions *ConfigOptions
 	PlatformType  string
+	UriRoot       string
 }
 type F5osError struct {
 	IetfRestconfErrors struct {
@@ -77,14 +83,6 @@ type F5osError struct {
 	} `json:"ietf-restconf:errors"`
 }
 
-// APIRequest builds our request before sending it to the server.
-type APIRequest struct {
-	Method      string
-	URL         string
-	Body        string
-	ContentType string
-}
-
 // Upload contains information about a file upload status
 type Upload struct {
 	RemainingByteCount int64          `json:"remainingByteCount"`
@@ -94,6 +92,16 @@ type Upload struct {
 	TemporaryFilePath  string         `json:"temporaryFilePath"`
 	Generation         int            `json:"generation"`
 	LastUpdateMicros   int            `json:"lastUpdateMicros"`
+}
+
+type FileExport struct {
+	RemoteHost string `json:"remote-host"`
+	RemotePath string `json:"remote-file"`
+	LocalFile  string `json:"local-file"`
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	Protocol   string `json:"protocol"`
+	Insecure   string `json:"insecure"`
 }
 
 // RequestError contains information about any error we get from a request.
@@ -139,9 +147,15 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	f5osLogger.Info("[NewSession]", "URL", hclog.Fmt("%+v", urlString))
 	u, _ := url.Parse(urlString)
 	_, port, _ := net.SplitHostPort(u.Host)
-
+	f5osSession.UriRoot = uriRoot
+	if port == "443" {
+		f5osSession.UriRoot = "/api/data"
+	}
 	if f5osObj.Port != 0 && port == "" {
 		urlString = fmt.Sprintf("%s:%d", urlString, f5osObj.Port)
+		if f5osObj.Port == 443 {
+			f5osSession.UriRoot = "/api/data"
+		}
 	}
 	if f5osObj.ConfigOptions == nil {
 		f5osObj.ConfigOptions = defaultConfigOptions
@@ -158,7 +172,7 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 		Transport: tr,
 	}
 	method := "GET"
-	urlString = fmt.Sprintf("%s%s", urlString, uriLogin)
+	urlString = fmt.Sprintf("%s%s%s", urlString, f5osSession.UriRoot, uriLogin)
 
 	f5osLogger.Debug("[NewSession]", "URL", hclog.Fmt("%+v", urlString))
 	req, err := http.NewRequest(method, urlString, nil)
@@ -176,6 +190,9 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if strings.Contains(fmt.Sprintf("%s", string(respData)), "enable JavaScript to run this app") {
+		return nil, fmt.Errorf("Failed with %s", string(respData))
 	}
 	f5osSession.setPlaformType()
 	f5osLogger.Info("[NewSession] Session creation Success")
@@ -214,18 +231,6 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 		// f5osLogger.Debug("[doRequest]", "Resp CODE", hclog.Fmt("%+v", string(byteData)))
 		return io.ReadAll(resp.Body)
 	}
-	// if resp.StatusCode == 400 {
-	// 	return io.ReadAll(resp.Body)
-	// 	// var f5osError F5osError
-	// 	// bodyResp, err := io.ReadAll(resp.Body)
-	// 	// if err != nil {
-	// 	// 	return bodyResp, err
-	// 	// }
-	// 	// json.Unmarshal(bodyResp, &f5osError)
-	// 	// if f5osError.IetfRestconfErrors.Error[0].ErrorMessage == "" {
-	// 	// 	return
-	// 	// }
-	// }
 	if resp.StatusCode >= 400 {
 		byteData, _ := io.ReadAll(resp.Body)
 		var errorNew F5osError
@@ -236,13 +241,13 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 }
 
 func (p *F5os) GetRequest(path string) ([]byte, error) {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	f5osLogger.Info("[GetRequest]", "Request path", hclog.Fmt("%+v", url))
 	return p.doRequest("GET", url, nil)
 }
 
 func (p *F5os) DeleteRequest(path string) error {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	f5osLogger.Debug("[DeleteRequest]", "Request path", hclog.Fmt("%+v", url))
 	if resp, err := p.doRequest("DELETE", url, nil); err != nil {
 		return err
@@ -253,19 +258,19 @@ func (p *F5os) DeleteRequest(path string) error {
 }
 
 func (p *F5os) PutRequest(path string, body []byte) ([]byte, error) {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	f5osLogger.Debug("[PutRequest]", "Request path", hclog.Fmt("%+v", url))
 	return p.doRequest("PUT", url, body)
 }
 
 func (p *F5os) PatchRequest(path string, body []byte) ([]byte, error) {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	f5osLogger.Debug("[PatchRequest]", "Request path", hclog.Fmt("%+v", url))
 	return p.doRequest("PATCH", url, body)
 }
 
 func (p *F5os) PostRequest(path string, body []byte) ([]byte, error) {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	f5osLogger.Debug("[PostRequest]", "Request path", hclog.Fmt("%+v", url))
 	return p.doRequest("POST", url, body)
 }
@@ -352,7 +357,7 @@ func (p *F5os) RemoveTrunkVlans(intf string, vlanId int) error {
 }
 
 func (p *F5os) UploadImagePostRequest(path string, formData io.Reader, headers map[string]string) ([]byte, error) {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, path)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	req, err := http.NewRequest(
 		http.MethodPost,
 		url,
@@ -379,8 +384,165 @@ func (p *F5os) UploadImagePostRequest(path string, formData io.Reader, headers m
 	return io.ReadAll(resp.Body)
 }
 
+func (p *F5os) CreateConfigBackup(backupName string, timeout int64, exportCfg FileExport) ([]byte, error) {
+	f5osLogger.Debug("[CreateConfigBackup]", "Request path", hclog.Fmt("%+v", uriConfigBackup))
+
+	payload := map[string]string{"f5-database:name": backupName}
+	byteBody, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := p.PostRequest(uriConfigBackup, byteBody)
+	if err != nil {
+		return nil, err
+	}
+
+	obj := make(map[string]any)
+	err = json.NewDecoder(bytes.NewReader(resp)).Decode(&obj)
+
+	if err != nil {
+		return nil, err
+	}
+
+	backupResult := obj["f5-database:output"].(map[string]any)["result"].(string)
+	if !strings.HasPrefix(backupResult, "Database backup successful.") {
+		return nil, fmt.Errorf("failed to create database config backup")
+	} else {
+		f5osLogger.Debug("[CreateConfigBackup]", "successfull created backup file: ", hclog.Fmt("%+v", backupName))
+	}
+
+	resp, err = p.ExportConfigBackup(exportCfg)
+
+	if err != nil {
+		return nil, err
+	}
+
+	err = json.NewDecoder(bytes.NewReader(resp)).Decode(&obj)
+	if err != nil {
+		return nil, fmt.Errorf("unable to decode response from file export endpoint")
+	}
+	f5osLogger.Debug("[CreateConfigBackup]", "file transfer response: ", hclog.Fmt("%s", string(resp)))
+
+	result := obj["f5-utils-file-transfer:output"].(map[string]any)["result"].(string)
+	if !strings.HasPrefix(result, "File transfer is initiated") {
+		return nil, fmt.Errorf("unable to initiate backup file transfer")
+	}
+
+	var transferId string
+	key := "operation-id"
+	transferId, ok := obj["f5-utils-file-transfer:output"].(map[string]any)["operation-id"].(string)
+
+	if !ok {
+		transferId = fmt.Sprintf("configs/%s", backupName)
+		key = "local-file-path"
+	}
+
+	f5osLogger.Debug("[CreateConfigBackup]", "transferId and key are ", hclog.Fmt("%+v, %+v", transferId, key))
+	waitTime := time.Second * time.Duration(timeout)
+	for start := time.Now(); time.Since(start).Seconds() < waitTime.Seconds(); time.Sleep(5 * time.Second) {
+		status, err := p.fileTransferStatus(key, transferId)
+		if err != nil {
+			return nil, err
+		}
+
+		if status == "Completed" {
+			f5osLogger.Debug("[CreateConfigBackup]", "successfully exported backup file to host", hclog.Fmt("%+v", exportCfg.RemoteHost))
+			return nil, nil
+		}
+	}
+
+	return nil, fmt.Errorf("export operation timed out")
+}
+
+func (p *F5os) DeleteConfigBackup(backup string) error {
+	f5osLogger.Debug("[DeleteConfigBackup]", "Request path", hclog.Fmt("%+v", uriFileDelete))
+	payload, err := json.Marshal(map[string]string{
+		"f5-utils-file-transfer:file-name": backup,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	resp, err := p.PostRequest(uriFileDelete, payload)
+
+	if err != nil {
+		return err
+	}
+
+	obj := make(map[string]any)
+	json.NewDecoder(bytes.NewReader(resp)).Decode(&obj)
+	msg := obj["f5-utils-file-transfer:output"].(map[string]any)["result"].(string)
+
+	if msg != "Deleting the file" {
+		return fmt.Errorf("unable to delete the config backup file")
+	} else {
+		f5osLogger.Info("[DeleteConfigBackup]", "successfully deleted config backup file", hclog.Fmt("%+v", backup))
+	}
+	return nil
+}
+
+func (p *F5os) GetConfigBackup() ([]byte, error) {
+	f5osLogger.Debug("[ReadConfigBackup]", "Request path", hclog.Fmt("%+v", uriFileList))
+	payload, err := json.Marshal(map[string]string{
+		"f5-utils-file-transfer:path": "configs/",
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := p.PostRequest(uriFileList, payload)
+
+	if err != nil {
+		return nil, err
+	}
+
+	f5osLogger.Debug("[ReadConfigBackup]", fmt.Sprintf("Response from %s: ", uriFileList), hclog.Fmt("%+v", resp))
+
+	return resp, nil
+}
+
+func (p *F5os) ExportConfigBackup(exportCfg FileExport) ([]byte, error) {
+	f5osLogger.Debug("[ExportConfigBackup]", "Request path", hclog.Fmt("%+v", uriFileExport))
+	payload, err := json.Marshal(exportCfg)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return p.PostRequest(uriFileExport, payload)
+}
+
+func (p *F5os) fileTransferStatus(key, transferId string) (string, error) {
+	f5osLogger.Debug("[fileTransferStatus]", "Request path", hclog.Fmt("%+v", uriFileTransferStatus))
+	resp, err := p.GetRequest(uriFileTransferStatus)
+	if err != nil {
+		return "", err
+	}
+
+	obj := make(map[string]any)
+
+	err = json.NewDecoder(bytes.NewReader(resp)).Decode(&obj)
+	if err != nil {
+		return "", fmt.Errorf("unable to read file transfer status")
+	}
+
+	transfers := obj["f5-utils-file-transfer:transfer-operation"].([]any)
+	for _, v := range transfers {
+		m := v.(map[string]any)
+		opID, ok := m[key].(string)
+		if ok && opID == transferId {
+			return strings.Trim(m["status"].(string), " "), nil
+		}
+	}
+
+	return "", fmt.Errorf("no transfer status available for the file/operation-id: %s", transferId)
+}
+
 func (p *F5os) setPlaformType() ([]byte, error) {
-	url := fmt.Sprintf("%s%s%s", p.Host, uriRoot, uriPlatformType)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, uriPlatformType)
 	f5osLogger.Debug("[setPlaformType]", "Request path", hclog.Fmt("%+v", url))
 	req, err := http.NewRequest("GET", url, bytes.NewBuffer(nil))
 	if err != nil {
@@ -402,7 +564,7 @@ func (p *F5os) setPlaformType() ([]byte, error) {
 		return io.ReadAll(resp.Body)
 	}
 	if resp.StatusCode == 404 {
-		url1 := fmt.Sprintf("%s%s%s", p.Host, uriRoot, uriVlan)
+		url1 := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, uriVlan)
 		req, err := http.NewRequest("GET", url1, bytes.NewBuffer(nil))
 		if err != nil {
 			return nil, err

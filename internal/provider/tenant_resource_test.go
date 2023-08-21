@@ -96,6 +96,21 @@ func TestUnitTenantDeployResourceUnitTC1(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 		_, _ = fmt.Fprintf(w, ``)
 	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{
+	   "f5-tenant-images:image": [
+	       {
+	           "name": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+	           "in-use": false,
+	           "type": "vm-image",
+	           "status": "replicated",
+	           "date": "2023-8-17",
+	           "size": "2.27 GB"
+	       }
+	   ]
+	}`)
+	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = fmt.Fprintf(w, ``)

@@ -38,6 +38,9 @@ func (p *F5os) GetImage(imageName string) (*F5RespTenantImagesStatus, error) {
 	if err != nil {
 		return nil, err
 	}
+	if strings.Contains(string(byteData), "uri keypath not found") {
+		return nil, fmt.Errorf("Tenant Image (%s) not found", imageName)
+	}
 	json.Unmarshal(byteData, imagesStatus)
 	f5osLogger.Debug("[GetImage]", "Image Struct:", hclog.Fmt("%+v", imagesStatus))
 	return imagesStatus, nil
@@ -209,7 +212,7 @@ func (p *F5os) IsImported(imageName string) (*map[string]interface{}, error) {
 	return &ss, nil
 }
 func (p *F5os) DeleteTenantImage(tenantImage string) error {
-	url := fmt.Sprintf("%s%s%s/remove", p.Host, uriRoot, uriTenantImage)
+	url := fmt.Sprintf("%s%s%s/remove", p.Host, p.UriRoot, uriTenantImage)
 	f5osLogger.Info("[DeleteTenantImage]", "Request path", hclog.Fmt("%+v", url))
 	image := &F5ReqImageTenant{}
 	image.Name = tenantImage
@@ -323,7 +326,7 @@ func (p *F5os) GetTenant(tenantName string) (*F5RespTenants, error) {
 }
 
 func (p *F5os) DeleteTenant(tenantName string) error {
-	url := fmt.Sprintf("%s%s%s/tenant=%s", p.Host, uriRoot, uriTenant, tenantName)
+	url := fmt.Sprintf("%s%s%s/tenant=%s", p.Host, p.UriRoot, uriTenant, tenantName)
 	f5osLogger.Info("[DeleteTenant]", "Request path", hclog.Fmt("%+v", url))
 	_, err := p.doRequest("DELETE", url, []byte(""))
 	if err != nil {
