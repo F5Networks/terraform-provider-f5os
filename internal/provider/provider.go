@@ -28,11 +28,23 @@ type F5osProvider struct {
 
 // F5osProviderModel describes the provider data model.
 type F5osProviderModel struct {
-	Host     types.String `tfsdk:"host"`
-	Username types.String `tfsdk:"username"`
-	Password types.String `tfsdk:"password"`
-	Port     types.Int64  `tfsdk:"port"`
+	Host        types.String `tfsdk:"host"`
+	Username    types.String `tfsdk:"username"`
+	Password    types.String `tfsdk:"password"`
+	Port        types.Int64  `tfsdk:"port"`
+	TeemDisable types.Bool   `tfsdk:"teem_disable"`
 }
+type TeemData struct {
+	ResourceName      string
+	ProviderName      string
+	ProviderVersion   string
+	TerraformVersion  string
+	F5Platform        string
+	F5SoftwareVersion string
+	TerraformLicense  string
+}
+
+var teemData = &TeemData{}
 
 func (p *F5osProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
 	resp.TypeName = "f5os"
@@ -60,6 +72,10 @@ func (p *F5osProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 				MarkdownDescription: "Port Number to be used to make API calls to HOST",
 				Optional:            true,
 			},
+			"teem_disable": schema.BoolAttribute{
+				MarkdownDescription: "If this flag set to true,sending telemetry data to TEEM will be disabled",
+				Optional:            true,
+			},
 		},
 	}
 }
@@ -70,22 +86,21 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	// Retrieve provider data from configuration
 	var config F5osProviderModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
-
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Configuration values are now available.
-	// if data.Endpoint.IsNull() { /* ... */ }
-
-	// Default values to environment variables, but override
-	// with Terraform configuration value if set.
-
 	host := os.Getenv("F5OS_HOST")
 	username := os.Getenv("F5OS_USERNAME")
 	password := os.Getenv("F5OS_PASSWORD")
-	hostPort := 8888
+	teemTmp := os.Getenv("TEEM_DISABLE")
 
+	hostPort := 8888
+	var teemDisable bool
+	teemDisable = false
+	if teemTmp == "true" {
+		teemDisable = true
+	}
 	if !config.Host.IsNull() {
 		host = config.Host.ValueString()
 	}
@@ -99,6 +114,9 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	}
 	if !config.Port.IsNull() {
 		hostPort = int(config.Port.ValueInt64())
+	}
+	if !config.TeemDisable.IsNull() {
+		teemDisable = config.TeemDisable.ValueBool()
 	}
 	if host == "" {
 		resp.Diagnostics.AddError(
@@ -133,6 +151,7 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		Port:     hostPort,
 	}
 	client, err := f5ossdk.NewSession(f5osConfig)
+	client.Teem = teemDisable
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Create f5os Client",
@@ -141,6 +160,15 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 				"f5os Client Error: "+err.Error(),
 		)
 		return
+	}
+	teemData.TerraformVersion = req.TerraformVersion
+	teemData.ProviderName = "f5os"
+	teemData.ProviderVersion = p.version
+	teemData.F5Platform = fmt.Sprintf("F5OS %s", client.PlatformType)
+	teemData.F5SoftwareVersion = client.PlatformVersion
+	teemData.TerraformLicense = "open"
+	if req.TerraformVersion > "1.5.0" {
+		teemData.TerraformLicense = "business"
 	}
 	resp.DataSourceData = client
 	resp.ResourceData = client
@@ -182,7 +210,6 @@ func toF5osProvider(in any) (*f5ossdk.F5os, diag.Diagnostics) {
 	}
 
 	var diags diag.Diagnostics
-
 	p, ok := in.(*f5ossdk.F5os)
 
 	if !ok {
