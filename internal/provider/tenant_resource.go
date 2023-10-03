@@ -255,8 +255,11 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 	teemInfo := make(map[string]interface{})
 	teemInfo["teemData"] = r.teemData
 	r.client.Metadata = teemInfo
-	tflog.Info(ctx, fmt.Sprintf("\n\n\n\n\n\nteemData in f5os_tenant:%+v\n\n\n\n\n", teemInfo))
-	r.client.SendTeem(teemInfo)
+	err = r.client.SendTeem(teemInfo)
+	if err != nil {
+		resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
+		return
+	}
 	respByte, err := r.client.CreateTenant(tenantConfig, int(data.Timeout.ValueInt64()))
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Tenant Deploy failed, got error: %s", err))

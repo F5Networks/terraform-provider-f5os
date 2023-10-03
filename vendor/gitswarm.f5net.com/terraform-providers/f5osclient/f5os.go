@@ -242,11 +242,10 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 	return nil, nil
 }
 
-func (p *F5os) SendTeem(teemDataInput interface{}) (error) {
+func (p *F5os) SendTeem(teemDataInput interface{}) error {
 	recordData := &RawTelemetry{}
 	teemData := teemDataInput.(map[string]interface{})["teemData"]
 	teemBytes, _ := json.Marshal(teemData)
-	f5osLogger.Info("\n\n\n\n\n[doRequest]", "Request teemData", hclog.Fmt("%+v", string(teemBytes)))
 	teemMap := make(map[string]interface{})
 	err := json.Unmarshal(teemBytes, &teemMap)
 	if err != nil {
@@ -268,8 +267,6 @@ func (p *F5os) SendTeem(teemDataInput interface{}) (error) {
 	recordData.DocumentVersion = teemMap["ProviderVersion"].(string)
 	recordData.ObservationStartTime = time.Now().UTC().Format(time.RFC3339Nano)
 	recordData.EpochTime = time.Now().Unix()
-	f5osLogger.Info("\n\n\n\n\n[doRequest]", "Request teemMap", hclog.Fmt("%+v", teemMap))
-	f5osLogger.Info("[doRequest]", "Request recordData", hclog.Fmt("%+v", recordData))
 	if !p.Teem {
 		return SendReport(recordData)
 	}
