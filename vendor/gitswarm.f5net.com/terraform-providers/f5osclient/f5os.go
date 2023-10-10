@@ -356,6 +356,165 @@ func (p *F5os) RemoveTrunkVlans(intf string, vlanId int) error {
 	return nil
 }
 
+func (p *F5os) GetLagInterface(intf string) (*F5RespLagInterfaces, error) {
+	intfnew := fmt.Sprintf("/interface=%s", intf)
+	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
+	f5osLogger.Info("[GetLagInterface]", "Request path", hclog.Fmt("%+v", url))
+	intLag := &F5RespLagInterfaces{}
+	byteData, err := p.GetRequest(url)
+	if err != nil {
+		return nil, err
+	}
+	json.Unmarshal(byteData, intLag)
+	f5osLogger.Debug("[GetLagInterface]", "intLag", hclog.Fmt("%+v", intLag))
+	return intLag, nil
+}
+
+func (p *F5os) CreateLagInterface(body *F5ReqLagInterfaces, members *F5ReqLagInterfaces) ([]byte, error) {
+	f5osLogger.Debug("[CreateLagInterface]", "Request path", hclog.Fmt("%+v", "/"))
+	byteBody, err := json.Marshal(body)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[CreateLagInterface]", "Request Body", hclog.Fmt("%+v", body))
+	resp, err := p.PatchRequest("/", byteBody)
+	if err != nil {
+		return resp, err
+	}
+	f5osLogger.Debug("[CreateLagInterface]", "Resp:", hclog.Fmt("%+v", string(resp)))
+
+	resp, err = p.addLagMembers(members)
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (p *F5os) UpdateLagInterface(intf string, body *F5ReqLagInterfaces) ([]byte, error) {
+	f5osLogger.Debug("[UpdateLagInterface]", "Request path", hclog.Fmt("%+v", uriInterface))
+	vlans, err := p.getLagSwitchedVlans(intf)
+	if err != nil {
+		return []byte(""), err
+	}
+	nativeVlan := vlans.OpenconfigVlanSwitchedVlan.Config.NativeVlan
+	trunkVlans := vlans.OpenconfigVlanSwitchedVlan.Config.TrunkVlans
+	for _, val := range body.OpenconfigInterfacesInterfaces.Interface {
+		innativeVlan := val.OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.NativeVlan
+		newTrunkvlans := val.OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.TrunkVlans
+		diffTrunkvlans := listDifference(trunkVlans, newTrunkvlans)
+		if nativeVlan != 0 && innativeVlan != nativeVlan {
+			p.removeLagNativeVlans(intf)
+		}
+		for _, intfVal := range diffTrunkvlans {
+			p.removeLagTrunkVlans(intf, intfVal)
+		}
+	}
+	byteBody, err := json.Marshal(body)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[UpdateLagInterface]", "Request Body", hclog.Fmt("%+v", body))
+	resp, err := p.PatchRequest(uriInterface, byteBody)
+	if err != nil {
+		return resp, err
+	}
+	f5osLogger.Debug("[UpdateLagInterface]", "Resp:", hclog.Fmt("%+v", string(resp)))
+	return resp, nil
+}
+
+func (p *F5os) getLagSwitchedVlans(intf string) (*F5ReqVlanSwitchedVlan, error) {
+	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-aggregate:aggregation/openconfig-vlan:switched-vlan", intf)
+	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
+	f5osLogger.Debug("[getLagSwitchedVlans]", "Request path", hclog.Fmt("%+v", url))
+	intFace := &F5ReqVlanSwitchedVlan{}
+	byteData, err := p.GetRequest(url)
+	if err != nil {
+		return nil, err
+	}
+	json.Unmarshal(byteData, intFace)
+	f5osLogger.Debug("[getLagSwitchedVlans]", "intFace", hclog.Fmt("%+v", intFace))
+	return intFace, nil
+}
+
+func (p *F5os) removeLagNativeVlans(intf string) error {
+	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-aggregate:aggregation/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:native-vlan", intf)
+	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
+	f5osLogger.Debug("[RemoveLagNativeVlans]", "Request path", hclog.Fmt("%+v", url))
+	err := p.DeleteRequest(url)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *F5os) removeLagTrunkVlans(intf string, vlanId int) error {
+	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-aggregate:aggregation/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:trunk-vlans=%d", intf, vlanId)
+	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
+	f5osLogger.Debug("[RemoveLagTrunkVlans]", "Request path", hclog.Fmt("%+v", url))
+	err := p.DeleteRequest(url)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+
+func (p *F5os) RemoveLagInterface(intf string) error {
+	intfnew := fmt.Sprintf("/interface=%s", intf)
+	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
+	f5osLogger.Debug("[RemoveLagInterface]", "Request path", hclog.Fmt("%+v", url))
+	err := p.DeleteRequest(url)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *F5os) UpdateLagMembers(members *F5ReqLagInterfaces) ([]byte, error) {
+	resp, err := p.addLagMembers(members)
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (p *F5os) addLagMembers(body *F5ReqLagInterfaces) ([]byte, error) {
+	f5osLogger.Debug("[UpdateLagMember]", "Request path", hclog.Fmt("%+v", "/"))
+	byteBody, err := json.Marshal(body)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[UpdateLagMember]", "Request Body", hclog.Fmt("%+v", body))
+	resp, err := p.PatchRequest("/", byteBody)
+	if err != nil {
+		return resp, err
+	}
+	f5osLogger.Debug("[UpdateLagMember]", "Resp:", hclog.Fmt("%+v", string(resp)))
+	return resp, nil
+}
+
+func (p *F5os) RemoveLagMembers(members []string) error {
+	for _, member := range members {
+		err := p.removeLagMember(member)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *F5os) removeLagMember(intf string) error {
+	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-ethernet:ethernet/config/openconfig-if-aggregate:aggregate-id", encodeInterface(intf))
+	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
+	f5osLogger.Debug("[RemoveLagMember]", "Request path", hclog.Fmt("%+v", url))
+	err := p.DeleteRequest(url)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+
 func (p *F5os) UploadImagePostRequest(path string, formData io.Reader, headers map[string]string) ([]byte, error) {
 	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	req, err := http.NewRequest(
@@ -623,4 +782,10 @@ func listDifference(s1 []int, s2 []int) []int {
 		}
 	}
 	return difference
+}
+
+func encodeInterface(intfname string) string {
+	// Encode the interface name
+	interfaceEncoded := url.QueryEscape(intfname)
+	return interfaceEncoded
 }
