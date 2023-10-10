@@ -156,6 +156,7 @@ func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewVlanResource,
 		NewInterfaceResource,
 		NewCfgBackupResource,
+		NewLagResource,
 	}
 }
 

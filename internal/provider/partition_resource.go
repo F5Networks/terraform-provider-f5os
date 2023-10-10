@@ -314,7 +314,7 @@ func (r *PartitionResource) Update(ctx context.Context, req resource.UpdateReque
 			// first we determine if a subset of slots on partition are not included in user data, and if yes we remove them first
 			var slots []int64
 			data.Slots.ElementsAs(ctx, &slots, false)
-			slotDiff := getSliceDifference(slotData, slots)
+			slotDiff := getIntSliceDifference(slotData, slots)
 			if len(slotDiff) > 0 {
 				_, err := r.client.SetSlot("none", slotDiff)
 				if err != nil {
