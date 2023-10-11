@@ -491,7 +491,6 @@ func (p *F5os) removeLagTrunkVlans(intf string, vlanId int) error {
 	return nil
 }
 
-
 func (p *F5os) RemoveLagInterface(intf string) error {
 	intfnew := fmt.Sprintf("/interface=%s", intf)
 	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
@@ -546,7 +545,6 @@ func (p *F5os) removeLagMember(intf string) error {
 	}
 	return nil
 }
-
 
 func (p *F5os) UploadImagePostRequest(path string, formData io.Reader, headers map[string]string) ([]byte, error) {
 	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)

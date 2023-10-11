@@ -184,13 +184,13 @@ type F5ReqLagInterface struct {
 			} `json:"config,omitempty"`
 		} `json:"openconfig-vlan:switched-vlan,omitempty"`
 		Config struct {
-			LagType                       string `json:"lag-type,omitempty"`
-			DistributioHash 			  string `json:"f5-if-aggregate:distribution-hash,omitempty"`
+			LagType         string `json:"lag-type,omitempty"`
+			DistributioHash string `json:"f5-if-aggregate:distribution-hash,omitempty"`
 		} `json:"config,omitempty"`
 	} `json:"openconfig-if-aggregate:aggregation,omitempty"`
 	OpenconfigIfEthernetEthernet struct {
 		Config struct {
-			Name  string `json:"openconfig-if-aggregate:aggregate-id,omitempty"`
+			Name string `json:"openconfig-if-aggregate:aggregate-id,omitempty"`
 		} `json:"config,omitempty"`
 	} `json:"openconfig-if-ethernet:ethernet,omitempty"`
 }
@@ -202,10 +202,10 @@ type F5RespLagInterfaces struct {
 type F5RespLagInterface struct {
 	Name   string `json:"name,omitempty"`
 	Config struct {
-		Name    string `json:"name,omitempty"`
-		Type    string `json:"type,omitempty"`
+		Name        string `json:"name,omitempty"`
+		Type        string `json:"type,omitempty"`
 		Description string `json:"description,omitempty"`
-		Enabled bool   `json:"enabled,omitempty"`
+		Enabled     bool   `json:"enabled,omitempty"`
 	} `json:"config,omitempty"`
 	State struct {
 		Name       string `json:"name,omitempty"`
@@ -216,15 +216,15 @@ type F5RespLagInterface struct {
 	} `json:"state,omitempty"`
 	OpenconfigIfAggregateAggregation struct {
 		Config struct {
-			LagType                       string `json:"lag-type,omitempty"`
-			DistributioHash 			  string `json:"f5-if-aggregate:distribution-hash,omitempty"`
+			LagType         string `json:"lag-type,omitempty"`
+			DistributioHash string `json:"f5-if-aggregate:distribution-hash,omitempty"`
 		} `json:"config,omitempty"`
 		State struct {
-			LagType                       string `json:"lag-type,omitempty"`
-			LagSpeed                      int    `json:"lag-speed,omitempty"`
+			LagType         string `json:"lag-type,omitempty"`
+			LagSpeed        int    `json:"lag-speed,omitempty"`
 			DistributioHash string `json:"f5-if-aggregate:distribution-hash,omitempty"`
-			Members          struct {
-				Member []F5RespLagMembers  `json:"member,omitempty"`
+			Members         struct {
+				Member []F5RespLagMembers `json:"member,omitempty"`
 			} `json:"f5-if-aggregate:members,omitempty"`
 			MacAddress string `json:"f5-if-aggregate:mac-address,omitempty"`
 			LagId      int    `json:"f5-if-aggregate:lagid,omitempty"`

@@ -73,7 +73,7 @@ func (p *F5osProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 				Optional:            true,
 			},
 			"teem_disable": schema.BoolAttribute{
-				MarkdownDescription: "If this flag set to true,sending telemetry data to TEEM will be disabled",
+				MarkdownDescription: "If this flag set to true,sending telemetry data to TEEM will be disabled,can be provided via `TEEM_DISABLE` environment variable.",
 				Optional:            true,
 			},
 		},
