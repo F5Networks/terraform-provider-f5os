@@ -185,8 +185,8 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 		return nil, err
 	}
 	defer res.Body.Close()
-	f5osSession.Token = res.Header.Get("X-Auth-Token")
 	respData, err := io.ReadAll(res.Body)
+	f5osLogger.Debug("[NewSession]", "Status Code:", hclog.Fmt("%+v", res.StatusCode))
 	if res.StatusCode == 401 {
 		return nil, fmt.Errorf("%+v with error:%+v", res.Status, string(respData))
 	}
@@ -196,6 +196,7 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	if strings.Contains(fmt.Sprintf("%s", string(respData)), "enable JavaScript to run this app") {
 		return nil, fmt.Errorf("Failed with %s", string(respData))
 	}
+	f5osSession.Token = res.Header.Get("X-Auth-Token")
 	f5osSession.setPlatformType()
 	f5osLogger.Info("[NewSession] Session creation Success")
 	return f5osSession, nil

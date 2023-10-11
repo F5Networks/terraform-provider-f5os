@@ -38,17 +38,12 @@ func SendReport(telemetryRecords *RawTelemetry) error {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	client := &http.Client{Transport: tr}
-	//url := fmt.Sprintf("https://%s/ee/v1/telemetry", prodEndPoint)
-	url := fmt.Sprintf("https://%s/ee/v1/telemetry", testEndpoint)
-
+	url := fmt.Sprintf("https://%s/ee/v1/telemetry", prodEndPoint)
+	//url := fmt.Sprintf("https://%s/ee/v1/telemetry", testEndpoint)
 	uniqueID := uniqueUUID()
 	telemetryRecords.DigitalAssetId = uniqueID
 	telemetryRecords.ObservationEndTime = time.Now().UTC().Format(time.RFC3339Nano)
-	telemetryRecords.ObservationEndTime = time.Now().UTC().Format(time.RFC3339Nano)
-	//telemetryRecords.ObservationStartTime = time.Now().UTC().Format(time.RFC3339Nano)
-	//log.Printf("[DEBUG] digitalAssetId:%+v", uniqueID)
 	bodyInfo, _ := json.Marshal(telemetryRecords)
-	f5osLogger.Info("\n\n\n\n\n[SendReport]", "Body :", hclog.Fmt("%+v", string(bodyInfo)))
 	body := bytes.NewReader([]byte(bodyInfo))
 	req, err := http.NewRequest("POST", url, body)
 	if err != nil {
@@ -56,16 +51,16 @@ func SendReport(telemetryRecords *RawTelemetry) error {
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
-	//req.Header.Set("F5-ApiKey", ProdKey)
-	req.Header.Set("F5-ApiKey", testKey)
+	req.Header.Set("F5-ApiKey", ProdKey)
+	//req.Header.Set("F5-ApiKey", testKey)
 	req.Header.Set("F5-DigitalAssetId", uniqueID)
 	req.Header.Set("F5-TraceId", genUUID())
-	f5osLogger.Info("\n\n\n\n\n[SendReport]", "Req :", hclog.Fmt("%+v\n\n\n\n", req))
+	f5osLogger.Debug("[SendReport]", "Req :", hclog.Fmt("%+v", req))
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("telemetry request to teem server failed with :%v", err)
 	}
-	f5osLogger.Info("\n\n\n[SendReport]", "", hclog.Fmt("Resp Code:%+v \t Status:%+v\n\n\n", resp.StatusCode, resp.Status))
+	f5osLogger.Debug("[SendReport]", "", hclog.Fmt("Resp Code:%+v \t Status:%+v", resp.StatusCode, resp.Status))
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 204 {

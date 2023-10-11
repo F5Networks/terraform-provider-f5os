@@ -151,7 +151,6 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		Port:     hostPort,
 	}
 	client, err := f5ossdk.NewSession(f5osConfig)
-	client.Teem = teemDisable
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Create f5os Client",
@@ -161,6 +160,7 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		)
 		return
 	}
+	client.Teem = teemDisable
 	teemData.TerraformVersion = req.TerraformVersion
 	teemData.ProviderName = "f5os"
 	teemData.ProviderVersion = p.version
