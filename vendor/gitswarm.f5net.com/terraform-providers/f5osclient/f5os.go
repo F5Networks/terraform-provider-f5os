@@ -310,7 +310,7 @@ func (p *F5os) PostRequest(path string, body []byte) ([]byte, error) {
 }
 
 func (p *F5os) GetInterface(intf string) (*F5RespOpenconfigInterface, error) {
-	intfnew := fmt.Sprintf("/interface=%s", intf)
+	intfnew := fmt.Sprintf("/interface=%s", encodeUrl(intf))
 	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
 	f5osLogger.Info("[GetInterface]", "Request path", hclog.Fmt("%+v", url))
 	intFace := &F5RespOpenconfigInterface{}
@@ -323,9 +323,15 @@ func (p *F5os) GetInterface(intf string) (*F5RespOpenconfigInterface, error) {
 	return intFace, nil
 }
 
+func encodeUrl(intfname string) string {
+	// Encode the interface name
+	interfaceEncoded := url.QueryEscape(intfname)
+	return interfaceEncoded
+}
+
 func (p *F5os) UpdateInterface(intf string, body *F5ReqOpenconfigInterface) ([]byte, error) {
 	f5osLogger.Debug("[UpdateInterface]", "Request path", hclog.Fmt("%+v", uriInterface))
-	vlans, err := p.getSwitchedVlans(intf)
+	vlans, err := p.getSwitchedVlans(encodeUrl(intf))
 	if err != nil {
 		return []byte(""), err
 	}
@@ -369,7 +375,7 @@ func (p *F5os) getSwitchedVlans(intf string) (*F5ReqVlanSwitchedVlan, error) {
 }
 
 func (p *F5os) RemoveNativeVlans(intf string) error {
-	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:native-vlan", intf)
+	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:native-vlan", encodeUrl(intf))
 	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
 	f5osLogger.Debug("[RemoveNativeVlans]", "Request path", hclog.Fmt("%+v", url))
 	err := p.DeleteRequest(url)
@@ -380,7 +386,7 @@ func (p *F5os) RemoveNativeVlans(intf string) error {
 }
 
 func (p *F5os) RemoveTrunkVlans(intf string, vlanId int) error {
-	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:trunk-vlans=%d", intf, vlanId)
+	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:trunk-vlans=%d", encodeUrl(intf), vlanId)
 	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
 	f5osLogger.Debug("[RemoveTrunkVlans]", "Request path", hclog.Fmt("%+v", url))
 	err := p.DeleteRequest(url)
@@ -391,7 +397,7 @@ func (p *F5os) RemoveTrunkVlans(intf string, vlanId int) error {
 }
 
 func (p *F5os) GetLagInterface(intf string) (*F5RespLagInterfaces, error) {
-	intfnew := fmt.Sprintf("/interface=%s", intf)
+	intfnew := fmt.Sprintf("/interface=%s", encodeUrl(intf))
 	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
 	f5osLogger.Info("[GetLagInterface]", "Request path", hclog.Fmt("%+v", url))
 	intLag := &F5RespLagInterfaces{}
@@ -426,7 +432,7 @@ func (p *F5os) CreateLagInterface(body *F5ReqLagInterfaces, members *F5ReqLagInt
 
 func (p *F5os) UpdateLagInterface(intf string, body *F5ReqLagInterfaces) ([]byte, error) {
 	f5osLogger.Debug("[UpdateLagInterface]", "Request path", hclog.Fmt("%+v", uriInterface))
-	vlans, err := p.getLagSwitchedVlans(intf)
+	vlans, err := p.getLagSwitchedVlans(encodeUrl(intf))
 	if err != nil {
 		return []byte(""), err
 	}
