@@ -163,15 +163,85 @@ type F5ReqVlanSwitchedVlan struct {
 	} `json:"openconfig-vlan:switched-vlan,omitempty"`
 }
 
-//type F5osInterfaces struct {
-//	OpenconfigInterfacesInterfaces []OpenconfigInterfacesInterface `json:"openconfig-interfaces:interface,omitempty"`
-//}
-//
-//type F5RespOpenconfigInterface struct {
-//	OpenconfigInterfacesInterfaces struct {
-//		Interface []F5RespInterface `json:"interface,omitempty"`
-//	} `json:"openconfig-interfaces:interfaces,omitempty"`
-//}
+type F5ReqLagInterfaces struct {
+	OpenconfigInterfacesInterfaces struct {
+		Interface []F5ReqLagInterface `json:"interface,omitempty"`
+	} `json:"openconfig-interfaces:interfaces,omitempty"`
+}
+
+type F5ReqLagInterface struct {
+	Name   string `json:"name,omitempty"`
+	Config struct {
+		Name    string `json:"name,omitempty"`
+		Type    string `json:"type,omitempty"`
+		Enabled bool   `json:"enabled,omitempty"`
+	} `json:"config,omitempty"`
+	OpenconfigIfAggregateAggregation struct {
+		OpenconfigVlanSwitchedVlan struct {
+			Config struct {
+				NativeVlan int   `json:"native-vlan,omitempty"`
+				TrunkVlans []int `json:"trunk-vlans,omitempty"`
+			} `json:"config,omitempty"`
+		} `json:"openconfig-vlan:switched-vlan,omitempty"`
+		Config struct {
+			LagType         string `json:"lag-type,omitempty"`
+			DistributioHash string `json:"f5-if-aggregate:distribution-hash,omitempty"`
+		} `json:"config,omitempty"`
+	} `json:"openconfig-if-aggregate:aggregation,omitempty"`
+	OpenconfigIfEthernetEthernet struct {
+		Config struct {
+			Name string `json:"openconfig-if-aggregate:aggregate-id,omitempty"`
+		} `json:"config,omitempty"`
+	} `json:"openconfig-if-ethernet:ethernet,omitempty"`
+}
+
+type F5RespLagInterfaces struct {
+	OpenconfigInterfacesInterface []F5RespLagInterface `json:"openconfig-interfaces:interface,omitempty"`
+}
+
+type F5RespLagInterface struct {
+	Name   string `json:"name,omitempty"`
+	Config struct {
+		Name        string `json:"name,omitempty"`
+		Type        string `json:"type,omitempty"`
+		Description string `json:"description,omitempty"`
+		Enabled     bool   `json:"enabled,omitempty"`
+	} `json:"config,omitempty"`
+	State struct {
+		Name       string `json:"name,omitempty"`
+		Type       string `json:"type,omitempty"`
+		Mtu        int    `json:"mtu,omitempty"`
+		Enabled    bool   `json:"enabled,omitempty"`
+		OperStatus string `json:"oper-status,omitempty"`
+	} `json:"state,omitempty"`
+	OpenconfigIfAggregateAggregation struct {
+		Config struct {
+			LagType         string `json:"lag-type,omitempty"`
+			DistributioHash string `json:"f5-if-aggregate:distribution-hash,omitempty"`
+		} `json:"config,omitempty"`
+		State struct {
+			LagType         string `json:"lag-type,omitempty"`
+			LagSpeed        int    `json:"lag-speed,omitempty"`
+			DistributioHash string `json:"f5-if-aggregate:distribution-hash,omitempty"`
+			Members         struct {
+				Member []F5RespLagMembers `json:"member,omitempty"`
+			} `json:"f5-if-aggregate:members,omitempty"`
+			MacAddress string `json:"f5-if-aggregate:mac-address,omitempty"`
+			LagId      int    `json:"f5-if-aggregate:lagid,omitempty"`
+		} `json:"state,omitempty"`
+		OpenconfigVlanSwitchedVlan struct {
+			Config struct {
+				NativeVlan int   `json:"native-vlan,omitempty"`
+				TrunkVlans []int `json:"trunk-vlans,omitempty"`
+			} `json:"config,omitempty"`
+		} `json:"openconfig-vlan:switched-vlan,omitempty"`
+	} `json:"openconfig-if-aggregate:aggregation,omitempty"`
+}
+
+type F5RespLagMembers struct {
+	Name   string `json:"member-name,omitempty"`
+	Status string `json:"member-status,omitempty"`
+}
 
 type F5RespOpenconfigInterface struct {
 	OpenconfigInterfacesInterface []F5RespInterface `json:"openconfig-interfaces:interface,omitempty"`

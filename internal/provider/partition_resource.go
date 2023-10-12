@@ -31,7 +31,8 @@ func NewPartitionResource() resource.Resource {
 
 // PartitionResource defines the resource implementation.
 type PartitionResource struct {
-	client *f5ossdk.F5os
+	client   *f5ossdk.F5os
+	teemData *TeemData
 }
 
 type PartitionResourceModel struct {
@@ -166,6 +167,9 @@ func (r *PartitionResource) Schema(ctx context.Context, req resource.SchemaReque
 
 func (r *PartitionResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	r.client, resp.Diagnostics = toF5osProvider(req.ProviderData)
+	teemData.ProviderName = "f5os"
+	teemData.ResourceName = "f5os_partition"
+	r.teemData = teemData
 }
 
 func (r *PartitionResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -179,7 +183,7 @@ func (r *PartitionResource) Create(ctx context.Context, req resource.CreateReque
 	}
 
 	if r.client.PlatformType != "Velos Controller" {
-		resp.Diagnostics.AddError("Client Error", "`f5os_partition` resource is supported on Velos Controllers only")
+		resp.Diagnostics.AddError("F5OS Client Error", "`f5os_partition` resource is supported on Velos Controllers only")
 		return
 	}
 
@@ -237,7 +241,13 @@ func (r *PartitionResource) Create(ctx context.Context, req resource.CreateReque
 
 		data.Slots = slots
 	}
-
+	teemInfo := make(map[string]interface{})
+	teemInfo["teemData"] = r.teemData
+	r.client.Metadata = teemInfo
+	err = r.client.SendTeem(teemInfo)
+	if err != nil {
+		resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
+	}
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 
@@ -314,7 +324,7 @@ func (r *PartitionResource) Update(ctx context.Context, req resource.UpdateReque
 			// first we determine if a subset of slots on partition are not included in user data, and if yes we remove them first
 			var slots []int64
 			data.Slots.ElementsAs(ctx, &slots, false)
-			slotDiff := getSliceDifference(slotData, slots)
+			slotDiff := getIntSliceDifference(slotData, slots)
 			if len(slotDiff) > 0 {
 				_, err := r.client.SetSlot("none", slotDiff)
 				if err != nil {

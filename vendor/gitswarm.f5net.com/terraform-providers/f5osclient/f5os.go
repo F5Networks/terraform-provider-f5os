@@ -66,11 +66,13 @@ type F5os struct {
 	Token     string // if set, will be used instead of User/Password
 	Transport *http.Transport
 	// UserAgent is an optional field that specifies the caller of this request.
-	UserAgent     string
-	Teem          bool
-	ConfigOptions *ConfigOptions
-	PlatformType  string
-	UriRoot       string
+	UserAgent       string
+	Teem            bool
+	ConfigOptions   *ConfigOptions
+	PlatformType    string
+	Metadata        interface{}
+	PlatformVersion string
+	UriRoot         string
 }
 type F5osError struct {
 	IetfRestconfErrors struct {
@@ -183,8 +185,8 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 		return nil, err
 	}
 	defer res.Body.Close()
-	f5osSession.Token = res.Header.Get("X-Auth-Token")
 	respData, err := io.ReadAll(res.Body)
+	f5osLogger.Debug("[NewSession]", "Status Code:", hclog.Fmt("%+v", res.StatusCode))
 	if res.StatusCode == 401 {
 		return nil, fmt.Errorf("%+v with error:%+v", res.Status, string(respData))
 	}
@@ -194,7 +196,8 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	if strings.Contains(fmt.Sprintf("%s", string(respData)), "enable JavaScript to run this app") {
 		return nil, fmt.Errorf("Failed with %s", string(respData))
 	}
-	f5osSession.setPlaformType()
+	f5osSession.Token = res.Header.Get("X-Auth-Token")
+	f5osSession.setPlatformType()
 	f5osLogger.Info("[NewSession] Session creation Success")
 	return f5osSession, nil
 }
@@ -240,6 +243,37 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 	return nil, nil
 }
 
+func (p *F5os) SendTeem(teemDataInput interface{}) error {
+	recordData := &RawTelemetry{}
+	teemData := teemDataInput.(map[string]interface{})["teemData"]
+	teemBytes, _ := json.Marshal(teemData)
+	teemMap := make(map[string]interface{})
+	err := json.Unmarshal(teemBytes, &teemMap)
+	if err != nil {
+		return err
+	}
+	telemetryInputs := make(map[string]interface{})
+	telemetryInputs["RunningInDocker"] = inDocker()
+	telemetryInputs["F5Platform"] = teemMap["F5Platform"].(string)
+	telemetryInputs["F5SoftwareVersion"] = teemMap["F5SoftwareVersion"].(string)
+	telemetryInputs["ProviderName"] = teemMap["ProviderName"].(string)
+	telemetryInputs["ProviderVersion"] = teemMap["ProviderVersion"].(string)
+	telemetryInputs["ResourceName"] = teemMap["ResourceName"].(string)
+	telemetryInputs["TerraformLicense"] = teemMap["TerraformLicense"].(string)
+	telemetryInputs["TerraformVersion"] = teemMap["TerraformVersion"].(string)
+	recordData.TelemetryRecords = append(recordData.TelemetryRecords, telemetryInputs)
+	recordData.DigitalAssetName = "terraform-provider-f5os"
+	recordData.DigitalAssetVersion = teemMap["ProviderVersion"].(string)
+	recordData.DocumentType = teemMap["ResourceName"].(string)
+	recordData.DocumentVersion = teemMap["ProviderVersion"].(string)
+	recordData.ObservationStartTime = time.Now().UTC().Format(time.RFC3339Nano)
+	recordData.EpochTime = time.Now().Unix()
+	if !p.Teem {
+		return SendReport(recordData)
+	}
+	return nil
+}
+
 func (p *F5os) GetRequest(path string) ([]byte, error) {
 	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	f5osLogger.Info("[GetRequest]", "Request path", hclog.Fmt("%+v", url))
@@ -276,7 +310,7 @@ func (p *F5os) PostRequest(path string, body []byte) ([]byte, error) {
 }
 
 func (p *F5os) GetInterface(intf string) (*F5RespOpenconfigInterface, error) {
-	intfnew := fmt.Sprintf("/interface=%s", intf)
+	intfnew := fmt.Sprintf("/interface=%s", encodeUrl(intf))
 	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
 	f5osLogger.Info("[GetInterface]", "Request path", hclog.Fmt("%+v", url))
 	intFace := &F5RespOpenconfigInterface{}
@@ -289,9 +323,15 @@ func (p *F5os) GetInterface(intf string) (*F5RespOpenconfigInterface, error) {
 	return intFace, nil
 }
 
+func encodeUrl(intfname string) string {
+	// Encode the interface name
+	interfaceEncoded := url.QueryEscape(intfname)
+	return interfaceEncoded
+}
+
 func (p *F5os) UpdateInterface(intf string, body *F5ReqOpenconfigInterface) ([]byte, error) {
 	f5osLogger.Debug("[UpdateInterface]", "Request path", hclog.Fmt("%+v", uriInterface))
-	vlans, err := p.getSwitchedVlans(intf)
+	vlans, err := p.getSwitchedVlans(encodeUrl(intf))
 	if err != nil {
 		return []byte(""), err
 	}
@@ -335,7 +375,7 @@ func (p *F5os) getSwitchedVlans(intf string) (*F5ReqVlanSwitchedVlan, error) {
 }
 
 func (p *F5os) RemoveNativeVlans(intf string) error {
-	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:native-vlan", intf)
+	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:native-vlan", encodeUrl(intf))
 	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
 	f5osLogger.Debug("[RemoveNativeVlans]", "Request path", hclog.Fmt("%+v", url))
 	err := p.DeleteRequest(url)
@@ -346,9 +386,166 @@ func (p *F5os) RemoveNativeVlans(intf string) error {
 }
 
 func (p *F5os) RemoveTrunkVlans(intf string, vlanId int) error {
-	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:trunk-vlans=%d", intf, vlanId)
+	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:trunk-vlans=%d", encodeUrl(intf), vlanId)
 	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
 	f5osLogger.Debug("[RemoveTrunkVlans]", "Request path", hclog.Fmt("%+v", url))
+	err := p.DeleteRequest(url)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *F5os) GetLagInterface(intf string) (*F5RespLagInterfaces, error) {
+	intfnew := fmt.Sprintf("/interface=%s", encodeUrl(intf))
+	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
+	f5osLogger.Info("[GetLagInterface]", "Request path", hclog.Fmt("%+v", url))
+	intLag := &F5RespLagInterfaces{}
+	byteData, err := p.GetRequest(url)
+	if err != nil {
+		return nil, err
+	}
+	json.Unmarshal(byteData, intLag)
+	f5osLogger.Debug("[GetLagInterface]", "intLag", hclog.Fmt("%+v", intLag))
+	return intLag, nil
+}
+
+func (p *F5os) CreateLagInterface(body *F5ReqLagInterfaces, members *F5ReqLagInterfaces) ([]byte, error) {
+	f5osLogger.Debug("[CreateLagInterface]", "Request path", hclog.Fmt("%+v", "/"))
+	byteBody, err := json.Marshal(body)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[CreateLagInterface]", "Request Body", hclog.Fmt("%+v", body))
+	resp, err := p.PatchRequest("/", byteBody)
+	if err != nil {
+		return resp, err
+	}
+	f5osLogger.Debug("[CreateLagInterface]", "Resp:", hclog.Fmt("%+v", string(resp)))
+
+	resp, err = p.addLagMembers(members)
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (p *F5os) UpdateLagInterface(intf string, body *F5ReqLagInterfaces) ([]byte, error) {
+	f5osLogger.Debug("[UpdateLagInterface]", "Request path", hclog.Fmt("%+v", uriInterface))
+	vlans, err := p.getLagSwitchedVlans(encodeUrl(intf))
+	if err != nil {
+		return []byte(""), err
+	}
+	nativeVlan := vlans.OpenconfigVlanSwitchedVlan.Config.NativeVlan
+	trunkVlans := vlans.OpenconfigVlanSwitchedVlan.Config.TrunkVlans
+	for _, val := range body.OpenconfigInterfacesInterfaces.Interface {
+		innativeVlan := val.OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.NativeVlan
+		newTrunkvlans := val.OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.TrunkVlans
+		diffTrunkvlans := listDifference(trunkVlans, newTrunkvlans)
+		if nativeVlan != 0 && innativeVlan != nativeVlan {
+			p.removeLagNativeVlans(intf)
+		}
+		for _, intfVal := range diffTrunkvlans {
+			p.removeLagTrunkVlans(intf, intfVal)
+		}
+	}
+	byteBody, err := json.Marshal(body)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[UpdateLagInterface]", "Request Body", hclog.Fmt("%+v", body))
+	resp, err := p.PatchRequest(uriInterface, byteBody)
+	if err != nil {
+		return resp, err
+	}
+	f5osLogger.Debug("[UpdateLagInterface]", "Resp:", hclog.Fmt("%+v", string(resp)))
+	return resp, nil
+}
+
+func (p *F5os) getLagSwitchedVlans(intf string) (*F5ReqVlanSwitchedVlan, error) {
+	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-aggregate:aggregation/openconfig-vlan:switched-vlan", intf)
+	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
+	f5osLogger.Debug("[getLagSwitchedVlans]", "Request path", hclog.Fmt("%+v", url))
+	intFace := &F5ReqVlanSwitchedVlan{}
+	byteData, err := p.GetRequest(url)
+	if err != nil {
+		return nil, err
+	}
+	json.Unmarshal(byteData, intFace)
+	f5osLogger.Debug("[getLagSwitchedVlans]", "intFace", hclog.Fmt("%+v", intFace))
+	return intFace, nil
+}
+
+func (p *F5os) removeLagNativeVlans(intf string) error {
+	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-aggregate:aggregation/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:native-vlan", intf)
+	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
+	f5osLogger.Debug("[RemoveLagNativeVlans]", "Request path", hclog.Fmt("%+v", url))
+	err := p.DeleteRequest(url)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *F5os) removeLagTrunkVlans(intf string, vlanId int) error {
+	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-aggregate:aggregation/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:trunk-vlans=%d", intf, vlanId)
+	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
+	f5osLogger.Debug("[RemoveLagTrunkVlans]", "Request path", hclog.Fmt("%+v", url))
+	err := p.DeleteRequest(url)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *F5os) RemoveLagInterface(intf string) error {
+	intfnew := fmt.Sprintf("/interface=%s", intf)
+	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
+	f5osLogger.Debug("[RemoveLagInterface]", "Request path", hclog.Fmt("%+v", url))
+	err := p.DeleteRequest(url)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *F5os) UpdateLagMembers(members *F5ReqLagInterfaces) ([]byte, error) {
+	resp, err := p.addLagMembers(members)
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (p *F5os) addLagMembers(body *F5ReqLagInterfaces) ([]byte, error) {
+	f5osLogger.Debug("[UpdateLagMember]", "Request path", hclog.Fmt("%+v", "/"))
+	byteBody, err := json.Marshal(body)
+	if err != nil {
+		return byteBody, err
+	}
+	f5osLogger.Debug("[UpdateLagMember]", "Request Body", hclog.Fmt("%+v", body))
+	resp, err := p.PatchRequest("/", byteBody)
+	if err != nil {
+		return resp, err
+	}
+	f5osLogger.Debug("[UpdateLagMember]", "Resp:", hclog.Fmt("%+v", string(resp)))
+	return resp, nil
+}
+
+func (p *F5os) RemoveLagMembers(members []string) error {
+	for _, member := range members {
+		err := p.removeLagMember(member)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *F5os) removeLagMember(intf string) error {
+	intfnew := fmt.Sprintf("/interface=%s/openconfig-if-ethernet:ethernet/config/openconfig-if-aggregate:aggregate-id", encodeInterface(intf))
+	url := fmt.Sprintf("%s%s", uriInterface, intfnew)
+	f5osLogger.Debug("[RemoveLagMember]", "Request path", hclog.Fmt("%+v", url))
 	err := p.DeleteRequest(url)
 	if err != nil {
 		return err
@@ -541,9 +738,10 @@ func (p *F5os) fileTransferStatus(key, transferId string) (string, error) {
 	return "", fmt.Errorf("no transfer status available for the file/operation-id: %s", transferId)
 }
 
-func (p *F5os) setPlaformType() ([]byte, error) {
-	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, uriPlatformType)
-	f5osLogger.Debug("[setPlaformType]", "Request path", hclog.Fmt("%+v", url))
+func (p *F5os) setPlatformType() ([]byte, error) {
+	//url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, uriPlatformType)
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, "/openconfig-platform:components/component")
+	f5osLogger.Info("[setPlatformType]", "Request path", hclog.Fmt("%+v", url))
 	req, err := http.NewRequest("GET", url, bytes.NewBuffer(nil))
 	if err != nil {
 		return nil, err
@@ -560,36 +758,184 @@ func (p *F5os) setPlaformType() ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 200 {
-		p.PlatformType = "rSeries Platform"
+		bytes01, _ := io.ReadAll(resp.Body)
+		var mymap map[string]interface{}
+		json.Unmarshal(bytes01, &mymap)
+		if len(mymap["openconfig-platform:component"].([]interface{})) > 1 {
+			for _, val := range mymap["openconfig-platform:component"].([]interface{}) {
+				if val.(map[string]interface{})["name"] == "platform" {
+					//check state key present in above response map object
+					if val.(map[string]interface{})["state"].(map[string]interface{})["description"] != nil {
+						p.PlatformType = "rSeries Platform"
+						uriPlatformVersion := "/openconfig-system:system/f5-system-image:image/state/install"
+						p.setPlatformVersion(uriPlatformVersion)
+					}
+				}
+				if val.(map[string]interface{})["name"] == "chassis" {
+					//check state key present in above response map object
+					if val.(map[string]interface{})["state"].(map[string]interface{})["description"] != nil {
+						p.PlatformType = "Velos Controller"
+						uriPlatformVersion := "/openconfig-system:system/f5-system-controller-image:image"
+						p.setChassisVersion(uriPlatformVersion)
+					}
+				}
+			}
+		} else if len(mymap["openconfig-platform:component"].([]interface{})) == 1 {
+			p.PlatformType = "Velos Partition"
+			software, ok := mymap["openconfig-platform:component"].([]interface{})[0].(map[string]interface{})["f5-platform:software"]
+			if ok {
+				version := software.(map[string]interface{})["state"].(map[string]interface{})["software-components"].(map[string]interface{})["software-component"].([]interface{})[0].(map[string]interface{})["state"].(map[string]interface{})["version"]
+				softwareIndex := software.(map[string]interface{})["state"].(map[string]interface{})["software-components"].(map[string]interface{})["software-component"].([]interface{})[0].(map[string]interface{})["software-index"]
+				// check if software-index is blade-os then set platform version as version
+				if softwareIndex.(string) == "blade-os" {
+					p.PlatformVersion = version.(string)
+					platMap := make(map[string]interface{})
+					platMap["PlatformVersion"] = version.(string)
+					p.Metadata = platMap
+					//append(p.Metadata, platMap)
+				}
+			}
+		}
+		f5osLogger.Debug("[setPlatformType]", "Config:", hclog.Fmt("%+v", p))
 		return io.ReadAll(resp.Body)
 	}
+	//if resp.StatusCode == 404 {
+	//	url1 := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, uriVlan)
+	//	req, err := http.NewRequest("GET", url1, bytes.NewBuffer(nil))
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	req.Header.Set("X-Auth-Token", p.Token)
+	//	req.Header.Set("Content-Type", contentTypeHeader)
+	//	client := &http.Client{
+	//		Transport: p.Transport,
+	//		Timeout:   p.ConfigOptions.APICallTimeout,
+	//	}
+	//	resp, err := client.Do(req)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	defer resp.Body.Close()
+	//	if resp.StatusCode == 200 || resp.StatusCode == 204 {
+	//		p.PlatformType = "Velos Partition"
+	//	}
+	//	if resp.StatusCode == 404 {
+	//		bytes, _ := io.ReadAll(resp.Body)
+	//		var mymap map[string]interface{}
+	//		json.Unmarshal(bytes, &mymap)
+	//		intfVal := mymap["ietf-restconf:errors"].(map[string]interface{})["error"].([]interface{})[0].(map[string]interface{})["error-message"]
+	//		if intfVal == "uri keypath not found" {
+	//			p.PlatformType = "Velos Controller"
+	//		}
+	//	}
+	//}
+	return nil, nil
+}
+
+// https://<rSeriesIP>/api/data/openconfig-system:system/f5-system-image:image/state/install
+// create setplatformVersion using above url
+func (p *F5os) setPlatformVersion(uriPlatformVersion string) ([]byte, error) {
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, uriPlatformVersion)
+	// create get call for above url
+	f5osLogger.Debug("[SetPlatformVersion]", "Request path", hclog.Fmt("%+v", url))
+	req, err := http.NewRequest("GET", url, bytes.NewBuffer(nil))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Auth-Token", p.Token)
+	req.Header.Set("Content-Type", contentTypeHeader)
+	client := &http.Client{
+		Transport: p.Transport,
+		Timeout:   p.ConfigOptions.APICallTimeout,
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode == 404 {
-		url1 := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, uriVlan)
-		req, err := http.NewRequest("GET", url1, bytes.NewBuffer(nil))
-		if err != nil {
-			return nil, err
+		return nil, fmt.Errorf("Platform version not supported")
+	}
+	if resp.StatusCode == 200 || resp.StatusCode == 304 {
+		bytes, _ := io.ReadAll(resp.Body)
+		var mymap map[string]interface{}
+		json.Unmarshal(bytes, &mymap)
+		// {
+		// 	"f5-system-image:install": {
+		// 		"install-os-version": "1.7.0-3518",
+		// 		"install-service-version": "1.7.0-3518",
+		// 		"install-status": "success"
+		// 	}
+		// }
+		if mymap["f5-system-image:install"].(map[string]interface{})["install-status"] == "success" {
+			p.PlatformVersion = mymap["f5-system-image:install"].(map[string]interface{})["install-os-version"].(string)
+			platMap := make(map[string]interface{})
+			platMap["PlatformVersion"] = mymap["f5-system-image:install"].(map[string]interface{})["install-os-version"].(string)
+			p.Metadata = platMap
+			//append(p.Metadata, platMap)
 		}
-		req.Header.Set("X-Auth-Token", p.Token)
-		req.Header.Set("Content-Type", contentTypeHeader)
-		client := &http.Client{
-			Transport: p.Transport,
-			Timeout:   p.ConfigOptions.APICallTimeout,
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode == 200 || resp.StatusCode == 204 {
-			p.PlatformType = "Velos Partition"
-		}
-		if resp.StatusCode == 404 {
-			bytes, _ := io.ReadAll(resp.Body)
-			var mymap map[string]interface{}
-			json.Unmarshal(bytes, &mymap)
-			intfVal := mymap["ietf-restconf:errors"].(map[string]interface{})["error"].([]interface{})[0].(map[string]interface{})["error-message"]
-			if intfVal == "uri keypath not found" {
-				p.PlatformType = "Velos Controller"
+	}
+	return nil, nil
+}
+
+// https://<chassis-ip>/api/data/openconfig-system:system/f5-system-controller-image:image
+// create setplatformVersion using above url
+func (p *F5os) setChassisVersion(uriChassisVersion string) ([]byte, error) {
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, uriChassisVersion)
+	// create get call for above url
+	f5osLogger.Debug("[setChassisVersion]", "Request path", hclog.Fmt("%+v", url))
+	req, err := http.NewRequest("GET", url, bytes.NewBuffer(nil))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Auth-Token", p.Token)
+	req.Header.Set("Content-Type", contentTypeHeader)
+	client := &http.Client{
+		Transport: p.Transport,
+		Timeout:   p.ConfigOptions.APICallTimeout,
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return nil, fmt.Errorf("Platform version not supported")
+	}
+	if resp.StatusCode == 200 || resp.StatusCode == 304 {
+		bytes, _ := io.ReadAll(resp.Body)
+		var mymap map[string]interface{}
+		json.Unmarshal(bytes, &mymap)
+		// {
+		// 	"f5-system-controller-image:image": {
+		// 		"state": {
+		// 			"controllers": {
+		// 				"controller": [
+		// 					{
+		// 						"number": 1,
+		// 						"os-version": "1.6.0-9817",
+		// 						"service-version": "1.6.0-9817",
+		// 						"install-status": "success"
+		// 					},
+		// 					{
+		// 						"number": 2,
+		// 						"os-version": "1.6.0-9817",
+		// 						"service-version": "1.6.0-9817",
+		// 						"install-status": "success"
+		// 					}
+		// 				]
+		// 			}
+		// 		}
+		// 	}
+		// }
+		// check if install-status is success for all controllers
+		for _, val := range mymap["f5-system-controller-image:image"].(map[string]interface{})["state"].(map[string]interface{})["controllers"].(map[string]interface{})["controller"].([]interface{}) {
+			if val.(map[string]interface{})["install-status"] == "success" {
+				p.PlatformVersion = val.(map[string]interface{})["os-version"].(string)
+				platMap := make(map[string]interface{})
+				platMap["PlatformVersion"] = val.(map[string]interface{})["os-version"].(string)
+				p.Metadata = platMap
+				//append(p.Metadata, platMap)
 			}
 		}
 	}
@@ -623,4 +969,10 @@ func listDifference(s1 []int, s2 []int) []int {
 		}
 	}
 	return difference
+}
+
+func encodeInterface(intfname string) string {
+	// Encode the interface name
+	interfaceEncoded := url.QueryEscape(intfname)
+	return interfaceEncoded
 }
