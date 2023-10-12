@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -21,7 +20,8 @@ func NewImageInfoDataSource() datasource.DataSource {
 
 // ImageInfoDataSource defines the data source implementation.
 type ImageInfoDataSource struct {
-	client *f5ossdk.F5os
+	client   *f5ossdk.F5os
+	teemData *TeemData
 }
 
 // ImageInfoDataSourceModel describes the data source data model.
@@ -33,6 +33,10 @@ type ImageInfoDataSourceModel struct {
 
 func (d *ImageInfoDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_tenant_image"
+	teemData := &TeemData{}
+	teemData.ProviderName = req.ProviderTypeName
+	teemData.ResourceName = resp.TypeName
+	d.teemData = teemData
 }
 
 func (d *ImageInfoDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
@@ -90,6 +94,7 @@ func (d *ImageInfoDataSource) Read(ctx context.Context, req datasource.ReadReque
 	data.ID = types.StringValue(data.ImageName.ValueString())
 	data.ImageName = types.StringValue(imageObj.TenantImages[0].Name)
 	data.ImageStatus = types.StringValue(imageObj.TenantImages[0].Status)
+	teemData.ResourceName = "f5os_tenant_image"
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

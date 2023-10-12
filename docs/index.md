@@ -32,4 +32,5 @@ provider "f5os" {
 - `host` (String) URI/Host details for F5os Device,can be provided via `F5OS_HOST` environment variable.
 - `password` (String, Sensitive) Password for F5os Device,can be provided via `F5OS_PASSWORD` environment variable.
 - `port` (Number) Port Number to be used to make API calls to HOST
+- `teem_disable` (Boolean) If this flag set to true,sending telemetry data to TEEM will be disabled,can be provided via `TEEM_DISABLE` environment variable.
 - `username` (String) Username for F5os Device,can be provided via `F5OS_USERNAME` environment variable.User provided here need to have required permission as per [UserManagement](https://techdocs.f5.com/en-us/f5os-a-1-4-0/f5-rseries-systems-administration-configuration/title-user-mgmt.html)

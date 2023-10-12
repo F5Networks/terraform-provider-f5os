@@ -12,7 +12,7 @@ func extractSubnet(cidr string) (int, string, error) {
 	return ones, ip.String(), nil
 }
 
-func getSliceDifference(slice1, slice2 []int64) []int64 {
+func getIntSliceDifference(slice1, slice2 []int64) []int64 {
 	var diff []int64
 	for _, num1 := range slice1 {
 		found := false

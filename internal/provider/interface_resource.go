@@ -24,7 +24,8 @@ func NewInterfaceResource() resource.Resource {
 
 // InterfaceResource defines the resource implementation.
 type InterfaceResource struct {
-	client *f5ossdk.F5os
+	client   *f5ossdk.F5os
+	teemData *TeemData
 }
 
 type InterfaceResourceModel struct {
@@ -82,6 +83,9 @@ func (r *InterfaceResource) Schema(ctx context.Context, req resource.SchemaReque
 
 func (r *InterfaceResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	r.client, resp.Diagnostics = toF5osProvider(req.ProviderData)
+	teemData.ProviderName = "f5os"
+	teemData.ResourceName = "f5os_interface"
+	r.teemData = teemData
 }
 
 func (r *InterfaceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -110,7 +114,13 @@ func (r *InterfaceResource) Create(ctx context.Context, req resource.CreateReque
 
 	tflog.Debug(ctx, fmt.Sprintf("interfaceReqConfig Response:%+v", string(respByte)))
 	data.Id = types.StringValue(data.Name.ValueString())
-
+	teemInfo := make(map[string]interface{})
+	teemInfo["teemData"] = r.teemData
+	r.client.Metadata = teemInfo
+	err = r.client.SendTeem(teemInfo)
+	if err != nil {
+		resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
+	}
 	intfData, err := r.client.GetInterface(data.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get Interface, got error: %s", err))
@@ -217,7 +227,9 @@ func (r *InterfaceResource) interfaceResourceModelToState(ctx context.Context, r
 	data.Name = types.StringValue(respData.OpenconfigInterfacesInterface[0].Name)
 	data.Enabled = types.BoolValue(respData.OpenconfigInterfacesInterface[0].State.Enabled)
 	data.Status = types.StringValue(respData.OpenconfigInterfacesInterface[0].State.OperStatus)
-	data.NativeVlan = types.Int64Value(int64(respData.OpenconfigInterfacesInterface[0].OpenconfigIfEthernetEthernet.OpenconfigVlanSwitchedVlan.Config.NativeVlan))
+	if int64(respData.OpenconfigInterfacesInterface[0].OpenconfigIfEthernetEthernet.OpenconfigVlanSwitchedVlan.Config.NativeVlan) != 0 {
+		data.NativeVlan = types.Int64Value(int64(respData.OpenconfigInterfacesInterface[0].OpenconfigIfEthernetEthernet.OpenconfigVlanSwitchedVlan.Config.NativeVlan))
+	}
 	data.TrunkVlans, _ = types.ListValueFrom(ctx, types.Int64Type, respData.OpenconfigInterfacesInterface[0].OpenconfigIfEthernetEthernet.OpenconfigVlanSwitchedVlan.Config.TrunkVlans)
 }
 
