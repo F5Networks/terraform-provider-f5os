@@ -3,8 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"strconv"
-
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -13,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
+	"strconv"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -25,7 +24,8 @@ func NewVlanResource() resource.Resource {
 
 // VlanResource defines the resource implementation.
 type VlanResource struct {
-	client *f5ossdk.F5os
+	client   *f5ossdk.F5os
+	teemData *TeemData
 }
 
 type VlanResourceModel struct {
@@ -65,6 +65,10 @@ func (r *VlanResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 
 func (r *VlanResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	r.client, resp.Diagnostics = toF5osProvider(req.ProviderData)
+	//teemData := &TeemData{}
+	teemData.ProviderName = "f5os"
+	teemData.ResourceName = "f5os_vlan"
+	r.teemData = teemData
 }
 
 func (r *VlanResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -85,12 +89,17 @@ func (r *VlanResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	tflog.Debug(ctx, fmt.Sprintf("vlanReqConfig Data:%+v", vlanReqConfig))
 
+	teemInfo := make(map[string]interface{})
+	teemInfo["teemData"] = r.teemData
+	err := r.client.SendTeem(teemInfo)
+	if err != nil {
+		resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
+	}
 	respByte, err := r.client.VlanConfig(vlanReqConfig)
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Create Vlan failed, got error: %s", err))
 		return
 	}
-
 	tflog.Debug(ctx, fmt.Sprintf("vlanReqConfig Response:%+v", string(respByte)))
 	data.Id = types.StringValue(fmt.Sprintf("%d", int(data.VlanId.ValueInt64())))
 

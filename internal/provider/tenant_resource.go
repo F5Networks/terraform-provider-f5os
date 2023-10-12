@@ -37,7 +37,8 @@ func NewTenantResource() resource.Resource {
 
 // TenantResource defines the resource implementation.
 type TenantResource struct {
-	client *f5ossdk.F5os
+	client   *f5ossdk.F5os
+	teemData *TeemData
 }
 
 // TenantResourceModel describes the resource data model.
@@ -202,6 +203,9 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 
 func (r *TenantResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	r.client, resp.Diagnostics = toF5osProvider(req.ProviderData)
+	teemData.ProviderName = "f5os"
+	teemData.ResourceName = "f5os_tenant"
+	r.teemData = teemData
 }
 
 func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -213,6 +217,7 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	tflog.Info(ctx, fmt.Sprintf("[CREATE] Tenant:%+v", data.Name.ValueString()))
 	if r.client.PlatformType == "Velos Controller" {
 		resp.Diagnostics.AddError("Unsupported platform for resource", "`f5os_tenant` resource is supported with Velos Partition level (or) rSeries appliance")
 		return
@@ -247,6 +252,13 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 	tflog.Info(ctx, fmt.Sprintf("tenantConfig Data:%+v", tenantConfig))
 
 	mutex.Lock()
+	teemInfo := make(map[string]interface{})
+	teemInfo["teemData"] = r.teemData
+	r.client.Metadata = teemInfo
+	err = r.client.SendTeem(teemInfo)
+	if err != nil {
+		resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
+	}
 	respByte, err := r.client.CreateTenant(tenantConfig, int(data.Timeout.ValueInt64()))
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Tenant Deploy failed, got error: %s", err))
@@ -280,7 +292,6 @@ func (r *TenantResource) Read(ctx context.Context, req resource.ReadRequest, res
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
 	//respByte, err := r.client.GetTenant(data.Name.ValueString())
 	respByte, err := r.client.GetTenant(data.Id.ValueString())
 	if err != nil {
