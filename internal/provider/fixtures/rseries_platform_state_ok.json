@@ -1,0 +1,567 @@
+{
+  "openconfig-platform:component": [
+    {
+      "name": "lcd",
+      "config": {
+        "name": "lcd",
+        "f5-platform-lcd:mode": "standard"
+      },
+      "state": {
+        "serial-no": "sub0872g00d2",
+        "part-no": "SUB-0872-02 REV 1",
+        "empty": false,
+        "f5-platform-lcd:mode": "standard"
+      }
+    },
+    {
+      "name": "platform",
+      "config": {
+        "name": "platform"
+      },
+      "state": {
+        "description": "r5900",
+        "serial-no": "f5-knvr-ejci",
+        "part-no": "200-0411-02 REV 2",
+        "empty": false,
+        "f5-platform:tpm-integrity-status": "Valid",
+        "f5-platform:memory": {
+          "available": "9041088512",
+          "free": "3492110336",
+          "used-percent": 93,
+          "platform-total": "16107667456",
+          "platform-used": "6819594240"
+        },
+        "f5-platform:temperature": {
+          "current": "24.1",
+          "average": "24.0",
+          "minimum": "23.3",
+          "maximum": "24.8"
+        }
+      },
+      "properties": {
+        "property": [
+          {
+            "name": "QAT0",
+            "config": {
+              "name": "QAT0"
+            },
+            "state": {
+              "value": "Lewisburg C62X Crypto/Compression",
+              "configurable": false
+            }
+          },
+          {
+            "name": "QAT1",
+            "config": {
+              "name": "QAT1"
+            },
+            "state": {
+              "value": "Lewisburg C62X Crypto/Compression",
+              "configurable": false
+            }
+          },
+          {
+            "name": "QAT2",
+            "config": {
+              "name": "QAT2"
+            },
+            "state": {
+              "value": "Lewisburg C62X Crypto/Compression",
+              "configurable": false
+            }
+          },
+          {
+            "name": "fw-version-bios",
+            "config": {
+              "name": "fw-version-bios"
+            },
+            "state": {
+              "value": "2.01.134.1",
+              "configurable": false,
+              "f5-platform:update-status": "none"
+            }
+          },
+          {
+            "name": "fw-version-bios-me",
+            "config": {
+              "name": "fw-version-bios-me"
+            },
+            "state": {
+              "value": "4.4.4.301",
+              "configurable": false,
+              "f5-platform:update-status": "none"
+            }
+          },
+          {
+            "name": "fw-version-cpld",
+            "config": {
+              "name": "fw-version-cpld"
+            },
+            "state": {
+              "value": "02.0B.00",
+              "configurable": false,
+              "f5-platform:update-status": "none"
+            }
+          },
+          {
+            "name": "fw-version-drive-m.2.slot1",
+            "config": {
+              "name": "fw-version-drive-m.2.slot1"
+            },
+            "state": {
+              "value": "EDA7602Q",
+              "configurable": false,
+              "f5-platform:update-status": "none"
+            }
+          },
+          {
+            "name": "fw-version-lcd-app",
+            "config": {
+              "name": "fw-version-lcd-app"
+            },
+            "state": {
+              "value": "1.01.067.00.1",
+              "configurable": false,
+              "f5-platform:update-status": "none"
+            }
+          },
+          {
+            "name": "fw-version-lcd-bootloader",
+            "config": {
+              "name": "fw-version-lcd-bootloader"
+            },
+            "state": {
+              "value": "1.01.027.00.1",
+              "configurable": false,
+              "f5-platform:update-status": "none"
+            }
+          },
+          {
+            "name": "fw-version-lcd-ui",
+            "config": {
+              "name": "fw-version-lcd-ui"
+            },
+            "state": {
+              "value": "1.13.3",
+              "configurable": false,
+              "f5-platform:update-status": "none"
+            }
+          },
+          {
+            "name": "fw-version-lop-app",
+            "config": {
+              "name": "fw-version-lop-app"
+            },
+            "state": {
+              "value": "2.00.306.0.1",
+              "configurable": false,
+              "f5-platform:update-status": "none"
+            }
+          },
+          {
+            "name": "fw-version-lop-bootloader",
+            "config": {
+              "name": "fw-version-lop-bootloader"
+            },
+            "state": {
+              "value": "1.02.062.0.1",
+              "configurable": false,
+              "f5-platform:update-status": "none"
+            }
+          },
+          {
+            "name": "fw-version-sirr",
+            "config": {
+              "name": "fw-version-sirr"
+            },
+            "state": {
+              "value": "1.1.55",
+              "configurable": false,
+              "f5-platform:update-status": "none"
+            }
+          }
+        ]
+      },
+      "storage": {
+        "state": {
+          "f5-platform:disks": {
+            "disk": [
+              {
+                "disk-name": "nvme0n1",
+                "state": {
+                  "model": "SAMSUNG MZ1LB960HAJQ-00007",
+                  "vendor": "Samsung",
+                  "version": "EDA7602Q",
+                  "serial-no": "S435NA0N617788",
+                  "size": "733.00GB",
+                  "type": "nvme",
+                  "disk-io": {
+                    "total-iops": "46346141",
+                    "read-iops": "108717975",
+                    "read-merged": "358754",
+                    "read-bytes": "20789448083456",
+                    "read-latency-ms": "144476110",
+                    "write-iops": "446311776",
+                    "write-merged": "480538902",
+                    "write-bytes": "5051600554496",
+                    "write-latency-ms": "71718858"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "cpu": {
+        "state": {
+          "f5-platform:processors": {
+            "processor": [
+              {
+                "cpu-index": 0,
+                "state": {
+                  "cachesize": "24576(KB)",
+                  "core-cnt": "16",
+                  "freq": "2401.000(MHz)",
+                  "stepping": "6",
+                  "thread-cnt": "32",
+                  "modelname": "Intel(R) Xeon(R) Silver 4314 CPU @ 2.40GHz"
+                }
+              }
+            ]
+          },
+          "f5-platform:cpu-utilization": {
+            "thread": "cpu",
+            "current": 6,
+            "five-second-avg": 5,
+            "one-minute-avg": 2,
+            "five-minute-avg": 2
+          },
+          "f5-platform:cpu-threads": {
+            "cpu-thread": [
+              {
+                "thread-index": 0,
+                "thread": "cpu0",
+                "current": 0,
+                "five-second-avg": 1,
+                "one-minute-avg": 1,
+                "five-minute-avg": 1
+              },
+              {
+                "thread-index": 1,
+                "thread": "cpu1",
+                "current": 0,
+                "five-second-avg": 1,
+                "one-minute-avg": 1,
+                "five-minute-avg": 1
+              },
+              {
+                "thread-index": 2,
+                "thread": "cpu2",
+                "current": 0,
+                "five-second-avg": 0,
+                "one-minute-avg": 0,
+                "five-minute-avg": 1
+              },
+              {
+                "thread-index": 3,
+                "thread": "cpu3",
+                "current": 2,
+                "five-second-avg": 4,
+                "one-minute-avg": 3,
+                "five-minute-avg": 3
+              },
+              {
+                "thread-index": 4,
+                "thread": "cpu4",
+                "current": 2,
+                "five-second-avg": 3,
+                "one-minute-avg": 2,
+                "five-minute-avg": 3
+              },
+              {
+                "thread-index": 5,
+                "thread": "cpu5",
+                "current": 2,
+                "five-second-avg": 4,
+                "one-minute-avg": 2,
+                "five-minute-avg": 3
+              },
+              {
+                "thread-index": 6,
+                "thread": "cpu6",
+                "current": 4,
+                "five-second-avg": 8,
+                "one-minute-avg": 2,
+                "five-minute-avg": 2
+              },
+              {
+                "thread-index": 7,
+                "thread": "cpu7",
+                "current": 1,
+                "five-second-avg": 2,
+                "one-minute-avg": 2,
+                "five-minute-avg": 2
+              },
+              {
+                "thread-index": 8,
+                "thread": "cpu8",
+                "current": 3,
+                "five-second-avg": 3,
+                "one-minute-avg": 2,
+                "five-minute-avg": 3
+              },
+              {
+                "thread-index": 9,
+                "thread": "cpu9",
+                "current": 8,
+                "five-second-avg": 6,
+                "one-minute-avg": 2,
+                "five-minute-avg": 2
+              },
+              {
+                "thread-index": 10,
+                "thread": "cpu10",
+                "current": 2,
+                "five-second-avg": 3,
+                "one-minute-avg": 2,
+                "five-minute-avg": 2
+              },
+              {
+                "thread-index": 11,
+                "thread": "cpu11",
+                "current": 3,
+                "five-second-avg": 8,
+                "one-minute-avg": 2,
+                "five-minute-avg": 2
+              },
+              {
+                "thread-index": 12,
+                "thread": "cpu12",
+                "current": 4,
+                "five-second-avg": 4,
+                "one-minute-avg": 3,
+                "five-minute-avg": 2
+              },
+              {
+                "thread-index": 13,
+                "thread": "cpu13",
+                "current": 7,
+                "five-second-avg": 4,
+                "one-minute-avg": 2,
+                "five-minute-avg": 2
+              },
+              {
+                "thread-index": 14,
+                "thread": "cpu14",
+                "current": 2,
+                "five-second-avg": 3,
+                "one-minute-avg": 2,
+                "five-minute-avg": 2
+              },
+              {
+                "thread-index": 15,
+                "thread": "cpu15",
+                "current": 2,
+                "five-second-avg": 2,
+                "one-minute-avg": 2,
+                "five-minute-avg": 2
+              },
+              {
+                "thread-index": 16,
+                "thread": "cpu16",
+                "current": 3,
+                "five-second-avg": 2,
+                "one-minute-avg": 2,
+                "five-minute-avg": 2
+              },
+              {
+                "thread-index": 17,
+                "thread": "cpu17",
+                "current": 0,
+                "five-second-avg": 1,
+                "one-minute-avg": 1,
+                "five-minute-avg": 1
+              },
+              {
+                "thread-index": 18,
+                "thread": "cpu18",
+                "current": 0,
+                "five-second-avg": 1,
+                "one-minute-avg": 1,
+                "five-minute-avg": 1
+              },
+              {
+                "thread-index": 19,
+                "thread": "cpu19",
+                "current": 4,
+                "five-second-avg": 4,
+                "one-minute-avg": 4,
+                "five-minute-avg": 4
+              },
+              {
+                "thread-index": 20,
+                "thread": "cpu20",
+                "current": 4,
+                "five-second-avg": 3,
+                "one-minute-avg": 3,
+                "five-minute-avg": 3
+              },
+              {
+                "thread-index": 21,
+                "thread": "cpu21",
+                "current": 1,
+                "five-second-avg": 8,
+                "one-minute-avg": 3,
+                "five-minute-avg": 4
+              },
+              {
+                "thread-index": 22,
+                "thread": "cpu22",
+                "current": 0,
+                "five-second-avg": 6,
+                "one-minute-avg": 3,
+                "five-minute-avg": 3
+              },
+              {
+                "thread-index": 23,
+                "thread": "cpu23",
+                "current": 28,
+                "five-second-avg": 11,
+                "one-minute-avg": 4,
+                "five-minute-avg": 3
+              },
+              {
+                "thread-index": 24,
+                "thread": "cpu24",
+                "current": 19,
+                "five-second-avg": 12,
+                "one-minute-avg": 4,
+                "five-minute-avg": 5
+              },
+              {
+                "thread-index": 25,
+                "thread": "cpu25",
+                "current": 7,
+                "five-second-avg": 5,
+                "one-minute-avg": 4,
+                "five-minute-avg": 4
+              },
+              {
+                "thread-index": 26,
+                "thread": "cpu26",
+                "current": 6,
+                "five-second-avg": 4,
+                "one-minute-avg": 4,
+                "five-minute-avg": 3
+              },
+              {
+                "thread-index": 27,
+                "thread": "cpu27",
+                "current": 13,
+                "five-second-avg": 14,
+                "one-minute-avg": 3,
+                "five-minute-avg": 4
+              },
+              {
+                "thread-index": 28,
+                "thread": "cpu28",
+                "current": 3,
+                "five-second-avg": 6,
+                "one-minute-avg": 2,
+                "five-minute-avg": 3
+              },
+              {
+                "thread-index": 29,
+                "thread": "cpu29",
+                "current": 36,
+                "five-second-avg": 12,
+                "one-minute-avg": 3,
+                "five-minute-avg": 4
+              },
+              {
+                "thread-index": 30,
+                "thread": "cpu30",
+                "current": 19,
+                "five-second-avg": 9,
+                "one-minute-avg": 4,
+                "five-minute-avg": 4
+              },
+              {
+                "thread-index": 31,
+                "thread": "cpu31",
+                "current": 12,
+                "five-second-avg": 5,
+                "one-minute-avg": 4,
+                "five-minute-avg": 3
+              }
+            ]
+          }
+        }
+      },
+      "integrated-circuit": {
+        "state": {
+          "f5-platform:fpgas": {
+            "fpga": [
+              {
+                "fpga-index": "asw_0",
+                "state": {
+                  "version": "71.4.2"
+                }
+              },
+              {
+                "fpga-index": "atse_0",
+                "state": {
+                  "version": "72.5.1"
+                },
+                "f5-host-endpoint:host-endpoints": {
+                  "host-endpoint": [
+                    {
+                      "id": 0,
+                      "slot": 1,
+                      "did": 15,
+                      "num_dms": 3,
+                      "num_seps": 64
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      },
+      "f5-fan-psu-stats:fantray": {
+        "fan-stats": {
+          "fan-1-speed": 16251,
+          "fan-2-speed": 16242,
+          "fan-3-speed": 16155,
+          "fan-4-speed": 16224,
+          "fan-5-speed": 16242,
+          "fan-6-speed": 16251,
+          "fan-7-speed": 16260,
+          "fan-8-speed": 16277
+        }
+      }
+    },
+    {
+      "name": "psu-1",
+      "config": {
+        "name": "psu-1"
+      },
+      "state": {
+        "serial-no": "S92037RC1530",
+        "part-no": "M1845",
+        "empty": false
+      },
+      "f5-fan-psu-stats:psu-stats": {
+        "psu-current-in": "3.25",
+        "psu-current-out": "28.5",
+        "psu-voltage-in": "114.0",
+        "psu-voltage-out": "12.015",
+        "psu-temperature-1": "34.0",
+        "psu-temperature-2": "47.0",
+        "psu-temperature-3": "48.0",
+        "psu-fan-1-speed": 9408
+      }
+    }
+  ]
+}
