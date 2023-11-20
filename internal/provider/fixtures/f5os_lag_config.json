@@ -1,0 +1,54 @@
+{
+  "openconfig-interfaces:interface": [
+    {
+      "name": "tf-lag",
+      "config": {
+        "name": "tf-lag",
+        "type": "iana-if-type:ieee8023adLag",
+        "description": "",
+        "enabled": true
+      },
+      "state": {
+        "name": "tf-lag",
+        "type": "iana-if-type:ieee8023adLag",
+        "mtu": 9600,
+        "enabled": true,
+        "oper-status": "DOWN"
+      },
+      "openconfig-if-aggregate:aggregation": {
+        "config": {
+          "lag-type": "LACP",
+          "f5-if-aggregate:distribution-hash": "src-dst-ipport"
+        },
+        "state": {
+          "lag-type": "LACP",
+          "lag-speed": 0,
+          "f5-if-aggregate:distribution-hash": "src-dst-ipport",
+          "f5-if-aggregate:members": {
+            "member": [
+              {
+                "member-name": "1.1",
+                "member-status": "DOWN"
+              },
+              {
+                "member-name": "1.2",
+                "member-status": "DOWN"
+              }
+            ]
+          },
+          "f5-if-aggregate:mac-address": "00:94:a1:69:5d:14",
+          "f5-if-aggregate:lagid": 15
+        },
+        "openconfig-vlan:switched-vlan": {
+          "config": {
+            "native-vlan": 29,
+            "trunk-vlans": [
+              27,
+              28
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
