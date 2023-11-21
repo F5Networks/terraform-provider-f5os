@@ -137,6 +137,7 @@ func TestAccLagInterfaceCreateUnitTC3Resource(t *testing.T) {
 func TestAccLagInterfaceCreateUnitTC4Resource(t *testing.T) {
 	// Define our mocked connection object
 	testAccPreUnitCheck(t)
+	count := 0
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "GET", r.Method, "Expected method 'GET', got %s", r.Method)
 		w.Header().Set("Content-Type", "application/yang-data+json")

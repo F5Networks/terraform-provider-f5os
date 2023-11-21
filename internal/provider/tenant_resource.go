@@ -3,9 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"sync"
-
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -21,11 +18,12 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
+	"strconv"
 )
 
-var (
-	mutex sync.Mutex
-)
+// var (
+//	mutex sync.Mutex
+// )
 
 // Ensure provider defined types fully satisfy framework interfaces.
 var _ resource.Resource = &TenantResource{}
@@ -251,7 +249,7 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 	}
 	tflog.Info(ctx, fmt.Sprintf("tenantConfig Data:%+v", tenantConfig))
 
-	mutex.Lock()
+	// mutex.Lock()
 	teemInfo := make(map[string]interface{})
 	teemInfo["teemData"] = r.teemData
 	r.client.Metadata = teemInfo
@@ -277,7 +275,7 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 	}
 	tflog.Info(ctx, fmt.Sprintf("get tenantConfig :%+v", respByte2))
 	r.tenantResourceModeltoState(ctx, respByte2, data)
-	mutex.Unlock()
+	// mutex.Unlock()
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -319,7 +317,7 @@ func (r *TenantResource) Update(ctx context.Context, req resource.UpdateRequest,
 		tenantConfig.F5TenantsTenants.Tenant[0].Config.DeploymentFile = data.DeploymentFile.ValueString()
 	}
 	tflog.Info(ctx, fmt.Sprintf("[Update] tenantConfig :%+v", tenantConfig))
-	mutex.Lock()
+	// mutex.Lock()
 	respByte, err := r.client.UpdateTenant(tenantConfig, int(data.Timeout.ValueInt64()))
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Tenant Deploy failed, got error: %s", err))
@@ -334,7 +332,7 @@ func (r *TenantResource) Update(ctx context.Context, req resource.UpdateRequest,
 	}
 	r.tenantResourceModeltoState(ctx, respByte2, data)
 	tflog.Info(ctx, fmt.Sprintf("Updated State:%+v", data))
-	mutex.Unlock()
+	// mutex.Unlock()
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
