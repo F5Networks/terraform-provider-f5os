@@ -1,0 +1,7 @@
+{
+  "f5-system-image:install": {
+    "install-os-version": "1.7.0-3518",
+    "install-service-version": "1.7.0-3518",
+    "install-status": "success"
+  }
+}

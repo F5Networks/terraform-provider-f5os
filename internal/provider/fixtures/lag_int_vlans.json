@@ -1,0 +1,11 @@
+{
+  "openconfig-vlan:switched-vlan": {
+    "config": {
+      "native-vlan": 29,
+      "trunk-vlans": [
+        27,
+        28
+      ]
+    }
+  }
+}
