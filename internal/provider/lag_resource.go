@@ -31,9 +31,9 @@ type LagResource struct {
 type LagResourceModel struct {
 	Name       types.String `tfsdk:"name"`
 	NativeVlan types.Int64  `tfsdk:"native_vlan"`
-	TrunkVlans types.List   `tfsdk:"trunk_vlans"`
+	TrunkVlans types.Set   `tfsdk:"trunk_vlans"`
 	Status     types.String `tfsdk:"status"`
-	Members    types.List   `tfsdk:"members"`
+	Members    types.Set   `tfsdk:"members"`
 	Id         types.String `tfsdk:"id"`
 	Mode       types.String `tfsdk:"mode"`
 	Interval   types.String `tfsdk:"interval"`
@@ -60,13 +60,13 @@ func (r *LagResource) Schema(ctx context.Context, req resource.SchemaRequest, re
 				MarkdownDescription: "Configures the VLAN ID to associate with LAG interface.\nThe `native_vlan` parameter is used for untagged traffic.",
 				Optional:            true,
 			},
-			"trunk_vlans": schema.ListAttribute{
+			"trunk_vlans": schema.SetAttribute{
 				MarkdownDescription: "Configures multiple VLAN IDs to associate with the LAG interface.\nThe `trunk_vlans` parameter is used for tagged traffic",
 				Optional:            true,
 				ElementType:         types.Int64Type,
 			},
-			"members": schema.ListAttribute{
-				MarkdownDescription: "List of physical interfaces that are members of the LAG.",
+			"members": schema.SetAttribute{
+				MarkdownDescription: "List of physical interfaces that are members of the LAG. The members should be present on F5 platform and they shouldn't have any VLANs attached to it",
 				Optional:            true,
 				Computed:            true,
 				ElementType:         types.StringType,
@@ -311,7 +311,7 @@ func (r *LagResource) ImportState(ctx context.Context, req resource.ImportStateR
 func (r *LagResource) lagInterfaceResourceModelToState(ctx context.Context, respData *f5ossdk.F5RespLagInterfaces, lacpData *f5ossdk.LacpInterfaceResponses, data *LagResourceModel) {
 	data.Name = types.StringValue(respData.OpenconfigInterfacesInterface[0].Name)
 	data.NativeVlan = types.Int64Value(int64(respData.OpenconfigInterfacesInterface[0].OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.NativeVlan))
-	data.TrunkVlans, _ = types.ListValueFrom(ctx, types.Int64Type, respData.OpenconfigInterfacesInterface[0].OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.TrunkVlans)
+	data.TrunkVlans, _ = types.SetValueFrom(ctx, types.Int64Type, respData.OpenconfigInterfacesInterface[0].OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.TrunkVlans)
 	data.Status = types.StringValue(respData.OpenconfigInterfacesInterface[0].State.OperStatus)
 	data.Mode = types.StringValue(lacpData.OpenConfigLacpInterface[0].Config.Mode)
 	data.Interval = types.StringValue(lacpData.OpenConfigLacpInterface[0].Config.Interval)
@@ -320,7 +320,7 @@ func (r *LagResource) lagInterfaceResourceModelToState(ctx context.Context, resp
 	for _, member := range respData.OpenconfigInterfacesInterface[0].OpenconfigIfAggregateAggregation.State.Members.Member {
 		members = append(members, member.Name)
 	}
-	data.Members, _ = types.ListValueFrom(ctx, types.StringType, members)
+	data.Members, _ = types.SetValueFrom(ctx, types.StringType, members)
 }
 
 func getLagInterfaceConfig(ctx context.Context, data *LagResourceModel) *f5ossdk.F5ReqLagInterfaces {
@@ -354,14 +354,14 @@ func getLagMembersConfig(ctx context.Context, data *LagResourceModel) *f5ossdk.F
 	return &memberConfigReq
 }
 
-func getLagModeIntervalConfig(ctx context.Context, data *LagResourceModel) *f5ossdk.F5ModeIntervalLagInterfaces {
-	interfaceReq := f5ossdk.F5ModeIntervalLagInterface{}
+func getLagModeIntervalConfig(ctx context.Context, data *LagResourceModel) *f5ossdk.F5ReqLagInterfacesConfig {
+	interfaceReq := f5ossdk.F5ReqLagInterfaceConfig{}
 	interfaceReq.Name = data.Name.ValueString()
 	interfaceReq.Config.Interval = data.Interval.ValueString()
 	interfaceReq.Config.Mode = data.Mode.ValueString()
 	interfaceReq.Config.Name = data.Name.ValueString()
 
-	modeIntervalLagReq := f5ossdk.F5ModeIntervalLagInterfaces{}
+	modeIntervalLagReq := f5ossdk.F5ReqLagInterfacesConfig{}
 	modeIntervalLagReq.OpenconfigInterfacesInterfaces.OpenConfigLacp.Interfaces.Interface = append(modeIntervalLagReq.OpenconfigInterfacesInterfaces.OpenConfigLacp.Interfaces.Interface, interfaceReq)
 
 	return &modeIntervalLagReq

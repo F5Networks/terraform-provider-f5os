@@ -426,7 +426,7 @@ func (p *F5os) GetLacpInterface(intf string) (*LacpInterfaceResponses, error) {
 	return intLag, nil
 }
 
-func (p *F5os) CreateLagInterface(body *F5ReqLagInterfaces, members *F5ReqLagInterfaces, lagModeInterval *F5ModeIntervalLagInterfaces) ([]byte, error) {
+func (p *F5os) CreateLagInterface(body *F5ReqLagInterfaces, members *F5ReqLagInterfaces, lagModeInterval *F5ReqLagInterfacesConfig) ([]byte, error) {
 	f5osLogger.Debug("[CreateLagInterface]", "Request path", hclog.Fmt("%+v", "/"))
 	byteBody, err := json.Marshal(body)
 	if err != nil {
@@ -441,18 +441,38 @@ func (p *F5os) CreateLagInterface(body *F5ReqLagInterfaces, members *F5ReqLagInt
 
 	resp, err = p.addLagMembers(members)
 	if err != nil {
+		err1 := p.RemoveLagInterface(body.OpenconfigInterfacesInterfaces.Interface[0].Config.Name)
+		if err1 != nil {
+			return nil, err
+		}
 		return resp, err
 	}
 
 	data, err := p.addLagModeInterval(lagModeInterval)
 	if err != nil {
+
+		var haveMembers []string
+		for _, member := range members.OpenconfigInterfacesInterfaces.Interface {
+			haveMembers = append(haveMembers, member.Name)
+		}
+
+		err1 := p.RemoveLagMembers(haveMembers)
+		if err1 != nil {
+			return nil, err
+		}
+
+		err2 := p.RemoveLagInterface(body.OpenconfigInterfacesInterfaces.Interface[0].Config.Name)
+		if err2 != nil {
+			return nil, err
+		}
+
 		return data, err
 	}
 
 	return resp, nil
 }
 
-func (p *F5os) UpdateLagInterface(intf string, body *F5ReqLagInterfaces, lagModeIntervalData *F5ModeIntervalLagInterfaces) ([]byte, error) {
+func (p *F5os) UpdateLagInterface(intf string, body *F5ReqLagInterfaces, lagModeIntervalData *F5ReqLagInterfacesConfig) ([]byte, error) {
 	f5osLogger.Debug("[UpdateLagInterface]", "Request path", hclog.Fmt("%+v", uriInterface))
 	vlans, err := p.getLagSwitchedVlans(encodeUrl(intf))
 	if err != nil {
@@ -557,21 +577,21 @@ func (p *F5os) UpdateLagMembers(members *F5ReqLagInterfaces) ([]byte, error) {
 }
 
 func (p *F5os) addLagMembers(body *F5ReqLagInterfaces) ([]byte, error) {
-	f5osLogger.Debug("[UpdateLagMember]", "Request path", hclog.Fmt("%+v", "/"))
+	f5osLogger.Debug("[addLagMembers]", "Request path", hclog.Fmt("%+v", "/"))
 	byteBody, err := json.Marshal(body)
 	if err != nil {
 		return byteBody, err
 	}
-	f5osLogger.Debug("[UpdateLagMember]", "Request Body", hclog.Fmt("%+v", body))
+	f5osLogger.Debug("[addLagMembers]", "Request Body", hclog.Fmt("%+v", body))
 	resp, err := p.PatchRequest("/", byteBody)
 	if err != nil {
 		return resp, err
 	}
-	f5osLogger.Debug("[UpdateLagMember]", "Resp:", hclog.Fmt("%+v", string(resp)))
+	f5osLogger.Debug("[addLagMembers]", "Resp:", hclog.Fmt("%+v", string(resp)))
 	return resp, nil
 }
 
-func (p *F5os) addLagModeInterval(body *F5ModeIntervalLagInterfaces) ([]byte, error) {
+func (p *F5os) addLagModeInterval(body *F5ReqLagInterfacesConfig) ([]byte, error) {
 	f5osLogger.Debug("[addLagModeInterval]", "Request path", hclog.Fmt("%+v", "/"))
 	byteBody, err := json.Marshal(body)
 	if err != nil {

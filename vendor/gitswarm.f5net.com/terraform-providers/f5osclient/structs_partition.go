@@ -169,17 +169,17 @@ type F5ReqLagInterfaces struct {
 	} `json:"openconfig-interfaces:interfaces,omitempty"`
 }
 
-type F5ModeIntervalLagInterfaces struct {
+type F5ReqLagInterfacesConfig struct {
 	OpenconfigInterfacesInterfaces struct {
 		OpenConfigLacp struct {
 			Interfaces struct {
-				Interface []F5ModeIntervalLagInterface `json:"interface,omitempty"`
+				Interface []F5ReqLagInterfaceConfig `json:"interface,omitempty"`
 			} `json:"interfaces,omitempty"`
 		} `json:"openconfig-lacp:lacp,omitempty"`
 	} `json:"ietf-restconf:data,omitempty"`
 }
 
-type F5ModeIntervalLagInterface struct {
+type F5ReqLagInterfaceConfig struct {
 	Name   string            `json:"name,omitempty"`
 	Config LagIntervalConfig `json:"config,omitempty"`
 }
