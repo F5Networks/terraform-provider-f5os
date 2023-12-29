@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -31,9 +32,9 @@ type LagResource struct {
 type LagResourceModel struct {
 	Name       types.String `tfsdk:"name"`
 	NativeVlan types.Int64  `tfsdk:"native_vlan"`
-	TrunkVlans types.Set   `tfsdk:"trunk_vlans"`
+	TrunkVlans types.Set    `tfsdk:"trunk_vlans"`
 	Status     types.String `tfsdk:"status"`
-	Members    types.Set   `tfsdk:"members"`
+	Members    types.Set    `tfsdk:"members"`
 	Id         types.String `tfsdk:"id"`
 	Mode       types.String `tfsdk:"mode"`
 	Interval   types.String `tfsdk:"interval"`
@@ -176,7 +177,7 @@ func (r *LagResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 	}
 	tflog.Debug(ctx, fmt.Sprintf("LAG interface Resp :%+v", intfData))
 
-	lacpData, err := r.client.GetLacpInterface(data.Name.ValueString())
+	lacpData, err := r.client.GetLacpInterface(data.Id.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get LACP Interface, got error: %s", err))
 		return
@@ -310,7 +311,9 @@ func (r *LagResource) ImportState(ctx context.Context, req resource.ImportStateR
 
 func (r *LagResource) lagInterfaceResourceModelToState(ctx context.Context, respData *f5ossdk.F5RespLagInterfaces, lacpData *f5ossdk.LacpInterfaceResponses, data *LagResourceModel) {
 	data.Name = types.StringValue(respData.OpenconfigInterfacesInterface[0].Name)
-	data.NativeVlan = types.Int64Value(int64(respData.OpenconfigInterfacesInterface[0].OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.NativeVlan))
+	if int64(respData.OpenconfigInterfacesInterface[0].OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.NativeVlan) != 0 {
+		data.NativeVlan = types.Int64Value(int64(respData.OpenconfigInterfacesInterface[0].OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.NativeVlan))
+	}
 	data.TrunkVlans, _ = types.SetValueFrom(ctx, types.Int64Type, respData.OpenconfigInterfacesInterface[0].OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.TrunkVlans)
 	data.Status = types.StringValue(respData.OpenconfigInterfacesInterface[0].State.OperStatus)
 	data.Mode = types.StringValue(lacpData.OpenConfigLacpInterface[0].Config.Mode)
