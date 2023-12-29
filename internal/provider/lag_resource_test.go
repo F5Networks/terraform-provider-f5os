@@ -2,10 +2,10 @@ package provider
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/assert"
-	"log"
 	"net/http"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
@@ -107,6 +107,12 @@ func TestAccLagInterfaceCreateUnitTC3Resource(t *testing.T) {
 			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_lag_config.json"))
 		}
 	})
+	mux.HandleFunc("/restconf/data/openconfig-lacp:lacp/interfaces/interface=tf-lag", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.String() == "/restconf/data/openconfig-lacp:lacp/interfaces/interface=tf-lag" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_lacp_config.json"))
+		}
+	})
 
 	defer teardown()
 	resource.Test(t, resource.TestCase{
@@ -184,9 +190,7 @@ func TestAccLagInterfaceCreateUnitTC4Resource(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", "")
 	})
-
 	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=tf-lag", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("\n\n\n ############### count LAG:%+v ##############\n\n\n", count)
 		if r.Method == "GET" && (count == 0 || count == 1 || count == 2 || count == 3) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_lag_config.json"))
@@ -196,6 +200,12 @@ func TestAccLagInterfaceCreateUnitTC4Resource(t *testing.T) {
 			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_lag_config_modified.json"))
 		}
 		count++
+	})
+	mux.HandleFunc("/restconf/data/openconfig-lacp:lacp/interfaces/interface=tf-lag", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.String() == "/restconf/data/openconfig-lacp:lacp/interfaces/interface=tf-lag" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_lacp_config.json"))
+		}
 	})
 	defer teardown()
 	resource.Test(t, resource.TestCase{
