@@ -34,10 +34,12 @@ resource "f5os_lag" "test_lag" {
 
 ### Optional
 
-- `members` (List of String) List of physical interfaces that are members of the LAG.
+- `interval` (String) The LACP interval of the interface to be created.
+- `members` (Set of String) List of physical interfaces that are members of the LAG. The members should be present on F5 platform and they shouldn't have any VLANs attached to it
+- `mode` (String) The LACP mode of the interface to be created.
 - `native_vlan` (Number) Configures the VLAN ID to associate with LAG interface.
 The `native_vlan` parameter is used for untagged traffic.
-- `trunk_vlans` (List of Number) Configures multiple VLAN IDs to associate with the LAG interface.
+- `trunk_vlans` (Set of Number) Configures multiple VLAN IDs to associate with the LAG interface.
 The `trunk_vlans` parameter is used for tagged traffic
 
 ### Read-Only
