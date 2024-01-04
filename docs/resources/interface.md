@@ -35,7 +35,7 @@ resource "f5os_interface" "test_interface" {
 For VELOS partitions blade/port format is required e.g. `1/1.0`
 - `native_vlan` (Number) Configures the VLAN ID to associate with the interface.
 The `native_vlan` parameter is used for untagged traffic.
-- `trunk_vlans` (List of Number) Configures multiple VLAN IDs to associate with the interface.
+- `trunk_vlans` (Set of Number) Configures multiple VLAN IDs to associate with the interface.
 The `trunk_vlans` parameter is used for tagged traffic
 
 ### Read-Only

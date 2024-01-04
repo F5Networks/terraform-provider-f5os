@@ -169,6 +169,72 @@ type F5ReqLagInterfaces struct {
 	} `json:"openconfig-interfaces:interfaces,omitempty"`
 }
 
+type F5ReqLagInterfacesConfig struct {
+	OpenconfigInterfacesInterfaces struct {
+		OpenConfigLacp struct {
+			Interfaces struct {
+				Interface []F5ReqLagInterfaceConfig `json:"interface,omitempty"`
+			} `json:"interfaces,omitempty"`
+		} `json:"openconfig-lacp:lacp,omitempty"`
+	} `json:"ietf-restconf:data,omitempty"`
+}
+
+type F5ReqLagInterfaceConfig struct {
+	Name   string            `json:"name,omitempty"`
+	Config LagIntervalConfig `json:"config,omitempty"`
+}
+
+type LagIntervalConfig struct {
+	Name     string `json:"name,omitempty"`
+	Interval string `json:"interval,omitempty"`
+	Mode     string `json:"lacp-mode,omitempty"`
+}
+
+type LacpInterfaceResponses struct {
+	OpenConfigLacpInterface []LacpInterfaceResponse `json:"openconfig-lacp:interface,omitempty"`
+}
+type LacpInterfaceResponse struct {
+	Name   string `json:"name,omitempty"`
+	Config struct {
+		Name     string `json:"name,omitempty"`
+		Interval string `json:"interval,omitempty"`
+		Mode     string `json:"lacp-mode,omitempty"`
+	} `json:"config,omitempty"`
+	State struct {
+		Name        string `json:"name,omitempty"`
+		Interval    string `json:"interval,omitempty"`
+		Mode        string `json:"lacp-mode,,omitempty"`
+		SystemIdMac string `json:"system-id-mac,omitempty"`
+	}
+	Members struct {
+		Member []MemberConfig `json:"member,omitempty"`
+	} `json:"members,omitempty"`
+}
+
+type MemberConfig struct {
+	Interface string `json:"interface,omitempty"`
+	State     struct {
+		Interface       string `json:"interface,omitempty"`
+		Activity        string `json:"activity,omitempty"`
+		Timeout         string `json:"timeout,omitempty"`
+		Synchronization string `json:"synchronization,omitempty"`
+		Aggregatable    bool   `json:"aggregatable,omitempty"`
+		Collecting      bool   `json:"collecting,omitempty"`
+		Distributing    bool   `json:"distributing,omitempty"`
+		SystemId        string `json:"system-id,omitempty"`
+		OperKey         int    `json:"oper-key,omitempty"`
+		PartnerId       string `json:"partner-id,omitempty"`
+		PartnerKey      int    `json:"partner-key,omitempty"`
+		PortNum         int    `json:"port-num,omitempty"`
+		PartnerPortNum  int    `json:"partner-port-num,omitempty"`
+		Counters        struct {
+			LacpInPkts   int `json:"lacp-in-pkts,omitempty"`
+			LacpOutPkts  int `json:"lacp-out-pkts,omitempty"`
+			LacpRxErrors int `json:"lacp-rx-errors,omitempty"`
+		} `json:"counters,omitempty"`
+	} `json:"state,omitempty"`
+}
+
 type F5ReqLagInterface struct {
 	Name   string `json:"name,omitempty"`
 	Config struct {
