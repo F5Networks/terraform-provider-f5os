@@ -1,6 +1,6 @@
 module gitswarm.f5net.com/terraform-providers/terraform-provider-f5os
 
-go 1.19
+go 1.21.3
 
 require (
 	github.com/hashicorp/terraform-plugin-docs v0.14.1
@@ -10,7 +10,7 @@ require (
 	github.com/hashicorp/terraform-plugin-log v0.8.0
 	github.com/hashicorp/terraform-plugin-testing v1.2.0
 	github.com/stretchr/testify v1.8.4
-	gitswarm.f5net.com/terraform-providers/f5osclient v1.0.2
+	gitswarm.f5net.com/terraform-providers/f5osclient v1.0.3
 )
 
 require (

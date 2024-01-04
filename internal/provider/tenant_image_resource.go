@@ -149,13 +149,14 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	resp1Byte, err := r.client.GetImage(data.ImageName.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Import Image, got error: %s", err))
-		return
-	}
+	resp1Byte, _ := r.client.GetImage(data.ImageName.ValueString())
 
-	if len(resp1Byte.TenantImages) == 0 {
+	// if err != nil {
+	// 	resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Import Image, got error: %s", err))
+	// 	return
+	// }
+
+	if resp1Byte == nil || len(resp1Byte.TenantImages) == 0 {
 		if data.UploadFromPath.IsNull() {
 			respByte, err := r.importImage(ctx, data)
 			if err != nil {

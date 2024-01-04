@@ -31,7 +31,7 @@ type InterfaceResource struct {
 type InterfaceResourceModel struct {
 	Name       types.String `tfsdk:"name"`
 	NativeVlan types.Int64  `tfsdk:"native_vlan"`
-	TrunkVlans types.List   `tfsdk:"trunk_vlans"`
+	TrunkVlans types.Set    `tfsdk:"trunk_vlans"`
 	Enabled    types.Bool   `tfsdk:"enabled"`
 	Status     types.String `tfsdk:"status"`
 	Id         types.String `tfsdk:"id"`
@@ -55,7 +55,7 @@ func (r *InterfaceResource) Schema(ctx context.Context, req resource.SchemaReque
 				MarkdownDescription: "Configures the VLAN ID to associate with the interface.\nThe `native_vlan` parameter is used for untagged traffic.",
 				Optional:            true,
 			},
-			"trunk_vlans": schema.ListAttribute{
+			"trunk_vlans": schema.SetAttribute{
 				MarkdownDescription: "Configures multiple VLAN IDs to associate with the interface.\nThe `trunk_vlans` parameter is used for tagged traffic",
 				Optional:            true,
 				ElementType:         types.Int64Type,
@@ -230,7 +230,7 @@ func (r *InterfaceResource) interfaceResourceModelToState(ctx context.Context, r
 	if int64(respData.OpenconfigInterfacesInterface[0].OpenconfigIfEthernetEthernet.OpenconfigVlanSwitchedVlan.Config.NativeVlan) != 0 {
 		data.NativeVlan = types.Int64Value(int64(respData.OpenconfigInterfacesInterface[0].OpenconfigIfEthernetEthernet.OpenconfigVlanSwitchedVlan.Config.NativeVlan))
 	}
-	data.TrunkVlans, _ = types.ListValueFrom(ctx, types.Int64Type, respData.OpenconfigInterfacesInterface[0].OpenconfigIfEthernetEthernet.OpenconfigVlanSwitchedVlan.Config.TrunkVlans)
+	data.TrunkVlans, _ = types.SetValueFrom(ctx, types.Int64Type, respData.OpenconfigInterfacesInterface[0].OpenconfigIfEthernetEthernet.OpenconfigVlanSwitchedVlan.Config.TrunkVlans)
 }
 
 func getInterfaceConfig(ctx context.Context, data *InterfaceResourceModel) *f5ossdk.F5ReqOpenconfigInterface {

@@ -1,0 +1,68 @@
+{
+  "openconfig-lacp:interface": [
+      {
+          "name": "tf-lag",
+          "config": {
+              "name": "tf-lag",
+              "interval": "FAST",
+              "lacp-mode": "ACTIVE"
+          },
+          "state": {
+              "name": "tf-lag",
+              "interval": "FAST",
+              "lacp-mode": "ACTIVE",
+              "system-id-mac": "f4:15:63:fb:a0:18"
+          },
+          "members": {
+              "member": [
+                  {
+                      "interface": "1.1",
+                      "state": {
+                          "interface": "1.1",
+                          "activity": "ACTIVE",
+                          "timeout": "SHORT",
+                          "synchronization": "OUT_SYNC",
+                          "aggregatable": true,
+                          "collecting": false,
+                          "distributing": false,
+                          "system-id": "f4:15:63:fb:a0:18",
+                          "oper-key": 15,
+                          "partner-id": "00:00:00:00:00:00",
+                          "partner-key": 0,
+                          "port-num": 8320,
+                          "partner-port-num": 0,
+                          "counters": {
+                              "lacp-in-pkts": "0",
+                              "lacp-out-pkts": "3610",
+                              "lacp-rx-errors": "0"
+                          }
+                      }
+                  },
+                  {
+                      "interface": "1.2",
+                      "state": {
+                          "interface": "1.2",
+                          "activity": "ACTIVE",
+                          "timeout": "SHORT",
+                          "synchronization": "OUT_SYNC",
+                          "aggregatable": true,
+                          "collecting": false,
+                          "distributing": false,
+                          "system-id": "f4:15:63:fb:a0:18",
+                          "oper-key": 15,
+                          "partner-id": "00:00:00:00:00:00",
+                          "partner-key": 0,
+                          "port-num": 8448,
+                          "partner-port-num": 0,
+                          "counters": {
+                              "lacp-in-pkts": "0",
+                              "lacp-out-pkts": "3610",
+                              "lacp-rx-errors": "0"
+                          }
+                      }
+                  }
+              ]
+          }
+      }
+  ]
+}
