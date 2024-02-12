@@ -167,22 +167,27 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 		f5osObj.ConfigOptions = defaultConfigOptions
 	}
 	tr := &http.Transport{}
-	if f5osObj.DisableSSLVerify {
-		f5osLogger.Info("[NewSession]", "DisableSSLVerify", hclog.Fmt("%+v", f5osObj.DisableSSLVerify))
-		tr.TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: true,
-		}
-	} else {
-		f5osLogger.Info("[NewSession]", "DisableSSLVerify", hclog.Fmt("%+v", f5osObj.DisableSSLVerify))
-		tr.TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: false,
-		}
-		rootCA, err := GetRootCA(f5osObj.TrustedCACertificate)
-		if err != nil {
-			return nil, err
-		}
-		tr.TLSClientConfig.RootCAs = rootCA
+	f5osLogger.Info("[NewSession]", "DisableSSLVerify", hclog.Fmt("%+v", f5osObj.DisableSSLVerify))
+	tr.TLSClientConfig = &tls.Config{
+		InsecureSkipVerify: f5osObj.DisableSSLVerify,
 	}
+
+	// if f5osObj.DisableSSLVerify {
+	// 	f5osLogger.Info("[NewSession]", "DisableSSLVerify", hclog.Fmt("%+v", f5osObj.DisableSSLVerify))
+	// 	tr.TLSClientConfig = &tls.Config{
+	// 		InsecureSkipVerify: true,
+	// 	}
+	// } else {
+	// 	f5osLogger.Info("[NewSession]", "DisableSSLVerify", hclog.Fmt("%+v", f5osObj.DisableSSLVerify))
+	// 	tr.TLSClientConfig = &tls.Config{
+	// 		InsecureSkipVerify: false,
+	// 	}
+	// 	rootCA, err := GetRootCA(f5osObj.TrustedCACertificate)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	tr.TLSClientConfig.RootCAs = rootCA
+	// }
 	// tr := &http.Transport{
 	// 	TLSClientConfig: &tls.Config{
 	// 		InsecureSkipVerify: true,

@@ -137,14 +137,14 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	if !config.DisableSslVerify.IsNull() {
 		disableSSL = config.DisableSslVerify.ValueBool()
 	}
-	if !disableSSL && config.TrustedCertpath.IsNull() {
-		resp.Diagnostics.AddError("trusted_cert_path is required when disable_tls_verify is set to false", "trusted_cert_path is required when disable_tls_verify is set to false")
-		return
-	}
-	trustedCAPath := ""
-	if !config.TrustedCertpath.IsNull() {
-		trustedCAPath = config.TrustedCertpath.ValueString()
-	}
+	// if !disableSSL && config.TrustedCertpath.IsNull() {
+	// 	resp.Diagnostics.AddError("trusted_cert_path is required when disable_tls_verify is set to false", "trusted_cert_path is required when disable_tls_verify is set to false")
+	// 	return
+	// }
+	// trustedCAPath := ""
+	// if !config.TrustedCertpath.IsNull() {
+	// 	trustedCAPath = config.TrustedCertpath.ValueString()
+	// }
 	if host == "" {
 		resp.Diagnostics.AddError(
 			"Missing 'host' in provider configuration",
@@ -172,12 +172,12 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 
 	// Example client configuration for data sources and resources
 	f5osConfig := &f5ossdk.F5osConfig{
-		Host:                 host,
-		User:                 username,
-		Password:             password,
-		Port:                 hostPort,
-		DisableSSLVerify:     disableSSL,
-		TrustedCACertificate: trustedCAPath,
+		Host:             host,
+		User:             username,
+		Password:         password,
+		Port:             hostPort,
+		DisableSSLVerify: disableSSL,
+		// TrustedCACertificate: trustedCAPath,
 	}
 	client, err := f5ossdk.NewSession(f5osConfig)
 	if err != nil {
