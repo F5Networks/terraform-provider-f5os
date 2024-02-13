@@ -29,6 +29,10 @@ provider "f5os" {
 
 ### Optional
 
+- `disable_tls_verify` (Boolean) `disable_tls_verify` controls whether a client verifies the server's certificate chain and host name. default it is set to `true`. If `disable_tls_verify` is true, crypto/tls accepts any certificate presented by the server and any host name in that certificate. In this mode, TLS is susceptible to machine-in-the-middle attacks unless custom verification is used.
+can be provided by `DISABLE_TLS_VERIFY` environment variable.
+
+~> **NOTE** If it is set to `false`, certificate/ca certificates should be added to `trusted store` of host where we are running this provider.
 - `host` (String) URI/Host details for F5os Device,can be provided via `F5OS_HOST` environment variable.
 - `password` (String, Sensitive) Password for F5os Device,can be provided via `F5OS_PASSWORD` environment variable.
 - `port` (Number) Port Number to be used to make API calls to HOST

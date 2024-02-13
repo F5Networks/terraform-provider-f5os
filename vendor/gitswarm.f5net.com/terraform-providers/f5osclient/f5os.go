@@ -57,11 +57,11 @@ type F5osConfig struct {
 	Port      int
 	Transport *http.Transport
 	// UserAgent is an optional field that specifies the caller of this request.
-	UserAgent            string
-	Teem                 bool
-	DisableSSLVerify     bool
-	TrustedCACertificate string
-	ConfigOptions        *ConfigOptions
+	UserAgent        string
+	Teem             bool
+	DisableSSLVerify bool
+	// TrustedCACertificate string
+	ConfigOptions *ConfigOptions
 }
 
 // F5os is a container for our session state.
