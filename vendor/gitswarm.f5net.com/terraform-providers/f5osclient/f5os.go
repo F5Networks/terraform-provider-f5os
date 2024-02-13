@@ -9,6 +9,7 @@ package f5os
 import (
 	"bytes"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,8 +57,10 @@ type F5osConfig struct {
 	Port      int
 	Transport *http.Transport
 	// UserAgent is an optional field that specifies the caller of this request.
-	UserAgent     string
-	Teem          bool
+	UserAgent        string
+	Teem             bool
+	DisableSSLVerify bool
+	// TrustedCACertificate string
 	ConfigOptions *ConfigOptions
 }
 
@@ -163,11 +166,33 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	if f5osObj.ConfigOptions == nil {
 		f5osObj.ConfigOptions = defaultConfigOptions
 	}
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-		},
+	tr := &http.Transport{}
+	f5osLogger.Info("[NewSession]", "DisableSSLVerify", hclog.Fmt("%+v", f5osObj.DisableSSLVerify))
+	tr.TLSClientConfig = &tls.Config{
+		InsecureSkipVerify: f5osObj.DisableSSLVerify,
 	}
+
+	// if f5osObj.DisableSSLVerify {
+	// 	f5osLogger.Info("[NewSession]", "DisableSSLVerify", hclog.Fmt("%+v", f5osObj.DisableSSLVerify))
+	// 	tr.TLSClientConfig = &tls.Config{
+	// 		InsecureSkipVerify: true,
+	// 	}
+	// } else {
+	// 	f5osLogger.Info("[NewSession]", "DisableSSLVerify", hclog.Fmt("%+v", f5osObj.DisableSSLVerify))
+	// 	tr.TLSClientConfig = &tls.Config{
+	// 		InsecureSkipVerify: false,
+	// 	}
+	// 	rootCA, err := GetRootCA(f5osObj.TrustedCACertificate)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	tr.TLSClientConfig.RootCAs = rootCA
+	// }
+	// tr := &http.Transport{
+	// 	TLSClientConfig: &tls.Config{
+	// 		InsecureSkipVerify: true,
+	// 	},
+	// }
 	f5osSession.Host = urlString
 	f5osSession.Transport = tr
 	f5osSession.ConfigOptions = f5osObj.ConfigOptions
@@ -179,6 +204,9 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 
 	f5osLogger.Debug("[NewSession]", "URL", hclog.Fmt("%+v", urlString))
 	req, err := http.NewRequest(method, urlString, nil)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Content-Type", contentTypeHeader)
 	req.SetBasicAuth(f5osObj.User, f5osObj.Password)
 	res, err := client.Do(req)
@@ -194,13 +222,29 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.Contains(fmt.Sprintf("%s", string(respData)), "enable JavaScript to run this app") {
-		return nil, fmt.Errorf("Failed with %s", string(respData))
+	if strings.Contains(string(respData), "enable JavaScript to run this app") {
+		return nil, fmt.Errorf("failed with %s", string(respData))
 	}
 	f5osSession.Token = res.Header.Get("X-Auth-Token")
 	f5osSession.setPlatformType()
 	f5osLogger.Info("[NewSession] Session creation Success")
 	return f5osSession, nil
+}
+
+func GetRootCA(path string) (*x509.CertPool, error) {
+	rootCAs, _ := x509.SystemCertPool()
+	if rootCAs == nil {
+		rootCAs = x509.NewCertPool()
+	}
+	certPEM, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	// Append our certs to the system pool
+	if ok := rootCAs.AppendCertsFromPEM(certPEM); !ok {
+		log.Printf("[DEBUG] No certs appended, using only system certs")
+	}
+	return rootCAs, nil
 }
 
 func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
@@ -929,7 +973,7 @@ func (p *F5os) setPlatformVersion(uriPlatformVersion string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("Platform version not supported")
+		return nil, fmt.Errorf("platform version not supported")
 	}
 	if resp.StatusCode == 200 || resp.StatusCode == 304 {
 		bytes, _ := io.ReadAll(resp.Body)

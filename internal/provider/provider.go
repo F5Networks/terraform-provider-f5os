@@ -28,11 +28,13 @@ type F5osProvider struct {
 
 // F5osProviderModel describes the provider data model.
 type F5osProviderModel struct {
-	Host        types.String `tfsdk:"host"`
-	Username    types.String `tfsdk:"username"`
-	Password    types.String `tfsdk:"password"`
-	Port        types.Int64  `tfsdk:"port"`
-	TeemDisable types.Bool   `tfsdk:"teem_disable"`
+	Host             types.String `tfsdk:"host"`
+	Username         types.String `tfsdk:"username"`
+	Password         types.String `tfsdk:"password"`
+	Port             types.Int64  `tfsdk:"port"`
+	TeemDisable      types.Bool   `tfsdk:"teem_disable"`
+	DisableSslVerify types.Bool   `tfsdk:"disable_tls_verify"`
+	// TrustedCertpath  types.String `tfsdk:"trusted_cert_path"`
 }
 type TeemData struct {
 	ResourceName      string
@@ -72,6 +74,14 @@ func (p *F5osProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 				MarkdownDescription: "Port Number to be used to make API calls to HOST",
 				Optional:            true,
 			},
+			// "trusted_cert_path": schema.StringAttribute{
+			// 	MarkdownDescription: "Valid Trusted CA Certificate path",
+			// 	Optional:            true,
+			// },
+			"disable_tls_verify": schema.BoolAttribute{
+				MarkdownDescription: "`disable_tls_verify` controls whether a client verifies the server's certificate chain and host name. default it is set to `true`. If `disable_tls_verify` is true, crypto/tls accepts any certificate presented by the server and any host name in that certificate. In this mode, TLS is susceptible to machine-in-the-middle attacks unless custom verification is used.\ncan be provided by `DISABLE_TLS_VERIFY` environment variable.\n\n~> **NOTE** If it is set to `false`, certificate/ca certificates should be added to `trusted store` of host where we are running this provider.",
+				Optional:            true,
+			},
 			"teem_disable": schema.BoolAttribute{
 				MarkdownDescription: "If this flag set to true,sending telemetry data to TEEM will be disabled,can be provided via `TEEM_DISABLE` environment variable.",
 				Optional:            true,
@@ -101,6 +111,12 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	if teemTmp == "true" {
 		teemDisable = true
 	}
+	disableSSL := true
+	if disableSSLtemp, ok := os.LookupEnv("DISABLE_TLS_VERIFY"); ok {
+		if disableSSLtemp == "false" {
+			disableSSL = false
+		}
+	}
 	if !config.Host.IsNull() {
 		host = config.Host.ValueString()
 	}
@@ -118,6 +134,17 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	if !config.TeemDisable.IsNull() {
 		teemDisable = config.TeemDisable.ValueBool()
 	}
+	if !config.DisableSslVerify.IsNull() {
+		disableSSL = config.DisableSslVerify.ValueBool()
+	}
+	// if !disableSSL && config.TrustedCertpath.IsNull() {
+	// 	resp.Diagnostics.AddError("trusted_cert_path is required when disable_tls_verify is set to false", "trusted_cert_path is required when disable_tls_verify is set to false")
+	// 	return
+	// }
+	// trustedCAPath := ""
+	// if !config.TrustedCertpath.IsNull() {
+	// 	trustedCAPath = config.TrustedCertpath.ValueString()
+	// }
 	if host == "" {
 		resp.Diagnostics.AddError(
 			"Missing 'host' in provider configuration",
@@ -145,10 +172,12 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 
 	// Example client configuration for data sources and resources
 	f5osConfig := &f5ossdk.F5osConfig{
-		Host:     host,
-		User:     username,
-		Password: password,
-		Port:     hostPort,
+		Host:             host,
+		User:             username,
+		Password:         password,
+		Port:             hostPort,
+		DisableSSLVerify: disableSSL,
+		// TrustedCACertificate: trustedCAPath,
 	}
 	client, err := f5ossdk.NewSession(f5osConfig)
 	if err != nil {
