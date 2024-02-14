@@ -218,8 +218,8 @@ github.com/xanzy/ssh-agent v0.3.0/go.mod h1:3s9xbODqPuuhK9JV1R321M/FlMZSBvE5aY6e
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
 github.com/zclconf/go-cty v1.13.1 h1:0a6bRwuiSHtAmqCqNOE+c2oHgepv0ctoxU4FUe43kwc=
 github.com/zclconf/go-cty v1.13.1/go.mod h1:YKQzy/7pZ7iq2jNFzy5go57xdxdWoLLpaEp4u238AE0=
-gitswarm.f5net.com/terraform-providers/f5osclient v1.0.3 h1:YbDdA8oViX9PDsHHBL8EcmHVq0f3f8cM2vyJ0/GunHI=
-gitswarm.f5net.com/terraform-providers/f5osclient v1.0.3/go.mod h1:k+4tg9l6yO3FlFh3dkXGc+Wl+LOB/AXu302hAX6nhDU=
+gitswarm.f5net.com/terraform-providers/f5osclient v1.0.4 h1:/jNPf+40m3o+zlWdA1xPEwfWsODDVlQ6YaRLR57h9x4=
+gitswarm.f5net.com/terraform-providers/f5osclient v1.0.4/go.mod h1:k+4tg9l6yO3FlFh3dkXGc+Wl+LOB/AXu302hAX6nhDU=
 golang.org/x/crypto v0.0.0-20190219172222-a4c6cb3142f2/go.mod h1:6SG95UA2DQfeDnfUPMdvaQW0Q7yPrPDi9nlGo2tz2b4=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20200414173820-0848c9571904/go.mod h1:LzIPMQfyMNhhGPhUkYOs5KpL4U8rLKemX1yGLhDgUto=

@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strconv"
+
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -18,7 +20,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
-	"strconv"
 )
 
 // var (
@@ -108,7 +109,7 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 				Validators: []validator.String{
 					stringvalidator.OneOf([]string{"one", "small", "medium", "large"}...),
 				},
-				Default: stringdefault.StaticString("one"),
+				// Default: stringdefault.StaticString("one"),
 			},
 			"dag_ipv6_prefix_length": schema.Int64Attribute{
 				MarkdownDescription: "Configuring DAG Global IPv6 Prefix Length,value Range from `1` to `128`.Default is `128`.",
@@ -409,7 +410,14 @@ func getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.VcpuCoresPerNode = int(data.CpuCores.ValueInt64())
 	tenantSubbj.Config.DagIpv6PrefixLength = int(data.DagIpv6prefixLength.ValueInt64())
-	tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
+	if !data.MacBlockSize.IsNull() && !data.MacBlockSize.IsUnknown() {
+		tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
+		// tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = "one"
+	}
+	//  else {
+	// 	tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
+	// }
+	// tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
 	if data.Memory.IsNull() {
 		tenantSubbj.Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
 	} else {

@@ -5,9 +5,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestAccLagInterfaceCreateTC1Resource(t *testing.T) {
