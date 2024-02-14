@@ -410,11 +410,13 @@ func getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.VcpuCoresPerNode = int(data.CpuCores.ValueInt64())
 	tenantSubbj.Config.DagIpv6PrefixLength = int(data.DagIpv6prefixLength.ValueInt64())
-	if data.MacBlockSize.IsNull() || data.MacBlockSize.IsUnknown() {
-		tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = "one"
-	} else {
+	if !data.MacBlockSize.IsNull() && !data.MacBlockSize.IsUnknown() {
 		tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
+		// tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = "one"
 	}
+	//  else {
+	// 	tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
+	// }
 	// tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
 	if data.Memory.IsNull() {
 		tenantSubbj.Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
