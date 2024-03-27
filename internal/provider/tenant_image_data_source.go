@@ -79,9 +79,8 @@ func (d *ImageInfoDataSource) Read(ctx context.Context, req datasource.ReadReque
 		return
 	}
 	var availableFlag = true
-	timeNow := time.Now()
-	timeBefore := timeNow.Add(6 * time.Minute)
-	for timeNow.Before(timeBefore) {
+	timeBefore := time.Now().Add(6 * time.Minute)
+	for time.Now().Before(timeBefore) {
 		availableFlag = false
 		imageObj, err := d.client.GetImage(data.ImageName.ValueString())
 		if err != nil {
@@ -95,7 +94,10 @@ func (d *ImageInfoDataSource) Read(ctx context.Context, req datasource.ReadReque
 					availableFlag = false
 				}
 				if val.Status == "replicated" || val.Status == "processed" {
-					time.Sleep(2 * time.Minute)
+					diff := time.Until(timeBefore)
+					if !(diff > 2*time.Minute) {
+						time.Sleep(2 * time.Minute)
+					}
 					availableFlag = true
 					data.ImageName = types.StringValue(val.Name)
 					data.ImageStatus = types.StringValue(val.Status)
