@@ -10,8 +10,9 @@ package f5os
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/hashicorp/go-hclog"
 	"time"
+
+	"github.com/hashicorp/go-hclog"
 )
 
 const (
@@ -335,6 +336,7 @@ func (p *F5os) GetVlan(vlanId int) (*F5RespVlan, error) {
 
 func (p *F5os) DeleteVlan(vlanId int) error {
 	url := fmt.Sprintf("%s/vlan=%d", uriVlan, vlanId)
+	f5osLogger.Info("[DeleteVlan]", "Path", hclog.Fmt("%+v", url))
 	err := p.DeleteRequest(url)
 	if err != nil {
 		return err
