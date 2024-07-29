@@ -29,18 +29,66 @@ const (
 	uriTenant       = "/f5-tenants:tenants"
 )
 
+func (p *F5os) GetImageVerify(imageName string) (*F5RespTenantImagesStatus, error) {
+	imgFldr := strings.Join(strings.Split(imageName, ".")[0:7], ".")
+	imgYaml := fmt.Sprintf("%s.yaml", imgFldr)
+	imgList := []string{imageName, imgFldr, imgYaml}
+	timOut := 360
+	t1 := time.Now()
+	for _, img := range imgList {
+		// add timeout for each image
+		for {
+			t2 := time.Now()
+			timeDiff := t2.Sub(t1)
+			if timeDiff.Seconds() > float64(timOut) {
+				return nil, fmt.Errorf("image verification still in In Progress with Timeout Period, please increase timeout")
+			}
+			imagenew := fmt.Sprintf("/image=%s", img)
+			url := fmt.Sprintf("%s%s", uriTenantImage, imagenew)
+			f5osLogger.Info("[GetImageVerify]", "Request path", hclog.Fmt("%+v", url))
+			imagesStatus := &F5RespTenantImagesStatus{}
+			byteData, err := p.GetTenantRequest(url)
+			f5osLogger.Debug("[GetImageVerify]", "Image Resp:", hclog.Fmt("%+v", string(byteData)))
+			if err != nil {
+				if strings.Contains(err.Error(), "uri keypath not found") {
+					continue
+				}
+			}
+			for _, val := range imagesStatus.TenantImages {
+				if val.Name == img && (val.Status == "replicated" || val.Status == "processed" || val.Status == "verified") {
+					continue
+				}
+				// return imagesStatus, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
 func (p *F5os) GetImage(imageName string) (*F5RespTenantImagesStatus, error) {
 	imagenew := fmt.Sprintf("/image=%s", imageName)
 	url := fmt.Sprintf("%s%s", uriTenantImage, imagenew)
 	f5osLogger.Info("[GetImage]", "Request path", hclog.Fmt("%+v", url))
 	imagesStatus := &F5RespTenantImagesStatus{}
-	byteData, err := p.GetRequest(url)
+	byteData, err := p.GetTenantRequest(url)
 	if err != nil {
+		if strings.Contains(err.Error(), "uri keypath not found") {
+			errorNew := struct {
+				Status  string          `json:"status"`
+				Message string          `json:"message"`
+				Details json.RawMessage `json:"details"`
+			}{
+				Status:  "404 Not Found",
+				Message: fmt.Sprintf("Tenant Image (%s) not found", imageName),
+				Details: json.RawMessage(err.Error()),
+			}
+			jsonData, _ := json.Marshal(errorNew)
+			return nil, fmt.Errorf("%+v", string(jsonData))
+			// return nil, fmt.Errorf("Tenant Image (%s) not found", imageName)
+		}
 		return nil, err
 	}
-	if strings.Contains(string(byteData), "uri keypath not found") {
-		return nil, fmt.Errorf("Tenant Image (%s) not found", imageName)
-	}
+	f5osLogger.Debug("[GetImage]", "Image Resp:", hclog.Fmt("%+v", string(byteData)))
 	json.Unmarshal(byteData, imagesStatus)
 	f5osLogger.Debug("[GetImage]", "Image Struct:", hclog.Fmt("%+v", imagesStatus))
 	return imagesStatus, nil
@@ -237,16 +285,78 @@ func (p *F5os) DeleteTenantImage(tenantImage string) error {
 	return fmt.Errorf("delete Tenant Image failed with:%+v", respMap)
 }
 
+// https://{{velos_chassis1_system_controller_ip}}:443/api
+
+func (p *F5os) GetApi() ([]byte, error) {
+	url := fmt.Sprintf("%s%s", p.Host, "/api")
+	url = strings.Replace(url, "8888", "443", -1)
+	byteData, err := p.doTenantRequest("GET", url, []byte(""))
+	if err != nil {
+		return byteData, err
+	}
+	f5osLogger.Debug("[GetApi]", "Api Resp", hclog.Fmt("%+v", string(byteData)))
+	return byteData, nil
+}
+
+func (p *F5os) F5OsKeepAlive(delay time.Duration) chan bool {
+	stop := make(chan bool)
+	go func() {
+		for {
+			select {
+			case <-time.After(delay):
+				_, _ = p.GetApi()
+				// f5osLogger.Info("[schedule]", "RequestGetApi ", hclog.Fmt("%+v", string(resp)))
+			case <-stop:
+				return
+			}
+		}
+	}()
+	return stop
+}
+
+func (p *F5os) CreateTenantAndGetApi(tenantObj *F5ReqTenants, timeOut int) ([]byte, error) {
+	// create a channel to run the CreateTenant function
+	chan1 := make(chan []byte)
+	err1 := make(chan error)
+	// create a channel to run the GetApi function
+	chan2 := make(chan []byte)
+	err2 := make(chan error)
+
+	go func() {
+		resp, err := p.CreateTenant(tenantObj, timeOut)
+		chan1 <- resp
+		err1 <- err
+	}()
+	go func() {
+		for {
+			resp, err := p.GetApi()
+			f5osLogger.Info("[CreateTenantAndGetApi]", "RequestGetApi ", hclog.Fmt("%+v", string(resp)))
+			time.Sleep(15 * time.Second)
+			chan2 <- resp
+			err2 <- err
+		}
+	}()
+	if <-err1 != nil {
+		return <-chan1, <-err1
+	}
+	if <-err2 == nil {
+		f5osLogger.Info("[CreateTenantAndGetApi]", "RequestGetApi-Out", hclog.Fmt("%+v", <-chan2))
+	}
+	return <-chan1, <-err1
+}
+
 func (p *F5os) CreateTenant(tenantObj *F5ReqTenants, timeOut int) ([]byte, error) {
-	url := uriTenant
-	f5osLogger.Info("[CreateTenant]", "Request path", hclog.Fmt("%+v", url))
+	// url := uriTenant
+	f5osLogger.Info("[CreateTenant]", "Request path", hclog.Fmt("%+v", uriTenant))
 	byteBody, err := json.Marshal(tenantObj)
 	if err != nil {
 		return byteBody, err
 	}
 	f5osLogger.Info("[CreateTenant]", "Body", hclog.Fmt("%+v", string(byteBody)))
-	respData, err := p.PostRequest(uriTenant, byteBody)
+	// stop := p.schedule(15 * time.Second)
+	respData, err := p.PostTenantRequest(uriTenant, byteBody)
 	if err != nil {
+		// stop <- true
 		return respData, err
 	}
 	f5osLogger.Info("[CreateTenant]", "Resp: ", hclog.Fmt("%+v", string(respData)))
@@ -254,27 +364,50 @@ func (p *F5os) CreateTenant(tenantObj *F5ReqTenants, timeOut int) ([]byte, error
 	for {
 		check, err := p.tenantWait(tenantObj.F5TenantsTenant[0].Name, tenantObj.F5TenantsTenant[0].Config.RunningState)
 		if err != nil {
+			if err.Error() == "tenant status not found" {
+				time.Sleep(30 * time.Second)
+				t1 = time.Now()
+				continue
+			}
+			// stop <- true
 			return []byte(""), err
 		}
 		t2 := time.Now()
 		timeDiff := t2.Sub(t1)
+		f5osLogger.Info("[CreateTenant]", "timeDiff: ", hclog.Fmt("%+v", timeDiff))
 		if timeDiff.Seconds() > float64(timeOut) {
-			return []byte(""), fmt.Errorf("tenant deployment still in In Progress with Timeout Period, please increase timeout")
+			tenantMap, _ := p.getTenantDeployStatus(tenantObj.F5TenantsTenant[0].Name)
+			tenantResp, _ := json.Marshal(tenantMap)
+			tenantStatus := tenantMap["f5-tenants:state"].(map[string]interface{})["status"].(string)
+			errorNew := struct {
+				Status  string          `json:"status"`
+				Message string          `json:"message"`
+				Details json.RawMessage `json:"details"`
+			}{
+				Status:  "200 status OK",
+				Message: fmt.Sprintf("tenant deployment status is still in (%+v) within in %d seconds timeout period", tenantStatus, timeOut),
+				Details: json.RawMessage(string(tenantResp)),
+			}
+			jsonData, _ := json.Marshal(errorNew)
+			// stop <- true
+			return []byte(""), fmt.Errorf("%+v", string(jsonData))
+			//return []byte(""), fmt.Errorf("[TF-100]tenant deployment still in In Progress with in Timeout Period, please increase timeout")
 		}
 		if check {
-			time.Sleep(20 * time.Second)
+			time.Sleep(80 * time.Second)
 			continue
 		} else {
 			time.Sleep(20 * time.Second)
+			// stop <- true
 			return []byte("Tenant Deployment Success"), nil
 		}
 	}
-	return []byte("Tenant Deployment Success"), nil
+	// return []byte("Tenant Deployment Success"), nil
 }
 
 func (p *F5os) UpdateTenant(tenantObj *F5ReqTenantsPatch, timeOut int) ([]byte, error) {
-	url := fmt.Sprintf("%s", uriTenant)
-	f5osLogger.Info("[UpdateTenant]", "Request path", hclog.Fmt("%+v", url))
+	// url := fmt.Sprintf("%s", uriTenant)
+	f5osLogger.Info("[UpdateTenant]", "Request path", hclog.Fmt("%+v", uriTenant))
 	byteBody, err := json.Marshal(tenantObj)
 	if err != nil {
 		return byteBody, err
@@ -289,6 +422,11 @@ func (p *F5os) UpdateTenant(tenantObj *F5ReqTenantsPatch, timeOut int) ([]byte, 
 	for {
 		check, err := p.tenantWait(tenantObj.F5TenantsTenants.Tenant[0].Name, tenantObj.F5TenantsTenants.Tenant[0].Config.RunningState)
 		if err != nil {
+			if err.Error() == "tenant status not found" {
+				time.Sleep(30 * time.Second)
+				t1 = time.Now()
+				continue
+			}
 			return []byte(""), err
 		}
 		t2 := time.Now()
@@ -304,7 +442,7 @@ func (p *F5os) UpdateTenant(tenantObj *F5ReqTenantsPatch, timeOut int) ([]byte, 
 			return []byte("Tenant Deployment Success"), nil
 		}
 	}
-	return []byte("Tenant Deployment Success"), nil
+	// return []byte("Tenant Deployment Success"), nil
 }
 
 func (p *F5os) GetTenant(tenantName string) (*F5RespTenants, error) {
@@ -312,26 +450,77 @@ func (p *F5os) GetTenant(tenantName string) (*F5RespTenants, error) {
 	url := fmt.Sprintf("%s%s", uriTenant, tenantNameurl)
 	f5osLogger.Info("[GetTenant]", "Request path", hclog.Fmt("%+v", url))
 	tenantStatus := &F5RespTenants{}
-	byteData, err := p.GetRequest(url)
+	byteData, err := p.GetTenantRequest(url)
 	if err != nil {
-		return nil, err
+		errorNew := struct {
+			Status  string          `json:"status"`
+			Message string          `json:"message"`
+			Details json.RawMessage `json:"details"`
+		}{
+			Status:  "404 Not Found",
+			Message: fmt.Sprintf("Tenant (%s) not found", tenantName),
+			Details: json.RawMessage(err.Error()),
+		}
+		jsonData, _ := json.Marshal(errorNew)
+		return nil, fmt.Errorf("%+v", string(jsonData))
+		// return nil, err
 	}
 	f5osLogger.Info("[GetTenant]", "Tenant Info:", hclog.Fmt("%+v", string(byteData)))
 	json.Unmarshal(byteData, tenantStatus)
 	if len(tenantStatus.F5TenantsTenant) == 0 {
-		return nil, fmt.Errorf("GetTenant failed with :%+v", string(byteData))
+		errorNew := struct {
+			Status  string          `json:"status"`
+			Message string          `json:"message"`
+			Details json.RawMessage `json:"details"`
+		}{
+			Status:  "404 Not Found",
+			Message: fmt.Sprintf("Tenant (%s) not found", tenantName),
+			Details: json.RawMessage(string(byteData)),
+		}
+		jsonData, _ := json.Marshal(errorNew)
+		return nil, fmt.Errorf("%+v", string(jsonData))
+		// return nil, fmt.Errorf("GetTenant failed with :%+v", string(byteData))
 	}
-	f5osLogger.Info("[GetTenant]", "Tenant Struct:", hclog.Fmt("%+v", tenantStatus))
+	// f5osLogger.Info("[GetTenant]", "Instances Length:", hclog.Fmt("%+v", len(tenantStatus.F5TenantsTenant[0].State.Instances.Instance)))
 	return tenantStatus, nil
+}
+
+func (p *F5os) CheckTenantnotexist(tenantName string) bool {
+	tenantNameurl := fmt.Sprintf("/tenant=%s", tenantName)
+	url := fmt.Sprintf("%s%s", uriTenant, tenantNameurl)
+	f5osLogger.Info("[CheckTenantnotexist]", "Request path", hclog.Fmt("%+v", url))
+	byteData, err := p.GetRequest(url)
+	if err != nil {
+		return false
+	}
+	var tenantStatus map[string]interface{}
+	// {
+	// 	"ietf-restconf:errors": {
+	// 		"error": [
+	// 			{
+	// 				"error-type": "application",
+	// 				"error-tag": "invalid-value",
+	// 				"error-message": "uri keypath not found"
+	// 			}
+	// 		]
+	// 	}
+	// }
+	json.Unmarshal(byteData, &tenantStatus)
+	// check error-message
+	f5osLogger.Info("[CheckTenantnotexist]", "Tenant", hclog.Fmt("%+v uri result :%+v", tenantName, tenantStatus["ietf-restconf:errors"].(map[string]interface{})["error"].([]interface{})[0].(map[string]interface{})["error-message"].(string)))
+	return tenantStatus["ietf-restconf:errors"].(map[string]interface{})["error"].([]interface{})[0].(map[string]interface{})["error-message"].(string) == "uri keypath not found"
 }
 
 func (p *F5os) DeleteTenant(tenantName string) error {
 	url := fmt.Sprintf("%s%s%s/tenant=%s", p.Host, p.UriRoot, uriTenant, tenantName)
 	f5osLogger.Info("[DeleteTenant]", "Request path", hclog.Fmt("%+v", url))
-	_, err := p.doRequest("DELETE", url, []byte(""))
+	_, err := p.doTenantRequest("DELETE", url, []byte(""))
 	if err != nil {
 		return err
 	}
+	f5osLogger.Debug("[DeleteTenant]", "wait for 50 sec", hclog.Fmt("%d", 10))
+	time.Sleep(50 * time.Second)
+	p.CheckTenantnotexist(tenantName)
 	return nil
 }
 func (p *F5os) tenantWait(tenantName, runningState string) (bool, error) {
@@ -340,9 +529,11 @@ func (p *F5os) tenantWait(tenantName, runningState string) (bool, error) {
 		return true, err
 	}
 	if tenantMap["f5-tenants:state"].(map[string]interface{})["status"] == nil {
-		return true, nil
+		return true, fmt.Errorf("tenant status not found")
 	}
 	tenantStatus := tenantMap["f5-tenants:state"].(map[string]interface{})["status"].(string)
+	f5osLogger.Info("[tenantWait]", "tenantName:", hclog.Fmt("%+v", tenantName))
+	f5osLogger.Info("[tenantWait]", "f5-tenants:state", hclog.Fmt("%+v", tenantStatus))
 	if strings.Contains(tenantStatus, "Running") && runningState == "deployed" {
 		return false, nil
 	}
@@ -353,8 +544,20 @@ func (p *F5os) tenantWait(tenantName, runningState string) (bool, error) {
 		return true, nil
 	}
 	if strings.Contains(tenantStatus, "Pending") {
+		// map[instance:[map[creation-time: instance-id:2 node:2 phase:Insufficient slots to deploy tenant pod-name:test-tenant22-2 ready-time: status:Tenant deployment will be processed when the slot available in partition]]]
+		jsonDataold, _ := json.Marshal(tenantMap["f5-tenants:state"].(map[string]interface{})["instances"].(map[string]interface{})["instance"].([]interface{})[0])
 		if tenantMap["f5-tenants:state"].(map[string]interface{})["instances"] != nil {
-			return false, fmt.Errorf("%v", tenantMap["f5-tenants:state"].(map[string]interface{})["instances"])
+			errorNew := struct {
+				Status  string          `json:"status"`
+				Message string          `json:"message"`
+				Details json.RawMessage `json:"details"`
+			}{
+				Status:  "Tenant Deployment Pending",
+				Message: tenantMap["f5-tenants:state"].(map[string]interface{})["instances"].(map[string]interface{})["instance"].([]interface{})[0].(map[string]interface{})["phase"].(string),
+				Details: json.RawMessage(string(jsonDataold)),
+			}
+			jsonData, _ := json.Marshal(errorNew)
+			return false, fmt.Errorf("%v", string(jsonData))
 		}
 	}
 	return true, nil
@@ -363,7 +566,7 @@ func (p *F5os) getTenantDeployStatus(tenantName string) (map[string]interface{},
 	url := fmt.Sprintf("%s/tenant=%s/state", uriTenant, tenantName)
 	f5osLogger.Info("[getTenantDeployStatus]", "Request path", hclog.Fmt("%+v", url))
 	var ss map[string]interface{}
-	byteData, err := p.GetRequest(url)
+	byteData, err := p.GetTenantRequest(url)
 	if err != nil {
 		return nil, err
 	}
