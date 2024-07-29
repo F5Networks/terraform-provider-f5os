@@ -78,15 +78,17 @@ type F5os struct {
 	PlatformVersion string
 	UriRoot         string
 }
+type requestError struct {
+	ErrorType    string `json:"error-type,omitempty"`
+	ErrorTag     string `json:"error-tag,omitempty"`
+	ErrorPath    string `json:"error-path,omitempty"`
+	ErrorMessage string `json:"error-message,omitempty"`
+}
+
 type F5osError struct {
 	IetfRestconfErrors struct {
-		Error []struct {
-			ErrorType    string `json:"error-type"`
-			ErrorTag     string `json:"error-tag"`
-			ErrorPath    string `json:"error-path"`
-			ErrorMessage string `json:"error-message"`
-		} `json:"error"`
-	} `json:"ietf-restconf:errors"`
+		Error []requestError `json:"error,omitempty"`
+	} `json:"ietf-restconf:errors,omitempty"`
 }
 
 // Upload contains information about a file upload status
@@ -167,7 +169,7 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 		f5osObj.ConfigOptions = defaultConfigOptions
 	}
 	tr := &http.Transport{}
-	f5osLogger.Info("[NewSession]", "DisableSSLVerify", hclog.Fmt("%+v", f5osObj.DisableSSLVerify))
+	// f5osLogger.Info("[NewSession]", "DisableSSLVerify", hclog.Fmt("%+v", f5osObj.DisableSSLVerify))
 	tr.TLSClientConfig = &tls.Config{
 		InsecureSkipVerify: f5osObj.DisableSSLVerify,
 	}
@@ -215,9 +217,22 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	}
 	defer res.Body.Close()
 	respData, err := io.ReadAll(res.Body)
-	f5osLogger.Debug("[NewSession]", "Status Code:", hclog.Fmt("%+v", res.StatusCode))
+	f5osLogger.Info("[NewSession]", "Status Code:", hclog.Fmt("%+v", res.StatusCode))
 	if res.StatusCode == 401 {
-		return nil, fmt.Errorf("%+v with error:%+v", res.Status, string(respData))
+		mapData := make(map[string]interface{})
+		json.Unmarshal(respData, &mapData)
+		errorNew := struct {
+			Status  string          `json:"status"`
+			Message string          `json:"message"`
+			Details json.RawMessage `json:"details"`
+		}{
+			Status:  res.Status,
+			Message: mapData["ietf-restconf:errors"].(map[string]interface{})["error"].([]interface{})[0].(map[string]interface{})["error-tag"].(string),
+			Details: json.RawMessage(string(respData)),
+		}
+		jsonData, _ := json.Marshal(errorNew)
+		return nil, fmt.Errorf("%+v", string(jsonData))
+		//return nil, fmt.Errorf("\"message\": \"%+v\", \"deatils\": \"%+v\"", res.Status, string(respData))
 	}
 	if err != nil {
 		return nil, err
@@ -288,6 +303,73 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 	return nil, nil
 }
 
+func (p *F5os) doTenantRequest(op, path string, body []byte) ([]byte, error) {
+	f5osLogger.Debug("[doTenantRequest]", "Request path", hclog.Fmt("%+v", path))
+	if len(body) > 0 {
+		f5osLogger.Debug("[doTenantRequest]", "Request body", hclog.Fmt("%+v", string(body)))
+	}
+	req, err := http.NewRequest(op, path, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Auth-Token", p.Token)
+	req.Header.Set("Content-Type", contentTypeHeader)
+	client := &http.Client{
+		Transport: p.Transport,
+		Timeout:   p.ConfigOptions.APICallTimeout,
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	f5osLogger.Info("[doTenantRequest]", "Resp CODE", hclog.Fmt("%+v", resp.StatusCode))
+	if resp.StatusCode == 200 || resp.StatusCode == 201 {
+		return io.ReadAll(resp.Body)
+	}
+	if resp.StatusCode >= 400 {
+		respData, _ := io.ReadAll(resp.Body)
+		mapData := make(map[string]interface{})
+		json.Unmarshal(respData, &mapData)
+		errMsg := ""
+		if val, ok := mapData["ietf-restconf:errors"]; ok {
+			if val.(map[string]interface{})["error"].([]interface{})[0].(map[string]interface{})["error-message"] != nil {
+				errMsg = val.(map[string]interface{})["error"].([]interface{})[0].(map[string]interface{})["error-message"].(string)
+			}
+		}
+		f5osLogger.Info("[doTenantRequest]", "Resp Msg", hclog.Fmt("%+v", errMsg))
+		json.Unmarshal(respData, &mapData)
+		errorNew := struct {
+			Status  string          `json:"status"`
+			Message string          `json:"message"`
+			Details json.RawMessage `json:"details"`
+		}{
+			Status:  resp.Status,
+			Message: errMsg,
+			Details: json.RawMessage(string(respData)),
+		}
+		jsonData, _ := json.Marshal(errorNew)
+		return nil, fmt.Errorf("%+v", string(jsonData))
+
+		// byteData, _ := io.ReadAll(resp.Body)
+		// var errorNew F5osError
+		// json.Unmarshal(byteData, &errorNew)
+		// return nil, errorNew.Error()
+
+		// byteData, _ := io.ReadAll(resp.Body)
+		// errorNew := struct {
+		// 	Message string          `json:"message"`
+		// 	Details json.RawMessage `json:"details"`
+		// }{
+		// 	Message: resp.Status,
+		// 	Details: json.RawMessage(string(byteData)),
+		// }
+		// jsonData, _ := json.Marshal(errorNew)
+		// return nil, fmt.Errorf("%+v", string(jsonData))
+	}
+	return nil, nil
+}
+
 func (p *F5os) SendTeem(teemDataInput interface{}) error {
 	recordData := &RawTelemetry{}
 	teemData := teemDataInput.(map[string]interface{})["teemData"]
@@ -325,6 +407,12 @@ func (p *F5os) GetRequest(path string) ([]byte, error) {
 	return p.doRequest("GET", url, nil)
 }
 
+func (p *F5os) GetTenantRequest(path string) ([]byte, error) {
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
+	f5osLogger.Info("[GetTenantRequest]", "Request path", hclog.Fmt("%+v", url))
+	return p.doTenantRequest("GET", url, nil)
+}
+
 func (p *F5os) DeleteRequest(path string) error {
 	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	f5osLogger.Debug("[DeleteRequest]", "Request path", hclog.Fmt("%+v", url))
@@ -346,6 +434,13 @@ func (p *F5os) PatchRequest(path string, body []byte) ([]byte, error) {
 	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
 	f5osLogger.Debug("[PatchRequest]", "Request path", hclog.Fmt("%+v", url))
 	return p.doRequest("PATCH", url, body)
+}
+
+func (p *F5os) PostTenantRequest(path string, body []byte) ([]byte, error) {
+	url := fmt.Sprintf("%s%s%s", p.Host, p.UriRoot, path)
+	f5osLogger.Debug("[PostTenantRequest]", "Request path", hclog.Fmt("%+v", url))
+	// return p.doTenantRequest("POST", url, body)
+	return p.doTenantRequest("POST", url, body)
 }
 
 func (p *F5os) PostRequest(path string, body []byte) ([]byte, error) {
@@ -886,6 +981,7 @@ func (p *F5os) setPlatformType() ([]byte, error) {
 					//check state key present in above response map object
 					if val.(map[string]interface{})["state"].(map[string]interface{})["description"] != nil {
 						p.PlatformType = "rSeries Platform"
+						p.PlatformType = val.(map[string]interface{})["state"].(map[string]interface{})["description"].(string)
 						uriPlatformVersion := "/openconfig-system:system/f5-system-image:image/state/install"
 						p.setPlatformVersion(uriPlatformVersion)
 					}

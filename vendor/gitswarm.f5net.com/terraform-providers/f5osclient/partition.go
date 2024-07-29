@@ -304,7 +304,7 @@ func (p *F5os) VlanConfig(vlanConfig *F5ReqVlansConfig) ([]byte, error) {
 func (p *F5os) GetVlan(vlanId int) (*F5RespVlan, error) {
 	url := fmt.Sprintf("%s/vlan=%d", uriVlan, vlanId)
 	f5osVlan := &F5RespVlan{}
-	byteData, err := p.GetRequest(url)
+	byteData, err := p.GetTenantRequest(url)
 	if err != nil {
 		return nil, err
 	}

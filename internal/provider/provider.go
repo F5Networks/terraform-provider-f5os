@@ -34,7 +34,6 @@ type F5osProviderModel struct {
 	Port             types.Int64  `tfsdk:"port"`
 	TeemDisable      types.Bool   `tfsdk:"teem_disable"`
 	DisableSslVerify types.Bool   `tfsdk:"disable_tls_verify"`
-	// TrustedCertpath  types.String `tfsdk:"trusted_cert_path"`
 }
 type TeemData struct {
 	ResourceName      string
@@ -74,10 +73,6 @@ func (p *F5osProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 				MarkdownDescription: "Port Number to be used to make API calls to HOST",
 				Optional:            true,
 			},
-			// "trusted_cert_path": schema.StringAttribute{
-			// 	MarkdownDescription: "Valid Trusted CA Certificate path",
-			// 	Optional:            true,
-			// },
 			"disable_tls_verify": schema.BoolAttribute{
 				MarkdownDescription: "`disable_tls_verify` controls whether a client verifies the server's certificate chain and host name. default it is set to `true`. If `disable_tls_verify` is true, crypto/tls accepts any certificate presented by the server and any host name in that certificate. In this mode, TLS is susceptible to machine-in-the-middle attacks unless custom verification is used.\ncan be provided by `DISABLE_TLS_VERIFY` environment variable.\n\n~> **NOTE** If it is set to `false`, certificate/ca certificates should be added to `trusted store` of host where we are running this provider.",
 				Optional:            true,
@@ -181,12 +176,7 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	}
 	client, err := f5ossdk.NewSession(f5osConfig)
 	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Create f5os Client",
-			"An unexpected error occurred when creating the f5os client connection."+
-				"If the error is not clear, please contact the provider developers.\n\n"+
-				"f5os Client Error: "+err.Error(),
-		)
+		resp.Diagnostics.AddError(fmt.Sprintf("%+v", err.Error()), "")
 		return
 	}
 	client.Teem = teemDisable
