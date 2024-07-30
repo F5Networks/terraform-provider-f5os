@@ -145,9 +145,15 @@ func TestUnitTenantDeployResourceUnitTC1(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		if r.Method == "GET" && (count == 0 || count == 1 || count == 2) {
 			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_config.json"))
-		}
-		if r.Method == "GET" && (count == 3 || count == 4 || count == 5) {
+		} else if r.Method == "GET" && (count == 3 || count == 4 || count == 5) {
 			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_update_config.json"))
+		} else if r.Method == "GET" {
+			_, _ = fmt.Fprintf(w, `
+			{"ietf-restconf:errors": {"error": [{
+	 				"error-type": "application",
+	 				"error-tag": "invalid-value",
+	 				"error-message": "uri keypath not found"
+	 			}]}}`)
 		}
 		count++
 	})
@@ -197,6 +203,21 @@ func TestUnitTenantDeployResourceUnitTC2(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_r4k_state.json"))
 	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{
+	   "f5-tenant-images:image": [
+	       {
+	           "name": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+	           "in-use": false,
+	           "type": "vm-image",
+	           "status": "replicated",
+	           "date": "2023-8-17",
+	           "size": "2.27 GB"
+	       }
+	   ]
+	}`)
+	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = fmt.Fprintf(w, ``)
@@ -205,9 +226,20 @@ func TestUnitTenantDeployResourceUnitTC2(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_r4k_get_status.json"))
 	})
+	var count = 0
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_r4k_config.json"))
+		if r.Method == "GET" && (count == 0 || count == 1 || count == 2) {
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_r4k_config.json"))
+		} else if r.Method == "GET" {
+			_, _ = fmt.Fprintf(w, `
+			{"ietf-restconf:errors": {"error": [{
+	 				"error-type": "application",
+	 				"error-tag": "invalid-value",
+	 				"error-message": "uri keypath not found"
+	 			}]}}`)
+		}
+		count++
 	})
 
 	defer teardown()
@@ -250,6 +282,21 @@ func TestUnitTenantDeployResourceUnitTC3(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 		_, _ = fmt.Fprintf(w, ``)
 	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{
+	   "f5-tenant-images:image": [
+	       {
+	           "name": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+	           "in-use": false,
+	           "type": "vm-image",
+	           "status": "replicated",
+	           "date": "2023-8-17",
+	           "size": "2.27 GB"
+	       }
+	   ]
+	}`)
+	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = fmt.Fprintf(w, ``)
@@ -268,7 +315,7 @@ func TestUnitTenantDeployResourceUnitTC3(t *testing.T) {
 			// Read testing
 			{
 				Config:      testAccTenantDeployResourceTC3Config,
-				ExpectError: regexp.MustCompile("Tenant Deploy failed, got error"),
+				ExpectError: regexp.MustCompile("Tenant Deployment Pending"),
 			},
 		},
 	})

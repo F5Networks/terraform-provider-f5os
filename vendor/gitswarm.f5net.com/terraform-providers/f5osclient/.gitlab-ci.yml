@@ -18,12 +18,38 @@ stages:
   - test
   - report
 
-unit_test:
+# unit_test:
+#   stage: test
+#   before_script:
+#     - go mod download
+#   script:
+#     - go test -coverprofile=coverage_report $(go list ./... | grep -v /vendor/)
+#     - go tool cover -html=coverage_report -o coverage_report.html
+#   artifacts:
+#     paths:
+#       - "$CI_PROJECT_DIR/coverage_report.html"
+#     expire_in: "1 days"
+#   coverage: '/coverage: \d+\.\d+\% of statements/'
+
+func_test1:
   stage: test
   before_script:
     - go mod download
   script:
-    - go test -coverprofile=coverage_report $(go list ./... | grep -v /vendor/)
+    - go test -coverprofile=coverage_report -v -timeout 120m -run=TestDeployTenantTC3
+    - go tool cover -html=coverage_report -o coverage_report.html
+  artifacts:
+    paths:
+      - "$CI_PROJECT_DIR/coverage_report.html"
+    expire_in: "1 days"
+  coverage: '/coverage: \d+\.\d+\% of statements/'
+
+func_test2:
+  stage: test
+  before_script:
+    - go mod download
+  script:
+    - go test -coverprofile=coverage_report -v -timeout 120m -run=TestDeployTenantTC4
     - go tool cover -html=coverage_report -o coverage_report.html
   artifacts:
     paths:
@@ -34,7 +60,9 @@ unit_test:
 pages:
   stage: report
   dependencies:
-    - unit_test
+    # - unit_test
+    - func_test1
+    - func_test2
   script:
     - echo 'cleaning old pages'
     - rm -rf public

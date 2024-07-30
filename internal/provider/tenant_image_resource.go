@@ -160,13 +160,14 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 		if data.UploadFromPath.IsNull() {
 			respByte, err := r.importImage(ctx, data)
 			if err != nil {
-				resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Unable to Import Image, got error: %s", err))
+				resp.Diagnostics.AddError("[F5OS]Unable to Import Image:", fmt.Sprintf("%s", err))
 				return
 			}
 			if string(respByte) != "Import Image Transfer Success" {
-				resp.Diagnostics.AddError("Client Error", "Import Image failed")
+				resp.Diagnostics.AddError("[F5OS]", "Import Image failed")
 				return
 			}
+
 		} else {
 			respByte, err := r.uploadImage(ctx, data)
 			if err != nil {

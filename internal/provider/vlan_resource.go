@@ -129,13 +129,13 @@ func (r *VlanResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	tflog.Info(ctx, fmt.Sprintf("[READ] Vlan :%+v", data.Id.ValueString()))
 	vlanId, err := strconv.Atoi(data.Id.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("String to Int conversion failed, got error: %s", err))
+		resp.Diagnostics.AddError(fmt.Sprintf("[F5OS] %v", err), fmt.Sprintf("String to Int conversion failed for ID:%s", data.Id.ValueString()))
 		return
 	}
 	tflog.Info(ctx, fmt.Sprintf("[READ] Vlan :%+v", vlanId))
 	partData, err := r.client.GetVlan(vlanId)
 	if err != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get Vlan, got error: %s", err))
+		resp.Diagnostics.AddError(fmt.Sprintf("%v", err), fmt.Sprintf("Unable to Read/Get Vlan ID:%d", vlanId))
 		return
 	}
 	tflog.Debug(ctx, fmt.Sprintf("VlanResp :%+v", partData))
