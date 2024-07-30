@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -109,7 +111,6 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 				Validators: []validator.String{
 					stringvalidator.OneOf([]string{"one", "small", "medium", "large"}...),
 				},
-				// Default: stringdefault.StaticString("one"),
 			},
 			"dag_ipv6_prefix_length": schema.Int64Attribute{
 				MarkdownDescription: "Configuring DAG Global IPv6 Prefix Length,value Range from `1` to `128`.Default is `128`.",
@@ -227,9 +228,11 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 			return
 		}
 	}
+	stop := r.client.F5OsKeepAlive(15 * time.Second)
 	imageObj, err := r.client.GetImage(data.ImageName.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("Unable to Get Image Details", fmt.Sprintf("Error:%s", err))
+		stop <- true
+		resp.Diagnostics.AddError(fmt.Sprintf("%v", err), "")
 		return
 	}
 	var availableFlag = true
@@ -239,11 +242,12 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 		}
 	}
 	if !availableFlag {
-		resp.Diagnostics.AddError("Unable to Get Image Details", fmt.Sprintf("Get Image: %s failed with error:%s", data.ImageName.ValueString(), "not-present"))
+		stop <- true
+		resp.Diagnostics.AddError(fmt.Sprintf("%v", err), "")
 		return
 	}
 
-	tenantConfig := getTenantCreateConfig(ctx, req, resp)
+	tenantConfig := r.getTenantCreateConfig(ctx, req, resp)
 
 	if data.Type.ValueString() == "BIG-IP-Next" {
 		tenantConfig.F5TenantsTenant[0].Config.DeploymentFile = data.DeploymentFile.ValueString()
@@ -254,14 +258,20 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 	teemInfo := make(map[string]interface{})
 	teemInfo["teemData"] = r.teemData
 	r.client.Metadata = teemInfo
-	err = r.client.SendTeem(teemInfo)
-	if err != nil {
-		resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
-	}
+	_ = r.client.SendTeem(teemInfo)
+	// if err != nil {
+	// 	resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
+	// }
+	tflog.Info(ctx, fmt.Sprintf("Timeout :%+v", int(data.Timeout.ValueInt64())))
 	respByte, err := r.client.CreateTenant(tenantConfig, int(data.Timeout.ValueInt64()))
 	if err != nil {
-		resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Tenant Deploy failed, got error: %s", err))
-		_ = r.client.DeleteTenant(data.Name.ValueString())
+		resp.Diagnostics.AddError(fmt.Sprintf("%v", err.Error()), "")
+		if strings.Contains(err.Error(), "400 Bad Request") {
+			stop <- true
+			return
+		}
+		// _ = r.client.DeleteTenant(data.Name.ValueString())
+		stop <- true
 		return
 	}
 	tflog.Info(ctx, fmt.Sprintf("tenantConfig Response:%+v", string(respByte)))
@@ -271,9 +281,11 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 
 	respByte2, err := r.client.GetTenant(data.Name.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get Tenants, got error: %s", err))
+		stop <- true
+		resp.Diagnostics.AddError(fmt.Sprintf("%v", err.Error()), "")
 		return
 	}
+	stop <- true
 	tflog.Info(ctx, fmt.Sprintf("get tenantConfig :%+v", respByte2))
 	r.tenantResourceModeltoState(ctx, respByte2, data)
 	// mutex.Unlock()
@@ -292,11 +304,14 @@ func (r *TenantResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 	//respByte, err := r.client.GetTenant(data.Name.ValueString())
+	stop := r.client.F5OsKeepAlive(15 * time.Second)
 	respByte, err := r.client.GetTenant(data.Id.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get Tenants, got error: %s", err))
+		stop <- true
+		resp.Diagnostics.AddError(fmt.Sprintf("%v", err.Error()), "")
 		return
 	}
+	stop <- true
 	r.tenantResourceModeltoState(ctx, respByte, data)
 
 	// Save updated data into Terraform state
@@ -312,15 +327,17 @@ func (r *TenantResource) Update(ctx context.Context, req resource.UpdateRequest,
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	tenantConfig := getTenantUpdateConfig(ctx, req, resp)
+	tenantConfig := r.getTenantUpdateConfig(ctx, req, resp)
 
 	if data.Type.ValueString() == "BIG-IP-Next" {
 		tenantConfig.F5TenantsTenants.Tenant[0].Config.DeploymentFile = data.DeploymentFile.ValueString()
 	}
 	tflog.Info(ctx, fmt.Sprintf("[Update] tenantConfig :%+v", tenantConfig))
 	// mutex.Lock()
+	stop := r.client.F5OsKeepAlive(15 * time.Second)
 	respByte, err := r.client.UpdateTenant(tenantConfig, int(data.Timeout.ValueInt64()))
 	if err != nil {
+		stop <- true
 		resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Tenant Deploy failed, got error: %s", err))
 		return
 	}
@@ -328,9 +345,11 @@ func (r *TenantResource) Update(ctx context.Context, req resource.UpdateRequest,
 
 	respByte2, err := r.client.GetTenant(data.Name.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get Tenants, got error: %s", err))
+		stop <- true
+		resp.Diagnostics.AddError(fmt.Sprintf("%v", err.Error()), "")
 		return
 	}
+	stop <- true
 	r.tenantResourceModeltoState(ctx, respByte2, data)
 	tflog.Info(ctx, fmt.Sprintf("Updated State:%+v", data))
 	// mutex.Unlock()
@@ -347,10 +366,11 @@ func (r *TenantResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
+	stop := r.client.F5OsKeepAlive(15 * time.Second)
 	err := r.client.DeleteTenant(data.Name.ValueString())
+	stop <- true
 	if err != nil {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Delete Imported Image, got error: %s", err))
+		resp.Diagnostics.AddError(fmt.Sprintf("%v", err.Error()), "")
 		return
 	}
 }
@@ -395,7 +415,7 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	data.Cryptos = types.StringValue(respData.F5TenantsTenant[0].State.Cryptos)
 }
 
-func getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.F5ReqTenants {
+func (r *TenantResource) getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.F5ReqTenants {
 	var data *TenantResourceModel
 
 	// Read Terraform plan data into the model
@@ -418,11 +438,21 @@ func getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp
 	// 	tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
 	// }
 	// tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
-	if data.Memory.IsNull() {
-		tenantSubbj.Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
-	} else {
+	if !data.Memory.IsNull() && !data.Memory.IsUnknown() {
 		tenantSubbj.Config.Memory = int(data.Memory.ValueInt64())
+	} else {
+		tflog.Info(ctx, fmt.Sprintf("r.client.PlatformType:%+v", r.client.PlatformType))
+		if r.client.PlatformType == "r2800" || r.client.PlatformType == "r2000" || r.client.PlatformType == "r4000" || r.client.PlatformType == "r4800" {
+			tenantSubbj.Config.Memory = 3 * 1024 * int(data.CpuCores.ValueInt64())
+		} else {
+			tenantSubbj.Config.Memory = (3.5 * 1024 * int(data.CpuCores.ValueInt64())) + (512)
+		}
 	}
+
+	// tenantSubbj.Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
+	// } else {
+
+	// }
 	data.Vlans.ElementsAs(ctx, &tenantSubbj.Config.Vlans, false)
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.RunningState = data.RunningState.ValueString()
@@ -435,7 +465,7 @@ func getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp
 	return tenantConfig
 }
 
-func getTenantUpdateConfig(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) *f5ossdk.F5ReqTenantsPatch {
+func (r *TenantResource) getTenantUpdateConfig(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) *f5ossdk.F5ReqTenantsPatch {
 	var data *TenantResourceModel
 
 	// Read Terraform plan data into the model
@@ -451,13 +481,15 @@ func getTenantUpdateConfig(ctx context.Context, req resource.UpdateRequest, resp
 	tenantSubbj.Config.VcpuCoresPerNode = int(data.CpuCores.ValueInt64())
 	tenantSubbj.Config.DagIpv6PrefixLength = int(data.DagIpv6prefixLength.ValueInt64())
 	tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
-	if data.Memory.IsNull() {
-		tenantSubbj.Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
-	} else {
+	if !data.Memory.IsNull() && !data.Memory.IsUnknown() {
 		tenantSubbj.Config.Memory = int(data.Memory.ValueInt64())
+	} else {
+		if r.client.PlatformType == "r2800" || r.client.PlatformType == "r2000" || r.client.PlatformType == "r4000" || r.client.PlatformType == "r4800" {
+			tenantSubbj.Config.Memory = 3 * 1024 * int(data.CpuCores.ValueInt64())
+		} else {
+			tenantSubbj.Config.Memory = (3.5 * 1024 * int(data.CpuCores.ValueInt64())) + (512)
+		}
 	}
-	//tenantSubbj.Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
-	//tenantSubbj.Config.Memory = int(data.Memory.ValueInt64())
 	data.Nodes.ElementsAs(ctx, &tenantSubbj.Config.Nodes, false)
 	data.Vlans.ElementsAs(ctx, &tenantSubbj.Config.Vlans, false)
 	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
