@@ -262,6 +262,7 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 	// if err != nil {
 	// 	resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
 	// }
+	tflog.Info(ctx, fmt.Sprintf("Timeout :%+v", int(data.Timeout.ValueInt64())))
 	respByte, err := r.client.CreateTenant(tenantConfig, int(data.Timeout.ValueInt64()))
 	if err != nil {
 		resp.Diagnostics.AddError(fmt.Sprintf("%v", err.Error()), "")
