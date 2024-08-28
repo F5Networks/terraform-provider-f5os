@@ -258,7 +258,7 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 	teemInfo := make(map[string]interface{})
 	teemInfo["teemData"] = r.teemData
 	r.client.Metadata = teemInfo
-	_ = r.client.SendTeem(teemInfo)
+	// _ = r.client.SendTeem(teemInfo)
 	// if err != nil {
 	// 	resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
 	// }
@@ -270,7 +270,11 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 			stop <- true
 			return
 		}
-		// _ = r.client.DeleteTenant(data.Name.ValueString())
+		if strings.Contains(err.Error(), "object already exists") {
+			stop <- true
+			return
+		}
+		_ = r.client.DeleteTenant(data.Name.ValueString())
 		stop <- true
 		return
 	}
