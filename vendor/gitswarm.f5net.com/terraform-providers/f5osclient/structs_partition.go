@@ -357,3 +357,22 @@ type F5RespInterface struct {
 		} `json:"config,omitempty"`
 	} `json:"openconfig-if-ethernet:ethernet,omitempty"`
 }
+
+type TlsCertKey struct {
+	Name                   string `json:"f5-openconfig-aaa-tls:name,omitempty"`
+	SubjectAlternativeName string `json:"f5-openconfig-aaa-tls:san,omitempty"`
+	DaysValid              int64  `json:"f5-openconfig-aaa-tls:days-valid,omitempty"`
+	Email                  string `json:"f5-openconfig-aaa-tls:email,omitempty"`
+	City                   string `json:"f5-openconfig-aaa-tls:city,omitempty"`
+	Province               string `json:"f5-openconfig-aaa-tls:region,omitempty"`
+	Country                string `json:"f5-openconfig-aaa-tls:country,omitempty"`
+	Organization           string `json:"f5-openconfig-aaa-tls:organization,omitempty"`
+	Unit                   string `json:"f5-openconfig-aaa-tls:unit,omitempty"`
+	Version                int64  `json:"f5-openconfig-aaa-tls:version,omitempty"`
+	KeyType                string `json:"f5-openconfig-aaa-tls:key-type,omitempty"`
+	KeySize                int64  `json:"f5-openconfig-aaa-tls:key-size,omitempty"`
+	KeyCurve               string `json:"f5-openconfig-aaa-tls:curve-name,omitempty"`
+	KeyPassphrase          string `json:"f5-openconfig-aaa-tls:key-passphrase,omitempty"`
+	ConfirmKeyPassphrase   string `json:"f5-openconfig-aaa-tls:confirm-key-passphrase,omitempty"`
+	StoreTls               bool   `json:"f5-openconfig-aaa-tls:store-tls,omitempty"`
+}
