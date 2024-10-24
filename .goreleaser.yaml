@@ -1,9 +1,20 @@
-# Visit https://goreleaser.com for documentation on how to customize this
-# behavior.
-#before:
-#  hooks:
-#    # this is just an example and not a requirement for provider building/publishing
-#    - go mod tidy
+# This is an example .goreleaser.yml file with some sensible defaults.
+# Make sure to check the documentation at https://goreleaser.com
+
+# The lines below are called `modelines`. See `:help modeline`
+# Feel free to remove those if you don't want/need to use them.
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj
+
+version: 2
+
+# before:
+#   hooks:
+#     # You may remove this if you don't use go modules.
+#     - go mod tidy
+#     # you may remove this if you don't need go generate
+#     - go generate ./...
+
 builds:
   - env:
       # goreleaser does not work with CGO, it could also complicate
@@ -29,6 +40,7 @@ builds:
       - goos: darwin
         goarch: '386'
     binary: '{{ .ProjectName }}_v{{ .Version }}'
+
 archives:
   - format: zip
     name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
@@ -56,5 +68,6 @@ release:
       name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
   # If you want to manually examine the release before its live, uncomment this line:
   # draft: true
+
 changelog:
-  skip: true
+  sort: asc
