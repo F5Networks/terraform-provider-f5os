@@ -16,12 +16,13 @@ import (
 )
 
 const (
-	uriSlot      = "/f5-system-slot:slots/slot"
-	uriSlots     = "/f5-system-slot:slots"
-	uriPartition = "/f5-system-partition:partitions"
-	uriNodes     = "/f5-cluster:cluster/nodes/node"
-	uriVlan      = "/openconfig-vlan:vlans"
-	uriAuth      = "/openconfig-system:system/aaa"
+	uriSlot          = "/f5-system-slot:slots/slot"
+	uriSlots         = "/f5-system-slot:slots"
+	uriPartition     = "/f5-system-partition:partitions"
+	uriNodes         = "/f5-cluster:cluster/nodes/node"
+	uriVlan          = "/openconfig-vlan:vlans"
+	uriAuth          = "/openconfig-system:system/aaa"
+	uriCreateCertKey = "/openconfig-system:system/aaa/f5-openconfig-aaa-tls:tls/f5-openconfig-aaa-tls:create-self-signed-cert"
 )
 
 func (p *F5os) CreatePartition(partitionObj *F5ReqPartitions) ([]byte, error) {
@@ -358,4 +359,27 @@ func (p *F5os) InterfaceConfig(interfaceConfig *F5ReqOpenconfigInterface) ([]byt
 	}
 	f5osLogger.Debug("[InterfaceConfig]", "Resp: ", hclog.Fmt("%+v", string(respData)))
 	return byteBody, nil
+}
+
+func (p *F5os) CreateTlsCertKey(config *TlsCertKey) error {
+	f5osLogger.Debug("[CreateTlsCertKey]", "Request path", hclog.Fmt("%+v", uriCreateCertKey))
+	byteBody, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	f5osLogger.Debug("[CreateTlsCertKey]", "Body", hclog.Fmt("%+v", string(byteBody)))
+	_, err = p.PostRequest(uriCreateCertKey, byteBody)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *F5os) DeleteTlsCertKey(certKeyName string) error {
+	uri := "/openconfig-system:system/aaa/f5-openconfig-aaa-tls:tls"
+	f5osLogger.Debug("[DeleteTlsCertKey]", "Request path", hclog.Fmt("%+v", uri))
+
+	err := p.DeleteRequest(uri)
+
+	return err
 }
