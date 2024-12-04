@@ -70,13 +70,17 @@ type F5os struct {
 	Token     string // if set, will be used instead of User/Password
 	Transport *http.Transport
 	// UserAgent is an optional field that specifies the caller of this request.
-	UserAgent       string
-	Teem            bool
-	ConfigOptions   *ConfigOptions
-	PlatformType    string
-	Metadata        interface{}
-	PlatformVersion string
-	UriRoot         string
+	UserAgent        string
+	Teem             bool
+	ConfigOptions    *ConfigOptions
+	PlatformType     string
+	Metadata         interface{}
+	PlatformVersion  string
+	UriRoot          string
+	User             string
+	Password         string
+	DisableSSLVerify bool
+	Port             int
 }
 type requestError struct {
 	ErrorType    string `json:"error-type,omitempty"`
@@ -198,6 +202,11 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	f5osSession.Host = urlString
 	f5osSession.Transport = tr
 	f5osSession.ConfigOptions = f5osObj.ConfigOptions
+	f5osSession.User = f5osObj.User
+	f5osSession.Password = f5osObj.Password
+	f5osSession.DisableSSLVerify = f5osObj.DisableSSLVerify
+	f5osSession.Port = f5osObj.Port
+
 	client := &http.Client{
 		Transport: tr,
 	}
@@ -267,38 +276,50 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 	if len(body) > 0 {
 		f5osLogger.Debug("[doRequest]", "Request body", hclog.Fmt("%+v", string(body)))
 	}
-	req, err := http.NewRequest(op, path, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("X-Auth-Token", p.Token)
-	req.Header.Set("Content-Type", contentTypeHeader)
-	client := &http.Client{
-		Transport: p.Transport,
-		Timeout:   p.ConfigOptions.APICallTimeout,
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	f5osLogger.Debug("[doRequest]", "Resp CODE", hclog.Fmt("%+v", resp.StatusCode))
-	if resp.StatusCode == 200 || resp.StatusCode == 201 {
-		return io.ReadAll(resp.Body)
-	}
-	if resp.StatusCode == 404 {
-		// byteData, err := io.ReadAll(resp.Body)
-		// if err != nil {
-		// 	return nil, err
-		// }
-		// f5osLogger.Debug("[doRequest]", "Resp CODE", hclog.Fmt("%+v", string(byteData)))
-		return io.ReadAll(resp.Body)
-	}
-	if resp.StatusCode >= 400 {
-		byteData, _ := io.ReadAll(resp.Body)
-		var errorNew F5osError
-		json.Unmarshal(byteData, &errorNew)
-		return nil, errorNew.Error()
+
+	retries := 3
+	delay := 10 * time.Second
+	for i := 0; i < retries; i++ {
+
+		req, err := http.NewRequest(op, path, bytes.NewBuffer(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("X-Auth-Token", p.Token)
+		req.Header.Set("Content-Type", contentTypeHeader)
+		client := &http.Client{
+			Transport: p.Transport,
+			Timeout:   p.ConfigOptions.APICallTimeout,
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			if !strings.Contains(err.Error(), "context deadline exceeded") {
+				return nil, err
+			}
+		} else {
+			defer resp.Body.Close()
+			if resp.StatusCode == 200 || resp.StatusCode == 201 || resp.StatusCode == 204 || resp.StatusCode == 404 {
+				f5osLogger.Debug("[doRequest]", "Resp code :", hclog.Fmt("%+v", resp.StatusCode))
+				return io.ReadAll(resp.Body)
+			}
+			if resp.StatusCode == 401 && i != retries-1 {
+				var f5osObj = F5osConfig{Host: p.Host, User: p.User, Password: p.Password, Transport: p.Transport, UserAgent: p.UserAgent, Teem: p.Teem, ConfigOptions: p.ConfigOptions, DisableSSLVerify: p.DisableSSLVerify, Port: p.Port}
+				f5os, err := NewSession(&f5osObj)
+				if err != nil {
+					return nil, err
+				}
+				req.Header.Set("X-Auth-Token", f5os.Token)
+				req.Header.Set("Content-Type", contentTypeHeader)
+			}
+			if resp.StatusCode >= 400 && i == retries-1 {
+				byteData, _ := io.ReadAll(resp.Body)
+				var errorNew F5osError
+				json.Unmarshal(byteData, &errorNew)
+				return nil, errorNew.Error()
+			}
+		}
+		time.Sleep(delay)
 	}
 	return nil, nil
 }
