@@ -13,6 +13,27 @@ type F5ReqImageTenant struct {
 	Name string `json:"name"`
 }
 
+type F5IsoImagesInfo struct {
+	Images []F5IsoImageInfo `json:"f5-system-image:iso"`
+}
+
+type F5IsoImageInfo struct {
+	Version string `json:"version"`
+	Service string `json:"service"`
+	Os      string `json:"os"`
+}
+
+type F5TenantImagesInfo struct {
+	Images []F5TenantImageInfo `json:"f5-tenant-images:image"`
+}
+
+type F5TenantImageInfo struct {
+	F5RespTenantImageStatus
+	Type string `json:"type"`
+	Date string `json:"date"`
+	Size string `json:"size"`
+}
+
 type F5RespTenantImageStatus struct {
 	Name   string `json:"name,omitempty"`
 	InUse  bool   `json:"in-use"`
