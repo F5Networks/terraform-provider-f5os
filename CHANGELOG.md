@@ -1,3 +1,10 @@
-## 0.1.0 (Unreleased)
+## 1.5.0 (Unreleased)
 
-BACKWARDS INCOMPATIBILITIES / NOTES:
+BREAKING CHANGES:
+
+
+FEATURES:
+
+* **f5os_device_info:** New Data source added.
+
+IMPROVEMENTS:
