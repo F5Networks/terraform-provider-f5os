@@ -211,6 +211,7 @@ func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource
 func (p *F5osProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewImageInfoDataSource,
+		NewDeviceInfoDataSource,
 	}
 }
 
