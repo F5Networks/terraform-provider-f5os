@@ -484,6 +484,102 @@ func (p *F5os) GetInterface(intf string) (*F5RespOpenconfigInterface, error) {
 	return intFace, nil
 }
 
+func (p *F5os) GetInterfaceInfo() (F5RespOpenconfigInterface, error) {
+	var interfaces F5RespOpenconfigInterface
+
+	resp, err := p.GetRequest("/openconfig-interfaces:interfaces/interface")
+	if err != nil {
+		return interfaces, err
+	}
+
+	f5osLogger.Trace("[GetInterfaceInfo]", "Response", hclog.Fmt("%+v", string(resp)))
+
+	err = json.Unmarshal(resp, &interfaces)
+
+	if err != nil {
+		f5osLogger.Error("[GetInterfaceInfo]", "Error", hclog.Fmt("%+v", err))
+		return interfaces, err
+	}
+
+	return interfaces, nil
+}
+
+func (p *F5os) GetVlansInfo() (F5RespVlan, error) {
+	var vlans F5RespVlan
+	resp, err := p.GetRequest("/openconfig-vlan:vlans/vlan")
+
+	if err != nil {
+		return vlans, err
+	}
+
+	f5osLogger.Trace("[GetVlansInfo]", "Response", hclog.Fmt("%+v", string(resp)))
+	err = json.Unmarshal(resp, &vlans)
+
+	if err != nil {
+		f5osLogger.Error("[GetVlansInfo]", "Error", hclog.Fmt("%+v", err))
+		return vlans, err
+	}
+
+	return vlans, nil
+}
+
+func (p *F5os) GetControllerImagesInfo() (F5IsoImagesInfo, error) {
+	var isoImages F5IsoImagesInfo
+	resp, err := p.GetRequest("/f5-system-image:image/controller/config/iso/iso")
+
+	if err != nil {
+		return isoImages, err
+	}
+
+	f5osLogger.Trace("[GetControllerImagesInfo]", "Response", hclog.Fmt("%+v", string(resp)))
+	err = json.Unmarshal(resp, &isoImages)
+
+	if err != nil {
+		f5osLogger.Error("[GetControllerImagesInfo]", "Error", hclog.Fmt("%+v", err))
+		return isoImages, err
+	}
+
+	return isoImages, nil
+}
+
+func (p *F5os) GetPartitionImagesInfo() (F5IsoImagesInfo, error) {
+	var isoImages F5IsoImagesInfo
+	resp, err := p.GetRequest("/f5-system-image:image/partition/config/iso/iso")
+
+	if err != nil {
+		return isoImages, err
+	}
+
+	f5osLogger.Trace("[GetPartitionImagesInfo]", "Response", hclog.Fmt("%+v", string(resp)))
+	err = json.Unmarshal(resp, &isoImages)
+
+	if err != nil {
+		f5osLogger.Error("[GetPartitionImagesInfo]", "Error", hclog.Fmt("%+v", err))
+		return isoImages, err
+	}
+
+	return isoImages, nil
+}
+
+func (p *F5os) GetTenantImagesInfo() (F5TenantImagesInfo, error) {
+	var tenantImages F5TenantImagesInfo
+	resp, err := p.GetRequest("/f5-tenant-images:images/image")
+
+	if err != nil {
+		return tenantImages, err
+	}
+
+	f5osLogger.Trace("[GetTenantImagesInfo]", "Response", hclog.Fmt("%+v", string(resp)))
+	err = json.Unmarshal(resp, &tenantImages)
+
+	if err != nil {
+		f5osLogger.Error("[GetTenantImagesInfo]", "Error", hclog.Fmt("%+v", err))
+		return tenantImages, err
+	}
+
+	return tenantImages, nil
+}
+
 func encodeUrl(intfname string) string {
 	// Encode the interface name
 	interfaceEncoded := url.QueryEscape(intfname)
