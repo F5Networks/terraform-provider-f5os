@@ -78,12 +78,13 @@ func (d *DeviceInfoDataSource) Metadata(ctx context.Context, req datasource.Meta
 
 func (d *DeviceInfoDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Device Info data source",
+		MarkdownDescription: "Get Information about the various components of F5OS device. Currently the various components whose information is fetched are `interfaces`, `vlans`, `tenant images`, `controller images` and `partition images`. Information about partition and controller images can only be fetched from the Velos controller so please set you provider block to point to a Velos controller when you want information for partition and controller images",
 		Attributes: map[string]schema.Attribute{
 			"gather_info_of": schema.ListAttribute{
-				ElementType:         types.StringType,
-				Required:            true,
-				MarkdownDescription: "List of components for which to gather information",
+				ElementType: types.StringType,
+				Required:    true,
+				MarkdownDescription: "List of components for which to gather information. This attribute accept the following values:" + "\n" +
+					"[`all`,`interfaces`,`vlans`,`tenant_images`,`partition_images`,`controller_images`,`!all`,`!interfaces`,`!vlans`,`!tenant_images`,`!partition_images`,`!controller_images`]",
 				Validators: []validator.List{
 					listvalidator.ValueStringsAre(
 						stringvalidator.OneOf(
