@@ -7,6 +7,31 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 
 package f5os
 
+type EulaPayload struct {
+	RegKey    string   `json:"f5-system-licensing-install:registration-key,omitempty"`
+	AddonKeys []string `json:"f5-system-licensing-install:add-on-keys,omitempty"`
+}
+
+type LicenseInstallPayload struct {
+	RegKey    string   `json:"f5-system-licensing-install:registration-key,omitempty"`
+	AddonKeys []string `json:"f5-system-licensing-install:add-on-keys,omitempty"`
+	Output    struct {
+		Result string `json:"result,omitempty"`
+	} `json:"f5-system-licensing-install:output,omitempty"`
+}
+
+type License struct {
+	Licensing struct {
+		State struct {
+			RegKey struct {
+				Base string `json:"base,omitempty"`
+			} `json:"registration-key,omitempty"`
+			License    string `json:"license,omitempty"`
+			RawLicense string `json:"raw-license,omitempty"`
+		}
+	} `json:"f5-system-licensing:licensing,omitempty"`
+}
+
 type F5ReqPartition struct {
 	Name   string               `json:"name,omitempty"`
 	Config F5ReqPartitionConfig `json:"config,omitempty"`
