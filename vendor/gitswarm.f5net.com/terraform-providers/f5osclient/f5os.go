@@ -38,6 +38,9 @@ const (
 	uriFileList           = "/f5-utils-file-transfer:file/list"
 	uriFileTransferStatus = "/f5-utils-file-transfer:file/transfer-operations/transfer-operation"
 	uriLacp               = "/openconfig-lacp:lacp/interfaces"
+	uriEula               = "/openconfig-system:system/f5-system-licensing:licensing/f5-system-licensing-install:get-eula"
+	uriLicenseInstall     = "/openconfig-system:system/f5-system-licensing:licensing/f5-system-licensing-install:install"
+	uriLicense            = "/openconfig-system:system/f5-system-licensing:licensing"
 )
 
 var f5osLogger hclog.Logger
@@ -1041,6 +1044,75 @@ func (p *F5os) ExportConfigBackup(exportCfg FileExport) ([]byte, error) {
 	}
 
 	return p.PostRequest(uriFileExport, payload)
+}
+
+func (p *F5os) Eula(regKey string, addonKeys []string) error {
+	payload := EulaPayload{
+		RegKey:    regKey,
+		AddonKeys: addonKeys,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	_, err = p.PostRequest(uriEula, payloadBytes)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (p *F5os) LicenseInstall(regKey string, addonKeys []string) error {
+	licenseInstall := EulaPayload{}
+	var response LicenseInstallPayload
+
+	if regKey != "" {
+		licenseInstall.RegKey = regKey
+	}
+	if addonKeys != nil {
+		licenseInstall.AddonKeys = addonKeys
+	}
+
+	payload, err := json.Marshal(licenseInstall)
+	if err != nil {
+		return err
+	}
+
+	res, err := p.PostRequest(uriLicenseInstall, payload)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(res, &response)
+	if err != nil {
+		return err
+	}
+
+	if response.Output.Result != "License installed successfully." {
+		return errors.New(response.Output.Result)
+	} else {
+		f5osLogger.Info("[LicenseInstall]", "successfully installed license", hclog.Fmt(regKey))
+	}
+
+	return nil
+}
+
+func (p *F5os) GetLicense() (*License, error) {
+	response := &License{}
+	res, err := p.GetRequest(uriLicense)
+	if err != nil {
+		return nil, err
+	}
+
+	err = json.Unmarshal(res, response)
+	if err != nil {
+		return nil, err
+	}
+	return response, nil
 }
 
 func (p *F5os) fileTransferStatus(key, transferId string) (string, error) {
