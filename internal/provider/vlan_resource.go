@@ -90,7 +90,7 @@ func (r *VlanResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	tflog.Debug(ctx, fmt.Sprintf("vlanReqConfig Data:%+v", vlanReqConfig))
 
-	teemInfo := make(map[string]interface{})
+	teemInfo := make(map[string]any)
 	teemInfo["teemData"] = r.teemData
 	err := r.client.SendTeem(teemInfo)
 	if err != nil {
