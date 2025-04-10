@@ -95,7 +95,7 @@ func (d *ImageInfoDataSource) Read(ctx context.Context, req datasource.ReadReque
 				}
 				if val.Status == "replicated" || val.Status == "processed" {
 					diff := time.Until(timeBefore)
-					if !(diff > 2*time.Minute) {
+					if diff <= 2*time.Minute {
 						time.Sleep(2 * time.Minute)
 					}
 					availableFlag = true
