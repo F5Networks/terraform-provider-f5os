@@ -115,13 +115,13 @@ func (r *InterfaceResource) Create(ctx context.Context, req resource.CreateReque
 
 	tflog.Debug(ctx, fmt.Sprintf("interfaceReqConfig Response:%+v", string(respByte)))
 	data.Id = types.StringValue(data.Name.ValueString())
-	teemInfo := make(map[string]interface{})
+	teemInfo := make(map[string]any)
 	teemInfo["teemData"] = r.teemData
 	r.client.Metadata = teemInfo
-	err = r.client.SendTeem(teemInfo)
-	if err != nil {
-		resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
-	}
+	_ = r.client.SendTeem(teemInfo)
+	// if err != nil {
+	// 	resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
+	// }
 	intfData, err := r.client.GetInterface(data.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get Interface, got error: %s", err))
