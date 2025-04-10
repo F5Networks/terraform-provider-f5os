@@ -1,10 +1,12 @@
-## 1.5.0 (Unreleased)
+## 1.5.1 (Unreleased)
 
 BREAKING CHANGES:
-
-
 FEATURES:
+IMPROVEMENTS:
 
-* **f5os_device_info:** New Data source added.
+## 1.5.0
 
+BREAKING CHANGES:
+FEATURES:
+* **data-sources/f5os_device_info:** New Data source added.
 IMPROVEMENTS:

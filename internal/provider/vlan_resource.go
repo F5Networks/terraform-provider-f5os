@@ -90,12 +90,12 @@ func (r *VlanResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	tflog.Debug(ctx, fmt.Sprintf("vlanReqConfig Data:%+v", vlanReqConfig))
 
-	teemInfo := make(map[string]interface{})
-	teemInfo["teemData"] = r.teemData
-	err := r.client.SendTeem(teemInfo)
-	if err != nil {
-		resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
-	}
+	// teemInfo := make(map[string]any)
+	// teemInfo["teemData"] = r.teemData
+	// err := r.client.SendTeem(teemInfo)
+	// if err != nil {
+	// 	resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
+	// }
 	respByte, err := r.client.VlanConfig(vlanReqConfig)
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Create Vlan failed, got error: %s", err))
