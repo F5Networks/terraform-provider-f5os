@@ -302,7 +302,7 @@ github.com/zclconf/go-cty/cty/function/stdlib
 github.com/zclconf/go-cty/cty/gocty
 github.com/zclconf/go-cty/cty/json
 github.com/zclconf/go-cty/cty/set
-# gitswarm.f5net.com/terraform-providers/f5osclient v1.1.0
+# gitswarm.f5net.com/terraform-providers/f5osclient v1.1.1
 ## explicit; go 1.21.3
 gitswarm.f5net.com/terraform-providers/f5osclient
 # golang.org/x/crypto v0.35.0

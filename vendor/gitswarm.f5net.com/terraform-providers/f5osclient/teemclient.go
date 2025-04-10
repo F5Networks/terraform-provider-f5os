@@ -6,12 +6,13 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	uuid "github.com/google/uuid"
-	"github.com/hashicorp/go-hclog"
 	"io"
 	"net/http"
 	"os"
 	"time"
+
+	uuid "github.com/google/uuid"
+	"github.com/hashicorp/go-hclog"
 )
 
 const (
@@ -39,7 +40,6 @@ func SendReport(telemetryRecords *RawTelemetry) error {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	client := &http.Client{Transport: tr}
 	url := fmt.Sprintf("https://%s/ee/v1/telemetry", prodEndPoint)
-	//url := fmt.Sprintf("https://%s/ee/v1/telemetry", testEndpoint)
 	uniqueID := uniqueUUID()
 	telemetryRecords.DigitalAssetId = uniqueID
 	telemetryRecords.ObservationEndTime = time.Now().UTC().Format(time.RFC3339Nano)
