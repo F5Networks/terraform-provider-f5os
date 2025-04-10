@@ -14,8 +14,8 @@ Resource to manage license activation and deactivation.
 
 ```terraform
 resource "f5os_license" "dummy_license" {
-    registration_key = "W9XXX-8YYYZ-8KKK7-7PPP2-ZZZZZZ"
-    addon_keys = ["NNNWWWW-9PPPPKK", "WWWWXXX-4ZZZYYY"]
+  registration_key = "W9XXX-8YYYZ-8KKK7-7PPP2-ZZZZZZ"
+  addon_keys       = ["NNNWWWW-9PPPPKK", "WWWWXXX-4ZZZYYY"]
 }
 ```
 
@@ -34,3 +34,5 @@ resource "f5os_license" "dummy_license" {
 ### Read-Only
 
 - `id` (String) The ID of the license.
+
+
