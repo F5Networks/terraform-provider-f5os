@@ -394,16 +394,16 @@ func (p *F5os) doTenantRequest(op, path string, body []byte) ([]byte, error) {
 	return nil, nil
 }
 
-func (p *F5os) SendTeem(teemDataInput interface{}) error {
+func (p *F5os) SendTeem(teemDataInput any) error {
 	recordData := &RawTelemetry{}
-	teemData := teemDataInput.(map[string]interface{})["teemData"]
+	teemData := teemDataInput.(map[string]any)["teemData"]
 	teemBytes, _ := json.Marshal(teemData)
-	teemMap := make(map[string]interface{})
+	teemMap := make(map[string]any)
 	err := json.Unmarshal(teemBytes, &teemMap)
 	if err != nil {
 		return err
 	}
-	telemetryInputs := make(map[string]interface{})
+	telemetryInputs := make(map[string]any)
 	telemetryInputs["RunningInDocker"] = inDocker()
 	telemetryInputs["F5Platform"] = teemMap["F5Platform"].(string)
 	telemetryInputs["F5SoftwareVersion"] = teemMap["F5SoftwareVersion"].(string)
