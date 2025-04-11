@@ -60,16 +60,19 @@ func TestUnitCfgBackup(t *testing.T) {
 
 	mux.HandleFunc(createCfgBackup, func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method, "Expected method '%s', got '%s'", http.MethodPost, r.Method)
+		//nolint:errcheck
 		fmt.Fprint(w, `{"f5-database:output":{"result":"Database backup successful."}}`)
 	})
 
 	mux.HandleFunc(exportCfgBackup, func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method, "Expected method '%s', got '%s'", http.MethodPost, r.Method)
+		//nolint:errcheck
 		fmt.Fprint(w, `{"f5-utils-file-transfer:output":{"result":"File transfer is initiated.(configs/test_cfg_backup)"}}`)
 	})
 
 	mux.HandleFunc(transferStatus, func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method, "Expected method '%s', got '%s'", http.MethodGet, r.Method)
+		//nolint:errcheck
 		fmt.Fprint(w,
 			`
 			{

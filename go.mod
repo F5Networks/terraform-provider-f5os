@@ -12,7 +12,7 @@ require (
 	github.com/hashicorp/terraform-plugin-log v0.8.0
 	github.com/hashicorp/terraform-plugin-testing v1.2.0
 	github.com/stretchr/testify v1.8.4
-	gitswarm.f5net.com/terraform-providers/f5osclient v1.0.10
+	gitswarm.f5net.com/terraform-providers/f5osclient v1.1.1
 	golang.org/x/mod v0.17.0
 )
 
@@ -68,10 +68,10 @@ require (
 	github.com/vmihailenco/msgpack/v5 v5.3.5 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/zclconf/go-cty v1.13.1 // indirect
-	golang.org/x/crypto v0.35.0 // indirect
-	golang.org/x/net v0.35.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
-	golang.org/x/text v0.22.0 // indirect
+	golang.org/x/crypto v0.37.0 // indirect
+	golang.org/x/net v0.39.0 // indirect
+	golang.org/x/sys v0.32.0 // indirect
+	golang.org/x/text v0.24.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1 // indirect
 	google.golang.org/grpc v1.65.0 // indirect
