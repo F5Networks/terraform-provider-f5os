@@ -401,3 +401,31 @@ type TlsCertKey struct {
 	ConfirmKeyPassphrase   string `json:"f5-openconfig-aaa-tls:confirm-key-passphrase,omitempty"`
 	StoreTls               bool   `json:"f5-openconfig-aaa-tls:store-tls,omitempty"`
 }
+
+type F5ReqPrimaryKey struct {
+	PrimaryKey PrimaryKeyConfig `json:"f5-primary-key:set"`
+}
+
+type PrimaryKeyConfig struct {
+	Passphrase        string `json:"f5-primary-key:passphrase"`
+	ConfirmPassphrase string `json:"f5-primary-key:confirm-passphrase"`
+	Salt              string `json:"f5-primary-key:salt"`
+	ConfirmSalt       string `json:"f5-primary-key:confirm-salt"`
+}
+
+type F5RespPrimaryKey struct {
+	PrimaryKey struct {
+		State struct {
+			Hash   string `json:"f5-primary-key:hash"`
+			Status string `json:"f5-primary-key:status"`
+		} `json:"f5-primary-key:state"`
+	} `json:"f5-primary-key:primary-key"`
+}
+
+type PrimaryKeyState struct {
+	State PrimaryKeyStatus `json:"state"`
+}
+
+type PrimaryKeyStatus struct {
+	Status string `json:"status"`
+}
