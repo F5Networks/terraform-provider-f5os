@@ -1164,8 +1164,20 @@ func (p *F5os) setPlatformType() ([]byte, error) {
 		bytes01, _ := io.ReadAll(resp.Body)
 		var mymap map[string]interface{}
 		json.Unmarshal(bytes01, &mymap)
-		if len(mymap["openconfig-platform:component"].([]interface{})) > 1 {
-			for _, val := range mymap["openconfig-platform:component"].([]interface{}) {
+		componentRaw, exists := mymap["openconfig-platform:component"]
+		if !exists {
+			f5osLogger.Debug("[setPlatformType]", "Error", "Key 'openconfig-platform:component' not found in response")
+			return nil, fmt.Errorf("missing 'openconfig-platform:component' key in response")
+		}
+
+		componentList, ok := componentRaw.([]interface{})
+		if !ok {
+			f5osLogger.Debug("[setPlatformType]", "Error", "Invalid type for 'openconfig-platform:component'")
+			return nil, fmt.Errorf("invalid type for 'openconfig-platform:component'")
+		}
+
+		if len(componentList) > 1 {
+			for _, val := range componentList {
 				if val.(map[string]interface{})["name"] == "platform" {
 					//check state key present in above response map object
 					if val.(map[string]interface{})["state"].(map[string]interface{})["description"] != nil {

@@ -23,6 +23,7 @@ const (
 	uriVlan          = "/openconfig-vlan:vlans"
 	uriAuth          = "/openconfig-system:system/aaa"
 	uriCreateCertKey = "/openconfig-system:system/aaa/f5-openconfig-aaa-tls:tls/f5-openconfig-aaa-tls:create-self-signed-cert"
+	uriBase          = "/openconfig-system:system"
 )
 
 func (p *F5os) CreatePartition(partitionObj *F5ReqPartitions) ([]byte, error) {
@@ -382,4 +383,61 @@ func (p *F5os) DeleteTlsCertKey(certKeyName string) error {
 	err := p.DeleteRequest(uri)
 
 	return err
+}
+
+func (p *F5os) SetPrimaryKey(config *F5ReqPrimaryKey) ([]byte, error) {
+	url := fmt.Sprintf("%s/aaa/f5-primary-key:primary-key/f5-primary-key:set", uriBase)
+	f5osLogger.Debug("[SetPrimaryKey]", "Request path", hclog.Fmt("%+v", url))
+
+	reqBody, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	f5osLogger.Debug("[SetPrimaryKey]", "Request Body", hclog.Fmt("%+v", string(reqBody)))
+
+	respData, err := p.PostRequest(url, reqBody)
+	if err != nil {
+		return nil, err
+	}
+	f5osLogger.Debug("[SetPrimaryKey]", "Response", hclog.Fmt("%+v", string(respData)))
+
+	return respData, nil
+}
+
+func (p *F5os) GetPrimaryKey() (*F5RespPrimaryKey, error) {
+	url := fmt.Sprintf("%s/aaa/f5-primary-key:primary-key", uriBase)
+	f5osLogger.Debug("[GetPrimaryKey]", "Request URL", hclog.Fmt("%+v", url))
+
+	body, err := p.GetRequest(url)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp F5RespPrimaryKey
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+
+	f5osLogger.Debug("[GetPrimaryKey]", "Parsed Response", hclog.Fmt("%+v", resp))
+	return &resp, nil
+}
+
+func (p *F5os) UpdatePrimaryKey(req *F5ReqPrimaryKey) ([]byte, error) {
+	url := fmt.Sprintf("%s/aaa/f5-primary-key:primary-key/f5-primary-key:set", uriBase)
+	f5osLogger.Debug("[UpdatePrimaryKey]", "Request path", hclog.Fmt("%+v", url))
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+
+	f5osLogger.Debug("[UpdatePrimaryKey]", "Body", hclog.Fmt("%+v", string(body)))
+
+	respData, err := p.PostRequest(url, body) // Use POST instead of PATCH as per your API spec
+	if err != nil {
+		return nil, err
+	}
+
+	f5osLogger.Debug("[UpdatePrimaryKey]", "Response", hclog.Fmt("%+v", string(respData)))
+	return respData, nil
 }
