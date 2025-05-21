@@ -179,6 +179,111 @@ type F5ReqOpenconfigInterface struct {
 	} `json:"openconfig-interfaces:interfaces,omitempty"`
 }
 
+type F5ReqTokenLifetime struct {
+	OpenConfigSystem struct {
+		RestConfigToken struct {
+			Config struct {
+				Lifetime int `json:"lifetime,omitempty"`
+			} `json:"config,omitempty"`
+		} `json:"f5-aaa-confd-restconf-token:restconf-token,omitempty"`
+	} `json:"openconfig-system:aaa,omitempty"`
+}
+
+type F5ReqSystemSettingConfig struct {
+	Settings struct {
+		Config struct {
+			SshdIdleTimeout string `json:"sshd-idle-timeout,omitempty"`
+			CliTimeout      int    `json:"idle-timeout,omitempty"`
+		} `json:"config,omitempty"`
+	} `json:"settings,omitempty"`
+}
+type F5ReqHttpCipherConfig struct {
+	Config struct {
+		Name           string `json:"name,omitempty"`
+		SslCipherSuite string `json:"ssl-ciphersuite,omitempty"`
+	} `json:"config,omitempty"`
+}
+type F5ReqSshdCipherConfig struct {
+	Ciphers []string `json:"ciphers,omitempty"`
+}
+
+type F5ReqSshdKeyAlgConfig struct {
+	KeyExchangeAlgorithms []string `json:"kexalgorithms,omitempty"`
+}
+type F5ReqSshdMacConfig struct {
+	Macs []string `json:"macs,omitempty"`
+}
+type F5ReqSshdHkeyAlgConfig struct {
+	HostKeyAlgorithms []string `json:"host-key-algorithms,omitempty"`
+}
+
+type F5ReqSystemConfig struct {
+	OpenConfigSystem struct {
+		Clock struct {
+			Config struct {
+				TimezoneName string `json:"timezone-name,omitempty"`
+			} `json:"config,omitempty"`
+		} `json:"clock,omitempty"`
+		Config struct {
+			Hostname    string `json:"hostname,omitempty"`
+			Motd        string `json:"motd-banner,omitempty"`
+			LoginBanner string `json:"login-banner,omitempty"`
+		} `json:"config,omitempty"`
+	} `json:"openconfig-system:system,omitempty"`
+}
+
+type F5ResSystemConfig struct {
+	OpenConfigSystem struct {
+		Hostname    string `json:"hostname,omitempty"`
+		Motd        string `json:"motd-banner,omitempty"`
+		LoginBanner string `json:"login-banner,omitempty"`
+	} `json:"openconfig-system:config,omitempty"`
+}
+
+type F5ResClockConfig struct {
+	OpenConfigClock struct {
+		Config struct {
+			TimeZoneName string `json:"timezone-name,omitempty"`
+		} `json:"config,omitempty"`
+	} `json:"openconfig-system:clock,omitempty"`
+}
+
+type F5ResSettingsConfig struct {
+	Settings struct {
+		Config struct {
+			SshdIdleTimeout any `json:"sshd-idle-timeout,omitempty"`
+			CliTimeout      any `json:"idle-timeout,omitempty"`
+		} `json:"config,omitempty"`
+	} `json:"f5-system-settings:settings,omitempty"`
+}
+
+type F5ResTokenLifetime struct {
+	Lifetime int `json:"f5-aaa-confd-restconf-token:lifetime,omitempty"`
+}
+
+type HttpdConfig struct {
+	Name           string `json:"name"`
+	SSLCipherSuite string `json:"ssl-ciphersuite"`
+}
+
+type HttpdBlock struct {
+	Name   string      `json:"name"`
+	Config HttpdConfig `json:"config"`
+}
+
+type SshdConfig struct {
+	Name          string   `json:"name"`
+	Ciphers       []string `json:"ciphers"`
+	MACs          []string `json:"macs"`
+	KexAlgorithms []string `json:"kexalgorithms"`
+	HostKeyAlgos  []string `json:"host-key-algorithms"`
+}
+
+type SshdBlock struct {
+	Name   string     `json:"name"`
+	Config SshdConfig `json:"config"`
+}
+
 type F5ReqVlanSwitchedVlan struct {
 	OpenconfigVlanSwitchedVlan struct {
 		Config struct {
@@ -400,4 +505,79 @@ type TlsCertKey struct {
 	KeyPassphrase          string `json:"f5-openconfig-aaa-tls:key-passphrase,omitempty"`
 	ConfirmKeyPassphrase   string `json:"f5-openconfig-aaa-tls:confirm-key-passphrase,omitempty"`
 	StoreTls               bool   `json:"f5-openconfig-aaa-tls:store-tls,omitempty"`
+}
+
+type F5ReqDNS struct {
+	DNS struct {
+		Servers struct {
+			Server []struct {
+				Address string `json:"address"`
+			} `json:"server"`
+		} `json:"servers"`
+		Config struct {
+			Search []string `json:"search"`
+		} `json:"config"`
+	} `json:"openconfig-system:dns"`
+}
+
+// DNSConfigPayload is the struct for PATCHing the full DNS config.
+type DNSConfigPayload struct {
+	DNS DNSConfig `json:"openconfig-system:dns"`
+}
+
+type DNSConfig struct {
+	Servers DNSConfigServers `json:"servers"`
+	Config  DNSConfigSearch  `json:"config"`
+}
+
+type DNSConfigServers struct {
+	Server []DNSServer `json:"server"`
+}
+
+type DNSConfigSearch struct {
+	Search []string `json:"search"`
+}
+
+// DNSConfigRequest represents the structure of a DNS configuration request.
+type DNSConfigRequest struct {
+	Config  DNSConfig     `json:"config"`
+	Servers DNSServerList `json:"servers"`
+}
+
+type DNSServer struct {
+	Address string `json:"address"`
+}
+
+type DNSServerList struct {
+	Server []DNSServer `json:"server"`
+}
+
+const DNSConfigURI = "/openconfig-system:system/dns"
+
+type F5ReqPrimaryKey struct {
+	PrimaryKey PrimaryKeyConfig `json:"f5-primary-key:set"`
+}
+
+type PrimaryKeyConfig struct {
+	Passphrase        string `json:"f5-primary-key:passphrase"`
+	ConfirmPassphrase string `json:"f5-primary-key:confirm-passphrase"`
+	Salt              string `json:"f5-primary-key:salt"`
+	ConfirmSalt       string `json:"f5-primary-key:confirm-salt"`
+}
+
+type F5RespPrimaryKey struct {
+	PrimaryKey struct {
+		State struct {
+			Hash   string `json:"f5-primary-key:hash"`
+			Status string `json:"f5-primary-key:status"`
+		} `json:"f5-primary-key:state"`
+	} `json:"f5-primary-key:primary-key"`
+}
+
+type PrimaryKeyState struct {
+	State PrimaryKeyStatus `json:"state"`
+}
+
+type PrimaryKeyStatus struct {
+	Status string `json:"status"`
 }

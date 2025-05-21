@@ -23,6 +23,8 @@ const (
 	uriVlan          = "/openconfig-vlan:vlans"
 	uriAuth          = "/openconfig-system:system/aaa"
 	uriCreateCertKey = "/openconfig-system:system/aaa/f5-openconfig-aaa-tls:tls/f5-openconfig-aaa-tls:create-self-signed-cert"
+	uriSystemDNS     = "/openconfig-system:system/dns"
+	uriBase          = "/openconfig-system:system"
 )
 
 func (p *F5os) CreatePartition(partitionObj *F5ReqPartitions) ([]byte, error) {
@@ -382,4 +384,240 @@ func (p *F5os) DeleteTlsCertKey(certKeyName string) error {
 	err := p.DeleteRequest(uri)
 
 	return err
+}
+
+// PatchDNSConfig sets DNS config using PATCH to /system/dns
+func (c *F5os) PatchDNSConfig(dnsServers []string, searchDomains []string) error {
+	var servers []DNSServer
+	for _, s := range dnsServers {
+		servers = append(servers, DNSServer{Address: s})
+	}
+
+	payload := DNSConfigPayload{
+		DNS: DNSConfig{
+			Servers: DNSConfigServers{Server: servers},
+			Config:  DNSConfigSearch{Search: searchDomains},
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal DNS config payload: %w", err)
+	}
+
+	// 👇 Correct usage — relative to UriRoot
+	_, err = c.PatchRequest(uriSystemDNS, body)
+	if err != nil {
+		return fmt.Errorf("failed to patch DNS config: %w", err)
+	}
+	return nil
+}
+
+// func (c *F5os) PatchDNSConfig(dnsServers []string, searchDomains []string) error {
+// 	var servers []DNSServer
+// 	for _, s := range dnsServers {
+// 		servers = append(servers, DNSServer{Address: s})
+// 	}
+
+// 	payload := DNSConfigPayload{
+// 		DNS: DNSConfig{
+// 			Servers: DNSConfigServers{Server: servers},
+// 			Config:  DNSConfigSearch{Search: searchDomains},
+// 		},
+// 	}
+
+// 	body, err := json.Marshal(payload)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to marshal DNS config: %w", err)
+// 	}
+
+// 	path := "/data/openconfig-system:system/dns"
+// 	_, err = c.PatchRequest(path, body)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to patch DNS config: %w", err)
+// 	}
+// 	return nil
+// }
+
+// DeleteSearchDomain deletes a specific search domain entry
+func (c *F5os) DeleteSearchDomain(domain string) error {
+	path := fmt.Sprintf("/openconfig-system:system/dns/config/search=%s", domain)
+	return c.DeleteRequest(path)
+}
+
+// DeleteDNSServer deletes a specific DNS server entry
+func (c *F5os) DeleteDNSServer(address string) error {
+	path := fmt.Sprintf("/openconfig-system:system/dns/servers/server=%s", address)
+	return c.DeleteRequest(path)
+}
+
+// DeleteDNSConfig removes provided servers and domains (idempotent)
+func (c *F5os) DeleteDNSConfig(dnsServers []string, searchDomains []string) error {
+	for _, s := range dnsServers {
+		if err := c.DeleteDNSServer(s); err != nil {
+			return fmt.Errorf("delete DNS server %s failed: %w", s, err)
+		}
+	}
+	for _, d := range searchDomains {
+		if err := c.DeleteSearchDomain(d); err != nil {
+			return fmt.Errorf("delete search domain %s failed: %w", d, err)
+		}
+	}
+	return nil
+}
+
+// ReadDNSConfig fetches the current DNS configuration from the device
+func (c *F5os) ReadDNSConfig() (*DNSConfigPayload, error) {
+	path := "/openconfig-system:system/dns" // Relative path
+	resp, err := c.GetRequest(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to GET DNS config: %w", err)
+	}
+
+	var config DNSConfigPayload
+	if err := json.Unmarshal(resp, &config); err != nil {
+		return nil, fmt.Errorf("invalid JSON in DNS read: %w", err)
+	}
+	return &config, nil
+}
+
+// func (c *F5os) buildURL(path string) string {
+// 	return fmt.Sprintf("%s/restconf/data%s", c.Host, path)
+// }
+
+// // PatchDNSConfig updates DNS config with provided servers and search domains.
+// func (c *F5os) PatchDNSConfig(dnsServers []string, searchDomains []string) error {
+// 	serverList := make([]map[string]interface{}, 0, len(dnsServers))
+// 	for _, addr := range dnsServers {
+// 		serverList = append(serverList, map[string]interface{}{"address": addr})
+// 	}
+
+// 	payload := map[string]interface{}{
+// 		"openconfig-system:dns": map[string]interface{}{
+// 			"config": map[string]interface{}{
+// 				"search": searchDomains,
+// 			},
+// 			"servers": map[string]interface{}{
+// 				"server": serverList,
+// 			},
+// 		},
+// 	}
+
+// 	url := c.buildURL("/openconfig-system:system/dns")
+// 	// uri := fmt.Sprintf("%s/data/openconfig-system:system/dns", c.UriRoot)
+// 	return c.patch(url, payload)
+// }
+
+// // DeleteDNSConfig removes DNS servers and search domains.
+// func (c *F5os) DeleteDNSConfig() error {
+// 	payload := map[string]interface{}{
+// 		"openconfig-system:dns": map[string]interface{}{
+// 			"config": map[string]interface{}{
+// 				"search": []string{},
+// 			},
+// 			"servers": map[string]interface{}{
+// 				"server": []map[string]interface{}{},
+// 			},
+// 		},
+// 	}
+
+// 	uri := fmt.Sprintf("%s/openconfig-system:system/dns", c.UriRoot)
+// 	return c.patch(uri, payload)
+// }
+
+// // patch is a helper to send PATCH requests.
+// func (c *F5os) patch(url string, payload interface{}) error {
+// 	var buf bytes.Buffer
+// 	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
+// 		return err
+// 	}
+
+// 	req, err := http.NewRequest("PATCH", url, &buf)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	req.Header.Set("Content-Type", "application/yang-data+json")
+// 	c.decorateHeaders(req)
+
+// 	client := &http.Client{Transport: c.Transport}
+// 	resp, err := client.Do(req)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	defer resp.Body.Close()
+
+// 	if resp.StatusCode >= 300 {
+// 		body, _ := io.ReadAll(resp.Body)
+// 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+// 	}
+// 	return nil
+// }
+
+// // decorateHeaders adds authentication and user-agent headers.
+// func (c *F5os) decorateHeaders(req *http.Request) {
+// 	if c.Token != "" {
+// 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.Token))
+// 	} else if c.User != "" && c.Password != "" {
+// 		req.SetBasicAuth(c.User, c.Password)
+// 	}
+
+// 	if c.UserAgent != "" {
+// 		req.Header.Set("User-Agent", c.UserAgent)
+// 	}
+// }
+
+func (p *F5os) SetPrimaryKey(config *F5ReqPrimaryKey) ([]byte, error) {
+	url := fmt.Sprintf("%s/aaa/f5-primary-key:primary-key/f5-primary-key:set", uriBase)
+	f5osLogger.Debug("[SetPrimaryKey]", "Request path", hclog.Fmt("%+v", url))
+
+	reqBody, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	f5osLogger.Debug("[SetPrimaryKey]", "Request Body", hclog.Fmt("%+v", string(reqBody)))
+
+	respData, err := p.PostRequest(url, reqBody)
+	if err != nil {
+		return nil, err
+	}
+	f5osLogger.Debug("[SetPrimaryKey]", "Response", hclog.Fmt("%+v", string(respData)))
+
+	return respData, nil
+}
+
+func (p *F5os) GetPrimaryKey() (*F5RespPrimaryKey, error) {
+	url := fmt.Sprintf("%s/aaa/f5-primary-key:primary-key", uriBase)
+	f5osLogger.Debug("[GetPrimaryKey]", "Request URL", hclog.Fmt("%+v", url))
+
+	body, err := p.GetRequest(url)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp F5RespPrimaryKey
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+
+	f5osLogger.Debug("[GetPrimaryKey]", "Parsed Response", hclog.Fmt("%+v", resp))
+	return &resp, nil
+}
+
+func (p *F5os) UpdatePrimaryKey(req *F5ReqPrimaryKey) ([]byte, error) {
+	url := fmt.Sprintf("%s/aaa/f5-primary-key:primary-key/f5-primary-key:set", uriBase)
+	f5osLogger.Debug("[UpdatePrimaryKey]", "Request path", hclog.Fmt("%+v", url))
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+
+	f5osLogger.Debug("[UpdatePrimaryKey]", "Body", hclog.Fmt("%+v", string(body)))
+
+	respData, err := p.PostRequest(url, body) // Use POST instead of PATCH as per your API spec
+	if err != nil {
+		return nil, err
+	}
+
+	f5osLogger.Debug("[UpdatePrimaryKey]", "Response", hclog.Fmt("%+v", string(respData)))
+	return respData, nil
 }
