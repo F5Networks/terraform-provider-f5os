@@ -307,7 +307,7 @@ func (r *TenantResource) Read(ctx context.Context, req resource.ReadRequest, res
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	//respByte, err := r.client.GetTenant(data.Name.ValueString())
+	// respByte, err := r.client.GetTenant(data.Name.ValueString())
 	stop := r.client.F5OsKeepAlive(15 * time.Second)
 	respByte, err := r.client.GetTenant(data.Id.ValueString())
 	if err != nil {
