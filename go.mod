@@ -12,7 +12,7 @@ require (
 	github.com/hashicorp/terraform-plugin-log v0.8.0
 	github.com/hashicorp/terraform-plugin-testing v1.2.0
 	github.com/stretchr/testify v1.8.4
-	gitswarm.f5net.com/terraform-providers/f5osclient v1.1.1
+	gitswarm.f5net.com/terraform-providers/f5osclient v1.1.2
 	golang.org/x/mod v0.17.0
 )
 
