@@ -4,17 +4,14 @@ page_title: "f5os_dns Resource - terraform-provider-f5os"
 subcategory: ""
 description: |-
   Resource used to configure DNS settings (servers and domains) on F5OS systems (VELOS or rSeries).
-  ~> NOTE: The f5os_dns resource updates DNS servers and search domains on the F5OS control plane using the standard RESTCONF API endpoint /openconfig-system:system/dns.
-  Provider f5os must be properly configured with host, username, and password for the target F5OS system.
+  ~> NOTE: The f5os_dns resource updates DNS servers and search domains on the F5OS platforms using Open API
 ---
 
 # f5os_dns (Resource)
 
 Resource used to configure DNS settings (servers and domains) on F5OS systems (VELOS or rSeries).
 
-~> **NOTE:** The `f5os_dns` resource updates DNS servers and search domains on the F5OS control plane using the standard RESTCONF API endpoint `/openconfig-system:system/dns`.
-
-Provider `f5os` must be properly configured with `host`, `username`, and `password` for the target F5OS system.
+~> **NOTE:** The `f5os_dns` resource updates DNS servers and search domains on the F5OS platforms using Open API
 
 ## Example Usage
 

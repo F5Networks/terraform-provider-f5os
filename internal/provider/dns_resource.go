@@ -49,9 +49,7 @@ func (r *DNSResource) Metadata(_ context.Context, req resource.MetadataRequest, 
 func (r *DNSResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Resource used to configure DNS settings (servers and domains) on F5OS systems (VELOS or rSeries).\n\n" +
-			"~> **NOTE:** The `f5os_dns` resource updates DNS servers and search domains on the F5OS control plane using the standard RESTCONF API endpoint `/openconfig-system:system/dns`.\n\n" +
-			"Provider `f5os` must be properly configured with `host`, `username`, and `password` for the target F5OS system.",
-
+			"~> **NOTE:** The `f5os_dns` resource updates DNS servers and search domains on the F5OS platforms using Open API",
 		Attributes: map[string]schema.Attribute{
 			"dns_servers": schema.ListAttribute{
 				ElementType:         types.StringType,
