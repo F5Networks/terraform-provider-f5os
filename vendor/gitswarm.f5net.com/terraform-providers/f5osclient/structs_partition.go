@@ -402,6 +402,53 @@ type TlsCertKey struct {
 	StoreTls               bool   `json:"f5-openconfig-aaa-tls:store-tls,omitempty"`
 }
 
+type F5ReqDNS struct {
+	DNS struct {
+		Servers struct {
+			Server []struct {
+				Address string `json:"address"`
+			} `json:"server"`
+		} `json:"servers"`
+		Config struct {
+			Search []string `json:"search"`
+		} `json:"config"`
+	} `json:"openconfig-system:dns"`
+}
+
+// DNSConfigPayload is the struct for PATCHing the full DNS config.
+type DNSConfigPayload struct {
+	DNS DNSConfig `json:"openconfig-system:dns"`
+}
+
+type DNSConfig struct {
+	Servers DNSConfigServers `json:"servers"`
+	Config  DNSConfigSearch  `json:"config"`
+}
+
+type DNSConfigServers struct {
+	Server []DNSServer `json:"server"`
+}
+
+type DNSConfigSearch struct {
+	Search []string `json:"search"`
+}
+
+// DNSConfigRequest represents the structure of a DNS configuration request.
+type DNSConfigRequest struct {
+	Config  DNSConfig     `json:"config"`
+	Servers DNSServerList `json:"servers"`
+}
+
+type DNSServer struct {
+	Address string `json:"address"`
+}
+
+type DNSServerList struct {
+	Server []DNSServer `json:"server"`
+}
+
+const DNSConfigURI = "/openconfig-system:system/dns"
+
 type F5ReqPrimaryKey struct {
 	PrimaryKey PrimaryKeyConfig `json:"f5-primary-key:set"`
 }

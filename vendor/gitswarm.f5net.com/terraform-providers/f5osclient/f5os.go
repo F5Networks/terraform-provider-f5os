@@ -41,6 +41,7 @@ const (
 	uriEula               = "/openconfig-system:system/f5-system-licensing:licensing/f5-system-licensing-install:get-eula"
 	uriLicenseInstall     = "/openconfig-system:system/f5-system-licensing:licensing/f5-system-licensing-install:install"
 	uriLicense            = "/openconfig-system:system/f5-system-licensing:licensing"
+	dnsBasePath           = "/openconfig-system:system/dns"
 )
 
 var f5osLogger hclog.Logger
