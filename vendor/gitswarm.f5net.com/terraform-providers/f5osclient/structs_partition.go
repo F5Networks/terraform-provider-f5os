@@ -7,6 +7,8 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 
 package f5os
 
+import "github.com/hashicorp/terraform-plugin-framework/types"
+
 type EulaPayload struct {
 	RegKey    string   `json:"f5-system-licensing-install:registration-key,omitempty"`
 	AddonKeys []string `json:"f5-system-licensing-install:add-on-keys,omitempty"`
@@ -580,4 +582,37 @@ type PrimaryKeyState struct {
 
 type PrimaryKeyStatus struct {
 	Status string `json:"status"`
+}
+
+// NTPServerModel is the Terraform resource schema representation
+// using Terraform Plugin Framework types.
+// type NTPServerModel struct {
+// 	Id                string `tfsdk:"id"`
+// 	Server            string `tfsdk:"server"`
+// 	KeyID             int    `tfsdk:"key_id"`
+// 	Prefer            bool   `tfsdk:"prefer"`
+// 	IBurst            bool   `tfsdk:"iburst"`
+// 	NTPService        bool   `tfsdk:"ntp_service"`
+// 	NTPAuthentication bool   `tfsdk:"ntp_authentication"`
+// }
+
+type NTPServerModel struct {
+	ID                types.String `tfsdk:"id"` // ✅ Corrected
+	Server            types.String `tfsdk:"server"`
+	KeyID             types.Int64  `tfsdk:"key_id"`
+	Prefer            types.Bool   `tfsdk:"prefer"`
+	IBurst            types.Bool   `tfsdk:"iburst"`
+	NTPService        types.Bool   `tfsdk:"ntp_service"`
+	NTPAuthentication types.Bool   `tfsdk:"ntp_authentication"`
+}
+
+// NTPServerStruct is the internal Go representation
+// used for HTTP payloads and response parsing.
+type NTPServerStruct struct {
+	Address           string `json:"address"`
+	KeyID             int64  `json:"key_id,omitempty"`
+	Prefer            bool   `json:"prefer,omitempty"`
+	IBurst            bool   `json:"iburst,omitempty"`
+	NTPService        bool   `json:"ntp_service,omitempty"`
+	NTPAuthentication bool   `json:"ntp_authentication,omitempty"`
 }
