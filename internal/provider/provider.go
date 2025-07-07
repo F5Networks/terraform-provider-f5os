@@ -210,6 +210,7 @@ func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewDNSResource,
 		NewPrimaryKeyResource,
 		NewNTPServerResource,
+		NewF5osLoggingResource,
 	}
 }
 
