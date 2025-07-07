@@ -13,7 +13,7 @@ import (
 
 func TestAccPartitionDeployResource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		//IsUnitTest:               true,
+		// IsUnitTest:               true,
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -85,26 +85,26 @@ func TestUnitPartitionDeployResource(t *testing.T) {
 		}
 
 	})
-	//mux.HandleFunc("/restconf/data/f5-system-partition:partitions/partition=TerraformPartition/state", func(w http.ResponseWriter, r *http.Request) {
+	// mux.HandleFunc("/restconf/data/f5-system-partition:partitions/partition=TerraformPartition/state", func(w http.ResponseWriter, r *http.Request) {
 	//	if r.RequestURI == "/restconf/data/f5-system-partition:partitions/partition=TerraformPartition/state" {
 	//		w.WriteHeader(http.StatusOK)
 	//		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/partition_get_status.json"))
 	//	}
 	//
-	//})
+	// })
 	//
-	//mux.HandleFunc("/restconf/data/f5-system-partition:partitions/partition=TerraformPartition", func(w http.ResponseWriter, r *http.Request) {
+	// mux.HandleFunc("/restconf/data/f5-system-partition:partitions/partition=TerraformPartition", func(w http.ResponseWriter, r *http.Request) {
 	//	if r.RequestURI == "/restconf/data/f5-system-partition:partitions/partition=TerraformPartition" {
 	//		w.WriteHeader(http.StatusOK)
 	//		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/partition_config.json"))
 	//	}
-	//})
+	// })
 
-	//mux.HandleFunc("/restconf/data/f5-system-slot:slots/slot", func(w http.ResponseWriter, r *http.Request) {
+	// mux.HandleFunc("/restconf/data/f5-system-slot:slots/slot", func(w http.ResponseWriter, r *http.Request) {
 	//	w.WriteHeader(http.StatusOK)
 	//	_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/partition_get_slots.json"))
 	//
-	//})
+	// })
 	defer teardown()
 
 	resource.Test(t, resource.TestCase{
