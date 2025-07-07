@@ -412,32 +412,6 @@ func (c *F5os) PatchDNSConfig(dnsServers []string, searchDomains []string) error
 	return nil
 }
 
-// func (c *F5os) PatchDNSConfig(dnsServers []string, searchDomains []string) error {
-// 	var servers []DNSServer
-// 	for _, s := range dnsServers {
-// 		servers = append(servers, DNSServer{Address: s})
-// 	}
-
-// 	payload := DNSConfigPayload{
-// 		DNS: DNSConfig{
-// 			Servers: DNSConfigServers{Server: servers},
-// 			Config:  DNSConfigSearch{Search: searchDomains},
-// 		},
-// 	}
-
-// 	body, err := json.Marshal(payload)
-// 	if err != nil {
-// 		return fmt.Errorf("failed to marshal DNS config: %w", err)
-// 	}
-
-// 	path := "/data/openconfig-system:system/dns"
-// 	_, err = c.PatchRequest(path, body)
-// 	if err != nil {
-// 		return fmt.Errorf("failed to patch DNS config: %w", err)
-// 	}
-// 	return nil
-// }
-
 // DeleteSearchDomain deletes a specific search domain entry
 func (c *F5os) DeleteSearchDomain(domain string) error {
 	path := fmt.Sprintf("/openconfig-system:system/dns/config/search=%s", domain)
@@ -479,91 +453,6 @@ func (c *F5os) ReadDNSConfig() (*DNSConfigPayload, error) {
 	}
 	return &config, nil
 }
-
-// func (c *F5os) buildURL(path string) string {
-// 	return fmt.Sprintf("%s/restconf/data%s", c.Host, path)
-// }
-
-// // PatchDNSConfig updates DNS config with provided servers and search domains.
-// func (c *F5os) PatchDNSConfig(dnsServers []string, searchDomains []string) error {
-// 	serverList := make([]map[string]interface{}, 0, len(dnsServers))
-// 	for _, addr := range dnsServers {
-// 		serverList = append(serverList, map[string]interface{}{"address": addr})
-// 	}
-
-// 	payload := map[string]interface{}{
-// 		"openconfig-system:dns": map[string]interface{}{
-// 			"config": map[string]interface{}{
-// 				"search": searchDomains,
-// 			},
-// 			"servers": map[string]interface{}{
-// 				"server": serverList,
-// 			},
-// 		},
-// 	}
-
-// 	url := c.buildURL("/openconfig-system:system/dns")
-// 	// uri := fmt.Sprintf("%s/data/openconfig-system:system/dns", c.UriRoot)
-// 	return c.patch(url, payload)
-// }
-
-// // DeleteDNSConfig removes DNS servers and search domains.
-// func (c *F5os) DeleteDNSConfig() error {
-// 	payload := map[string]interface{}{
-// 		"openconfig-system:dns": map[string]interface{}{
-// 			"config": map[string]interface{}{
-// 				"search": []string{},
-// 			},
-// 			"servers": map[string]interface{}{
-// 				"server": []map[string]interface{}{},
-// 			},
-// 		},
-// 	}
-
-// 	uri := fmt.Sprintf("%s/openconfig-system:system/dns", c.UriRoot)
-// 	return c.patch(uri, payload)
-// }
-
-// // patch is a helper to send PATCH requests.
-// func (c *F5os) patch(url string, payload interface{}) error {
-// 	var buf bytes.Buffer
-// 	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
-// 		return err
-// 	}
-
-// 	req, err := http.NewRequest("PATCH", url, &buf)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	req.Header.Set("Content-Type", "application/yang-data+json")
-// 	c.decorateHeaders(req)
-
-// 	client := &http.Client{Transport: c.Transport}
-// 	resp, err := client.Do(req)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	defer resp.Body.Close()
-
-// 	if resp.StatusCode >= 300 {
-// 		body, _ := io.ReadAll(resp.Body)
-// 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-// 	}
-// 	return nil
-// }
-
-// // decorateHeaders adds authentication and user-agent headers.
-// func (c *F5os) decorateHeaders(req *http.Request) {
-// 	if c.Token != "" {
-// 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.Token))
-// 	} else if c.User != "" && c.Password != "" {
-// 		req.SetBasicAuth(c.User, c.Password)
-// 	}
-
-// 	if c.UserAgent != "" {
-// 		req.Header.Set("User-Agent", c.UserAgent)
-// 	}
-// }
 
 func (p *F5os) SetPrimaryKey(config *F5ReqPrimaryKey) ([]byte, error) {
 	url := fmt.Sprintf("%s/aaa/f5-primary-key:primary-key/f5-primary-key:set", uriBase)
@@ -620,4 +509,110 @@ func (p *F5os) UpdatePrimaryKey(req *F5ReqPrimaryKey) ([]byte, error) {
 
 	f5osLogger.Debug("[UpdatePrimaryKey]", "Response", hclog.Fmt("%+v", string(respData)))
 	return respData, nil
+}
+
+const (
+	uriNTPServer      = "/openconfig-system:system/ntp/openconfig-system:servers/server=%s"
+	uriNTPServerBase  = "/openconfig-system:system/ntp/openconfig-system:servers"
+	uriNTPConfigPatch = "/openconfig-system:system/ntp/config"
+)
+
+type ntpServerConfig struct {
+	Address string `json:"address"`
+	KeyID   int64  `json:"f5-openconfig-system-ntp:key-id,omitempty"`
+	Prefer  bool   `json:"prefer,omitempty"`
+	Iburst  bool   `json:"iburst,omitempty"`
+}
+
+type ntpServerPayload struct {
+	Server []struct {
+		Address string          `json:"address"`
+		Config  ntpServerConfig `json:"config"`
+	} `json:"server"`
+}
+
+type ntpConfigPatch struct {
+	Config struct {
+		Enabled       *bool `json:"enabled,omitempty"`
+		EnableNTPAuth *bool `json:"enable-ntp-auth,omitempty"`
+	} `json:"config"`
+}
+
+func (c *F5os) CreateNTPServer(server string, payload []byte) error {
+	uri := fmt.Sprintf("/openconfig-system:system/ntp/openconfig-system:servers")
+
+	resp, err := c.PostRequest(uri, payload)
+	if err != nil {
+		return fmt.Errorf("failed to create NTP server %s: %w", server, err)
+	}
+	f5osLogger.Debug("[CreatePartition]", "Resp: ", hclog.Fmt("%+v", string(resp)))
+
+	return nil
+}
+
+func (c *F5os) CreateNTPServerPayload(server string, plan NTPServerModel) ([]byte, error) {
+	payload := ntpServerPayload{
+		Server: []struct {
+			Address string          `json:"address"`
+			Config  ntpServerConfig `json:"config"`
+		}{
+			{
+				Address: server,
+				Config: ntpServerConfig{
+					Address: server,
+					KeyID:   plan.KeyID.ValueInt64(),
+					Prefer:  plan.Prefer.ValueBool(),
+					Iburst:  plan.IBurst.ValueBool(),
+				},
+			},
+		},
+	}
+	return json.Marshal(payload)
+}
+
+func (c *F5os) GetNTPServer(server string) (*NTPServerStruct, error) {
+	uri := fmt.Sprintf(uriNTPServer, server)
+	resp, err := c.GetRequest(uri)
+	if err != nil {
+		return nil, fmt.Errorf("GET NTP server failed: %w", err)
+	}
+	var ntpResp NTPServerStruct
+	if err := json.Unmarshal(resp, &ntpResp); err != nil {
+		return nil, fmt.Errorf("invalid JSON for NTP server: %w", err)
+	}
+	return &ntpResp, nil
+}
+
+func (c *F5os) UpdateNTPServer(server string, payload []byte) error {
+	uri := fmt.Sprintf(uriNTPServer, server)
+	_, err := c.PatchRequest(uri, payload)
+	if err != nil {
+		return fmt.Errorf("PATCH NTP server failed: %w", err)
+	}
+	return nil
+}
+
+func (c *F5os) DeleteNTPServer(server string) error {
+	uri := fmt.Sprintf(uriNTPServer, server)
+	err := c.DeleteRequest(uri)
+	if err != nil {
+		return fmt.Errorf("DELETE NTP server failed: %w", err)
+	}
+	return nil
+}
+
+// Optional: Patch global NTP settings like service and authentication
+func (c *F5os) PatchNTPGlobalConfig(service, auth *bool) error {
+	var payload ntpConfigPatch
+	payload.Config.Enabled = service
+	payload.Config.EnableNTPAuth = auth
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal global NTP config: %w", err)
+	}
+	_, err = c.PatchRequest(uriNTPConfigPatch, body)
+	if err != nil {
+		return fmt.Errorf("PATCH NTP global config failed: %w", err)
+	}
+	return nil
 }
