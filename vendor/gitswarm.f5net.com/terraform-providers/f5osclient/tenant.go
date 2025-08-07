@@ -407,13 +407,15 @@ func (p *F5os) CreateTenant(tenantObj *F5ReqTenants, timeOut int) ([]byte, error
 
 func (p *F5os) UpdateTenant(tenantObj *F5ReqTenantsPatch, timeOut int) ([]byte, error) {
 	// url := fmt.Sprintf("%s", uriTenant)
-	f5osLogger.Info("[UpdateTenant]", "Request path", hclog.Fmt("%+v", uriTenant))
-	byteBody, err := json.Marshal(tenantObj)
+	tenantNameurl := fmt.Sprintf("/tenant=%s", tenantObj.F5TenantsTenants.Tenant[0].Name)
+	uriTenant1 := fmt.Sprintf("%s%s", uriTenant, tenantNameurl)
+	f5osLogger.Info("[UpdateTenant]", "Request path", hclog.Fmt("%+v", uriTenant1))
+	byteBody, err := json.Marshal(tenantObj.F5TenantsTenants)
 	if err != nil {
 		return byteBody, err
 	}
 	f5osLogger.Info("[UpdateTenant]", "Body", hclog.Fmt("%+v", string(byteBody)))
-	respData, err := p.PutRequest(uriTenant, byteBody)
+	respData, err := p.PutRequest(uriTenant1, byteBody)
 	if err != nil {
 		return respData, err
 	}
