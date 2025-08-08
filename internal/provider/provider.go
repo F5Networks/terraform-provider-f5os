@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -101,6 +102,11 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	teemTmp := os.Getenv("TEEM_DISABLE")
 
 	hostPort := 8888
+	if portEnv := os.Getenv("F5OS_PORT"); portEnv != "" {
+		if port, err := strconv.Atoi(portEnv); err == nil {
+			hostPort = port
+		}
+	}
 	var teemDisable bool
 	teemDisable = false
 	if teemTmp == "true" {
@@ -212,6 +218,7 @@ func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewNTPServerResource,
 		NewF5osLoggingResource,
 		NewUserResource,
+		NewQkviewResource,
 	}
 }
 
