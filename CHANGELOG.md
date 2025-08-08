@@ -2,7 +2,7 @@
 
 BREAKING CHANGES:
 FEATURES:
-* **resources/f5os_qkview:** New resource added for generating and managing qkview diagnostic files
+* **resources/f5os_user_password_change:** New Resource added for changing F5OS user passwords.
 IMPROVEMENTS:
 
 ## 1.5.0
