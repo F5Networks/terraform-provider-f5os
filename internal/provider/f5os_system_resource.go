@@ -357,14 +357,15 @@ func (r *SystemResource) Read(ctx context.Context, req resource.ReadRequest, res
 
 	services := raw["f5-security-ciphers:service"]
 	for _, svc := range services {
-		if svc["name"] == "httpd" {
+		switch svc["name"] {
+		case "httpd":
 			b, _ := json.Marshal(svc)
 			err = json.Unmarshal(b, resHttpdBlock)
 			if err != nil {
 				resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("error: %s", err))
 				return
 			}
-		} else if svc["name"] == "sshd" {
+		case "sshd":
 			b, _ := json.Marshal(svc)
 			err = json.Unmarshal(b, resSshdBlock)
 			if err != nil {
