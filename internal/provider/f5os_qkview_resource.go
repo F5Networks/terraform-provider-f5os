@@ -27,10 +27,12 @@ func NewQkviewResource() resource.Resource {
 }
 
 // QkviewResource defines the resource implementation.
+// QkviewResource implements the Terraform resource for F5OS qkview files.
 type QkviewResource struct {
 	client *f5ossdk.F5os
 }
 
+// QkviewResourceModel is the Terraform state model for qkview resources.
 type QkviewResourceModel struct {
 	Filename      types.String `tfsdk:"filename"`
 	Timeout       types.Int64  `tfsdk:"timeout"`
@@ -79,15 +81,15 @@ type QkviewList struct {
 	} `json:"Qkviews"`
 }
 
+// Metadata sets the resource type name.
 func (r *QkviewResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_qkview"
 }
 
+// Schema defines the Terraform schema for the resource.
 func (r *QkviewResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		// This description is used by the documentation generator and the language server.
 		MarkdownDescription: "Resource used to generate and manage qkview diagnostic files on F5OS devices. Qkview files contain system information and logs for troubleshooting purposes.",
-
 		Attributes: map[string]schema.Attribute{
 			"filename": schema.StringAttribute{
 				MarkdownDescription: "Name of the qkview file to generate (without .tar extension).",
@@ -267,7 +269,7 @@ func (r *QkviewResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		// Try with the original filename
 		existingFile = filename
 		if !strings.HasSuffix(existingFile, ".tar") {
-			existingFile = existingFile + ".tar"
+			existingFile += ".tar"
 		}
 	}
 
@@ -341,17 +343,17 @@ func (r *QkviewResource) qkviewExists(ctx context.Context, filename string) (boo
 			}
 		}
 
-		// Remove compound suffixes in the correct order
-		// Handle .tar.timedout, .tar.canceled, etc.
-		if strings.HasSuffix(existingBase, ".tar.timedout") {
+		// Remove compound suffixes in the correct order using a switch statement
+		switch {
+		case strings.HasSuffix(existingBase, ".tar.timedout"):
 			existingBase = strings.TrimSuffix(existingBase, ".tar.timedout")
-		} else if strings.HasSuffix(existingBase, ".tar.canceled") {
+		case strings.HasSuffix(existingBase, ".tar.canceled"):
 			existingBase = strings.TrimSuffix(existingBase, ".tar.canceled")
-		} else if strings.HasSuffix(existingBase, ".timedout") {
+		case strings.HasSuffix(existingBase, ".timedout"):
 			existingBase = strings.TrimSuffix(existingBase, ".timedout")
-		} else if strings.HasSuffix(existingBase, ".canceled") {
+		case strings.HasSuffix(existingBase, ".canceled"):
 			existingBase = strings.TrimSuffix(existingBase, ".canceled")
-		} else if strings.HasSuffix(existingBase, ".tar") {
+		case strings.HasSuffix(existingBase, ".tar"):
 			existingBase = strings.TrimSuffix(existingBase, ".tar")
 		}
 
