@@ -77,7 +77,6 @@ resource "f5os_logging" "logging" {
 - `include_hostname` (Boolean) Whether to include the hostname in log messages.
 - `remote_forwarding` (Attributes) Remote forwarding configuration for host logs, including enablement, log selectors, and file outputs. (see [below for nested schema](#nestedatt--remote_forwarding))
 - `servers` (Attributes List) A list of remote logging servers. Each server can specify address, port, protocol, authentication, and log selectors. (see [below for nested schema](#nestedatt--servers))
-- `state` (String) Current state of the logging resource.
 - `tls` (Attributes) TLS configuration for secure logging. (see [below for nested schema](#nestedatt--tls))
 
 ### Read-Only
