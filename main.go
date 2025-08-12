@@ -37,7 +37,7 @@ func main() {
 	opts := providerserver.ServeOpts{
 		// TODO: Update this string with the published name of your provider.
 		Address: "registry.terraform.io/f5networks/f5os",
-		//registry.terraform.io/f5networks/f5os",
+		// registry.terraform.io/f5networks/f5os",
 		Debug: debug,
 	}
 
