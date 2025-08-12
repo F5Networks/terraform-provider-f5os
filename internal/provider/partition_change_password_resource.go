@@ -101,7 +101,7 @@ func (r *PartitionChangePasswordResource) Create(ctx context.Context, req resour
 
 	data.Id = types.StringValue(data.UserName.ValueString())
 
-	//r.partitionResourceModelToState(ctx, partData, data)
+	// r.partitionResourceModelToState(ctx, partData, data)
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -143,7 +143,7 @@ func (r *PartitionChangePasswordResource) Update(ctx context.Context, req resour
 
 	data.Id = types.StringValue(data.UserName.ValueString())
 
-	//r.partitionResourceModelToState(ctx, partData, data)
+	// r.partitionResourceModelToState(ctx, partData, data)
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

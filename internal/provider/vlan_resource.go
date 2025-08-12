@@ -66,7 +66,7 @@ func (r *VlanResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 
 func (r *VlanResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	r.client, resp.Diagnostics = toF5osProvider(req.ProviderData)
-	//teemData := &TeemData{}
+	// teemData := &TeemData{}
 	teemData.ProviderName = "f5os"
 	teemData.ResourceName = "f5os_vlan"
 	r.teemData = teemData
