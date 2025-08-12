@@ -398,8 +398,8 @@ resource "f5os_tenant" "test-tenant22" {
 `
 
 //
-// const testAccTenantDeployTC4ResourceConfig = `
-// resource "f5os_tenant" "test2" {
+//const testAccTenantDeployTC4ResourceConfig = `
+//resource "f5os_tenant" "test2" {
 //  name              = "testtenant-ecosys2"
 //  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
 //  mgmt_ip           = "10.14.10.10"

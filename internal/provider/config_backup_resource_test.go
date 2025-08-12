@@ -94,7 +94,7 @@ func TestUnitCfgBackup(t *testing.T) {
 
 	mux.HandleFunc(readCfgBackup, func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method, "Expected method '%s', got '%s'", http.MethodPost, r.Method)
-		fmt.Fprint(w,
+		_, _ = fmt.Fprint(w,
 			`
 			{
 				"f5-utils-file-transfer:output": {
@@ -113,7 +113,7 @@ func TestUnitCfgBackup(t *testing.T) {
 
 	mux.HandleFunc(deleteCfgBackup, func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method, "Expected method '%s', got '%s'", http.MethodPost, r.Method)
-		fmt.Fprint(w, `{"f5-utils-file-transfer:output":{"result":"Deleting the file"}}`)
+		_, _ = fmt.Fprint(w, `{"f5-utils-file-transfer:output":{"result":"Deleting the file"}}`)
 	})
 
 	defer teardown()

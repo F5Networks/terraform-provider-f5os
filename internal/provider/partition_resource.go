@@ -92,22 +92,22 @@ func (r *PartitionResource) Schema(ctx context.Context, req resource.SchemaReque
 			"ipv6_mgmt_address": schema.StringAttribute{
 				MarkdownDescription: "Specifies the IPv6 address and subnet mask used to access the chassis partition.\nThe address must be specified in CIDR notation e.g. 2002::1234:abcd:ffff:c0a8:101/64.\nRequired for create operations.",
 				Optional:            true,
-				// Validators: []validator.String{
-				// 	stringvalidator.RegexMatches(
-				// 		regexp.MustCompile(`^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}/(1[0-1]\d|[12]\d|[0-9])$`),
-				// 		"given ipv6_mgmt_address must be a valid IPV6 address in CIDR format",
-				// 	),
-				// },
+				//Validators: []validator.String{
+				//	stringvalidator.RegexMatches(
+				//		regexp.MustCompile(`^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}/(1[0-1]\d|[12]\d|[0-9])$`),
+				//		"given ipv6_mgmt_address must be a valid IPV6 address in CIDR format",
+				//	),
+				//},
 			},
 			"ipv6_mgmt_gateway": schema.StringAttribute{
 				MarkdownDescription: "Specifies the IPv6 chassis partition management gateway.\nRequired for create operations.",
 				Optional:            true,
-				// Validators: []validator.String{
-				// 	stringvalidator.RegexMatches(
-				// 		regexp.MustCompile(`^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$`),
-				// 		"given ipv6_mgmt_gateway is not a valid IPV6 address",
-				// 	),
-				// },
+				//Validators: []validator.String{
+				//	stringvalidator.RegexMatches(
+				//		regexp.MustCompile(`^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$`),
+				//		"given ipv6_mgmt_gateway is not a valid IPV6 address",
+				//	),
+				//},
 			},
 			"os_version": schema.StringAttribute{
 				MarkdownDescription: "Specifies the partition F5OS-C OS Bundled version.(ISO image version)",

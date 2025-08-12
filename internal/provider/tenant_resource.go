@@ -25,7 +25,7 @@ import (
 )
 
 // var (
-//     mutex sync.Mutex
+//	mutex sync.Mutex
 // )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -255,13 +255,9 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 	tflog.Info(ctx, fmt.Sprintf("tenantConfig Data:%+v", tenantConfig))
 
 	// mutex.Lock()
-	teemInfo := make(map[string]interface{})
+	teemInfo := make(map[string]any)
 	teemInfo["teemData"] = r.teemData
 	r.client.Metadata = teemInfo
-	// _ = r.client.SendTeem(teemInfo)
-	// if err != nil {
-	//     resp.Diagnostics.AddError("Teem Error", fmt.Sprintf("Sending Teem Data failed: %s", err))
-	// }
 	tflog.Info(ctx, fmt.Sprintf("Timeout :%+v", int(data.Timeout.ValueInt64())))
 	respByte, err := r.client.CreateTenant(tenantConfig, int(data.Timeout.ValueInt64()))
 	if err != nil {
@@ -439,26 +435,11 @@ func (r *TenantResource) getTenantCreateConfig(ctx context.Context, req resource
 		// tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = "one"
 	}
 	//  else {
-	//     tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
+	// 	tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
 	// }
 	// tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
-	if !data.Memory.IsNull() && !data.Memory.IsUnknown() {
-		tenantSubbj.Config.Memory = int(data.Memory.ValueInt64())
-	} else {
-		tflog.Info(ctx, fmt.Sprintf("r.client.PlatformType:%+v", r.client.PlatformType))
-		if r.client.PlatformType == "r2800" || r.client.PlatformType == "r2000" || r.client.PlatformType == "r4000" || r.client.PlatformType == "r4800" {
-			tenantSubbj.Config.Memory = 3 * 1024 * int(data.CpuCores.ValueInt64())
-		} else {
-			tenantSubbj.Config.Memory = (3.5 * 1024 * int(data.CpuCores.ValueInt64())) + (512)
-		}
-	}
-
-	// tenantSubbj.Config.Memory = 3.5*1024*int(data.CpuCores.ValueInt64()) + (512)
-	// } else {
-
-	// }
+	tenantSubbj.Config.Memory = calculateMemory(data, r.client.PlatformType)
 	data.Vlans.ElementsAs(ctx, &tenantSubbj.Config.Vlans, false)
-	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.RunningState = data.RunningState.ValueString()
 	tenantSubbj.Config.Cryptos = data.Cryptos.ValueString()
 	data.Nodes.ElementsAs(ctx, &tenantSubbj.Config.Nodes, false)
@@ -485,18 +466,9 @@ func (r *TenantResource) getTenantUpdateConfig(ctx context.Context, req resource
 	tenantSubbj.Config.VcpuCoresPerNode = int(data.CpuCores.ValueInt64())
 	tenantSubbj.Config.DagIpv6PrefixLength = int(data.DagIpv6prefixLength.ValueInt64())
 	tenantSubbj.Config.MacData.F5TenantL2InlineMacBlockSize = data.MacBlockSize.ValueString()
-	if !data.Memory.IsNull() && !data.Memory.IsUnknown() {
-		tenantSubbj.Config.Memory = int(data.Memory.ValueInt64())
-	} else {
-		if r.client.PlatformType == "r2800" || r.client.PlatformType == "r2000" || r.client.PlatformType == "r4000" || r.client.PlatformType == "r4800" {
-			tenantSubbj.Config.Memory = 3 * 1024 * int(data.CpuCores.ValueInt64())
-		} else {
-			tenantSubbj.Config.Memory = (3.5 * 1024 * int(data.CpuCores.ValueInt64())) + (512)
-		}
-	}
+	tenantSubbj.Config.Memory = calculateMemory(data, r.client.PlatformType)
 	data.Nodes.ElementsAs(ctx, &tenantSubbj.Config.Nodes, false)
 	data.Vlans.ElementsAs(ctx, &tenantSubbj.Config.Vlans, false)
-	tenantSubbj.Config.PrefixLength = int(data.MgmtPrefix.ValueInt64())
 	tenantSubbj.Config.RunningState = data.RunningState.ValueString()
 	tenantSubbj.Config.Cryptos = data.Cryptos.ValueString()
 	tenantSubbj.Config.Storage.Size = int(data.VirtualdiskSize.ValueInt64())
@@ -505,4 +477,21 @@ func (r *TenantResource) getTenantUpdateConfig(ctx context.Context, req resource
 	tenantpatchConfig.F5TenantsTenants.Tenant = append(tenantpatchConfig.F5TenantsTenants.Tenant, tenantSubbj)
 	tflog.Info(ctx, fmt.Sprintf("getTenantUpdateConfig:%+v", tenantpatchConfig))
 	return tenantpatchConfig
+}
+
+// Helper for platform type check
+func isRSeriesPlatform(platform string) bool {
+	return platform == "r2800" || platform == "r2000" || platform == "r4000" || platform == "r4800"
+}
+
+// Helper for memory sizing
+func calculateMemory(data *TenantResourceModel, platformType string) int {
+	if !data.Memory.IsNull() && !data.Memory.IsUnknown() {
+		return int(data.Memory.ValueInt64())
+	}
+	cpuCores := int(data.CpuCores.ValueInt64())
+	if isRSeriesPlatform(platformType) {
+		return 3 * 1024 * cpuCores
+	}
+	return int(3.5*1024*float64(cpuCores)) + 512
 }
