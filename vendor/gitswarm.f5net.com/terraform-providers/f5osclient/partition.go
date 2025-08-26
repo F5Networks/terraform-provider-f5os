@@ -779,3 +779,177 @@ func (c *F5os) GetSnmpConfig() ([]byte, error) {
 	}
 	return resp, nil
 }
+
+// Auth/AAA related constants and methods
+const (
+	uriAAA           = "/openconfig-system:system/aaa/authentication"
+	uriAAAConfig     = "/openconfig-system:system/aaa/authentication/config"
+	uriAAAAuthMethod = "/openconfig-system:system/aaa/authentication/config/authentication-method"
+	uriAAARoles      = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles"
+	uriAAARoleConfig = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config"
+)
+
+type authOrderPayload struct {
+	Config struct {
+		AuthenticationMethod []string `json:"authentication-method"`
+	} `json:"config"`
+}
+
+type authRoleConfig struct {
+	Rolename string `json:"f5-system-aaa:rolename"`
+	GID      *int64 `json:"f5-system-aaa:gid,omitempty"`
+}
+
+type authRolePayload struct {
+	Config authRoleConfig `json:"f5-system-aaa:config"`
+}
+
+// SetAuthOrder configures the authentication method order
+func (c *F5os) SetAuthOrder(methods []string) error {
+	// Map user-friendly names to OpenConfig identifiers
+	methodMap := map[string]string{
+		"local":  "openconfig-aaa-types:LOCAL",
+		"radius": "openconfig-aaa-types:RADIUS_ALL",
+		"tacacs": "openconfig-aaa-types:TACACS_ALL",
+		"ldap":   "f5-openconfig-aaa-ldap:LDAP_ALL",
+	}
+
+	var openConfigMethods []string
+	for _, method := range methods {
+		if mappedMethod, ok := methodMap[method]; ok {
+			openConfigMethods = append(openConfigMethods, mappedMethod)
+		} else {
+			// Fallback to original value if mapping not found
+			openConfigMethods = append(openConfigMethods, method)
+		}
+	}
+
+	// Convert methods to the proper OpenConfig format
+	payload := struct {
+		AuthenticationMethod []string `json:"openconfig-system:authentication-method"`
+	}{
+		AuthenticationMethod: openConfigMethods,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal auth order payload: %w", err)
+	}
+
+	// Use PUT to the authentication-method path
+	_, err = c.PutRequest(uriAAAAuthMethod, body)
+	if err != nil {
+		return fmt.Errorf("PUT auth order failed: %w", err)
+	}
+	return nil
+} // GetAuthOrder retrieves the configured authentication method order
+func (c *F5os) GetAuthOrder() ([]string, error) {
+	resp, err := c.GetRequest(uriAAAConfig)
+	if err != nil {
+		return nil, fmt.Errorf("GET auth order failed: %w", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(resp, &raw); err != nil {
+		return nil, fmt.Errorf("invalid JSON for auth order: %w", err)
+	}
+
+	// Try to extract regardless of namespace key location
+	var auth any
+	if v, ok := raw["openconfig-system:config"]; ok {
+		auth = v
+	} else if v, ok := raw["config"]; ok {
+		auth = v
+	}
+
+	if auth != nil {
+		if authMap, ok := auth.(map[string]any); ok {
+			if methodsRaw, ok := authMap["authentication-method"]; ok {
+				if methods, ok := methodsRaw.([]any); ok {
+					result := make([]string, len(methods))
+					for i, method := range methods {
+						if methodStr, ok := method.(string); ok {
+							result[i] = methodStr
+						}
+					}
+					return result, nil
+				}
+			}
+		}
+	}
+	return nil, nil
+}
+
+// ClearAuthOrder deletes the authentication-method array
+func (c *F5os) ClearAuthOrder() error {
+	err := c.DeleteRequest(uriAAAAuthMethod)
+	if err != nil {
+		return fmt.Errorf("DELETE auth order failed: %w", err)
+	}
+	return nil
+}
+
+// SetRoleConfig creates/updates a role with a specific gid
+func (c *F5os) SetRoleConfig(rolename string, gid *int64) error {
+	uri := fmt.Sprintf(uriAAARoleConfig, rolename)
+	config := authRoleConfig{
+		Rolename: rolename,
+		GID:      gid,
+	}
+	payload := authRolePayload{Config: config}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal role config payload: %w", err)
+	}
+	_, err = c.PutRequest(uri, body)
+	if err != nil {
+		return fmt.Errorf("PUT role config failed: %w", err)
+	}
+	return nil
+}
+
+// GetRoles returns map[rolename]gid
+func (c *F5os) GetRoles() (map[string]int, error) {
+	resp, err := c.GetRequest(uriAAARoles)
+	if err != nil {
+		return nil, fmt.Errorf("GET roles failed: %w", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(resp, &raw); err != nil {
+		return nil, fmt.Errorf("invalid JSON for roles: %w", err)
+	}
+
+	result := make(map[string]int)
+	// Try to find roles array regardless of namespace
+	var rolesArray []any
+	if v, ok := raw["f5-system-aaa:roles"]; ok {
+		if rolesMap, ok := v.(map[string]any); ok {
+			if roles, ok := rolesMap["role"]; ok {
+				rolesArray, _ = roles.([]any)
+			}
+		}
+	}
+
+	for _, roleRaw := range rolesArray {
+		if roleMap, ok := roleRaw.(map[string]any); ok {
+			var name string
+			var gid int
+
+			if nameRaw, ok := roleMap["rolename"]; ok {
+				name, _ = nameRaw.(string)
+			}
+			if configRaw, ok := roleMap["config"]; ok {
+				if configMap, ok := configRaw.(map[string]any); ok {
+					if gidRaw, ok := configMap["gid"]; ok {
+						if gidFloat, ok := gidRaw.(float64); ok {
+							gid = int(gidFloat)
+						}
+					}
+				}
+			}
+			if name != "" {
+				result[name] = gid
+			}
+		}
+	}
+	return result, nil
+}
