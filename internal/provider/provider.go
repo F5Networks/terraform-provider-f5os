@@ -220,6 +220,8 @@ func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewUserResource,
 		NewUserPasswordChangeResource,
 		NewQkviewResource,
+		NewSnmpResource,
+		NewAuthResource,
 	}
 }
 
