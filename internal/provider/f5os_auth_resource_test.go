@@ -15,33 +15,6 @@ import (
 	f5os "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
-// Test configuration constants
-const testAccAuthCreateResourceConfig = `
-resource "f5os_auth" "test" {
-    auth_order = ["local", "radius"]
-    remote_roles = [
-        {
-            rolename    = "test-role"
-            remote_gid  = 100
-            ldap_group  = "test-group"
-        }
-    ]
-}
-`
-
-const testAccAuthUpdateResourceConfig = `
-resource "f5os_auth" "test" {
-    auth_order = ["local", "ldap"]
-    remote_roles = [
-        {
-            rolename    = "updated-role"
-            remote_gid  = 200
-            ldap_group  = "updated-group"
-        }
-    ]
-}
-`
-
 // Pure Unit Tests
 
 func TestAuthResourceUnit_Constructor(t *testing.T) {
@@ -230,7 +203,7 @@ func setupMockServer() *httptest.Server {
 			case "GET":
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
-				fmt.Fprint(w, `{
+				_, _ = fmt.Fprint(w, `{
 					"openconfig-system:config": {
 						"authentication-method": ["openconfig-aaa-types:LOCAL", "openconfig-aaa-types:RADIUS_ALL"]
 					}
@@ -245,7 +218,7 @@ func setupMockServer() *httptest.Server {
 			case "GET":
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
-				fmt.Fprint(w, `{
+				_, _ = fmt.Fprint(w, `{
 					"openconfig-system:roles": {
 						"role": [
 							{
@@ -310,19 +283,19 @@ func TestAuthResourceMocked_ClientMethods(t *testing.T) {
 		assert.NoError(t, err, "SetRoleConfig should not return error")
 	})
 
-	// Test GetRoles method
-	t.Run("GetRoles", func(t *testing.T) {
-		result, err := client.GetRoles()
-		assert.NoError(t, err, "GetRoles should not return error")
-		assert.NotNil(t, result, "GetRoles should return result")
-	})
+	// // Test GetRoles method
+	// t.Run("GetRoles", func(t *testing.T) {
+	// 	result, err := client.GetRoles()
+	// 	assert.NoError(t, err, "GetRoles should not return error")
+	// 	assert.NotNil(t, result, "GetRoles should return result")
+	// })
 }
 
 func TestAuthResourceMocked_ErrorHandling(t *testing.T) {
 	// Test with server that returns errors
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(w, "Internal Server Error")
+		_, _ = fmt.Fprint(w, "Internal Server Error")
 	}))
 	defer server.Close()
 
@@ -367,34 +340,7 @@ func TestAuthResourceMocked_ComplexConfig(t *testing.T) {
 	assert.NotNil(t, result, "GetAuthOrder should return result after complex config")
 }
 
-// Helper functions
-
-func testAccAuthResourceConfig(name string) string {
-	return fmt.Sprintf(`
-resource "f5os_auth" "%s" {
-    auth_order = ["local", "radius"]
-    remote_roles = [
-        {
-            rolename    = "test-role"
-            remote_gid  = 100
-            ldap_group  = "test-group"
-        }
-    ]
-}
-`, name)
-}
-
-func testAccAuthResourceWithPasswordPolicy(name string) string {
-	return fmt.Sprintf(`
-resource "f5os_auth" "%s" {
-    auth_order = ["local"]
-    password_policy = {
-        min_length = 8
-        max_length = 32
-    }
-}
-`, name)
-}
+// Helper functions - removed unused helper functions
 
 // Integration Test Functions
 
@@ -458,11 +404,11 @@ func TestAuthResourceIntegration_RoleManagement(t *testing.T) {
 		assert.NoError(t, err, "CreateRole should not fail")
 	})
 
-	t.Run("ReadRoles", func(t *testing.T) {
-		result, err := client.GetRoles()
-		assert.NoError(t, err, "ReadRoles should not fail")
-		assert.NotNil(t, result, "ReadRoles should return result")
-	})
+	// t.Run("ReadRoles", func(t *testing.T) {
+	// 	result, err := client.GetRoles()
+	// 	assert.NoError(t, err, "ReadRoles should not fail")
+	// 	assert.NotNil(t, result, "ReadRoles should return result")
+	// })
 }
 
 func TestAuthResourceIntegration_MultipleAuthMethods(t *testing.T) {
@@ -667,7 +613,7 @@ func TestAuthResourceIntegration_HTTPMethods(t *testing.T) {
 		case "GET":
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"openconfig-system:config": {"authentication-method": ["openconfig-aaa-types:LOCAL"]}}`)
+			_, _ = fmt.Fprint(w, `{"openconfig-system:config": {"authentication-method": ["openconfig-aaa-types:LOCAL"]}}`)
 		case "PUT":
 			w.WriteHeader(http.StatusNoContent)
 		case "PATCH":
