@@ -10,6 +10,6 @@ resource "f5os_system" "system_settings" {
   httpd_ciphersuite = "ECDHE-RSA-AES256-GCM-SHA384"
   sshd_ciphers      = ["aes256-ctr", "aes256-gcm@openssh.com"]
   sshd_kex_alg      = ["ecdh-sha2-nistp384"]
-  sshd_mac_alg      = ["hmac-sha1-96"]
+  sshd_mac_alg      = ["hmac-sha2-256"]
   sshd_hkey_alg     = ["ssh-rsa"]
 }

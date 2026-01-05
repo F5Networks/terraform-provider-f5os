@@ -270,7 +270,7 @@ func (r *SnmpResource) Configure(_ context.Context, req resource.ConfigureReques
 	r.client = &f5osSnmpClient{c: client}
 }
 
-// computeResourceID generates a hash-based ID from SNMP configuration
+// // computeResourceID generates a hash-based ID from SNMP configuration
 // func computeSnmpResourceID(communities []SnmpCommunityModel, targets []SnmpTargetModel, users []SnmpUserModel, mib *SnmpMibModel) string {
 // 	var configParts []string
 
