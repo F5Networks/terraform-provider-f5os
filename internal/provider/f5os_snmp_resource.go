@@ -2,8 +2,12 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -271,45 +275,45 @@ func (r *SnmpResource) Configure(_ context.Context, req resource.ConfigureReques
 }
 
 // computeResourceID generates a hash-based ID from SNMP configuration
-// func computeSnmpResourceID(communities []SnmpCommunityModel, targets []SnmpTargetModel, users []SnmpUserModel, mib *SnmpMibModel) string {
-// 	var configParts []string
+func computeSnmpResourceID(communities []SnmpCommunityModel, targets []SnmpTargetModel, users []SnmpUserModel, mib *SnmpMibModel) string {
+	var configParts []string
 
-// 	// Add communities
-// 	for _, community := range communities {
-// 		configParts = append(configParts, fmt.Sprintf("community:%s", community.Name.ValueString()))
-// 	}
+	// Add communities
+	for _, community := range communities {
+		configParts = append(configParts, fmt.Sprintf("community:%s", community.Name.ValueString()))
+	}
 
-// 	// Add targets
-// 	for _, target := range targets {
-// 		configParts = append(configParts, fmt.Sprintf("target:%s", target.Name.ValueString()))
-// 	}
+	// Add targets
+	for _, target := range targets {
+		configParts = append(configParts, fmt.Sprintf("target:%s", target.Name.ValueString()))
+	}
 
-// 	// Add users
-// 	for _, user := range users {
-// 		configParts = append(configParts, fmt.Sprintf("user:%s", user.Name.ValueString()))
-// 	}
+	// Add users
+	for _, user := range users {
+		configParts = append(configParts, fmt.Sprintf("user:%s", user.Name.ValueString()))
+	}
 
-// 	// Add MIB
-// 	if mib != nil {
-// 		if !mib.SysName.IsNull() {
-// 			configParts = append(configParts, fmt.Sprintf("mib:sysname:%s", mib.SysName.ValueString()))
-// 		}
-// 		if !mib.SysContact.IsNull() {
-// 			configParts = append(configParts, fmt.Sprintf("mib:syscontact:%s", mib.SysContact.ValueString()))
-// 		}
-// 		if !mib.SysLocation.IsNull() {
-// 			configParts = append(configParts, fmt.Sprintf("mib:syslocation:%s", mib.SysLocation.ValueString()))
-// 		}
-// 	}
+	// Add MIB
+	if mib != nil {
+		if !mib.SysName.IsNull() {
+			configParts = append(configParts, fmt.Sprintf("mib:sysname:%s", mib.SysName.ValueString()))
+		}
+		if !mib.SysContact.IsNull() {
+			configParts = append(configParts, fmt.Sprintf("mib:syscontact:%s", mib.SysContact.ValueString()))
+		}
+		if !mib.SysLocation.IsNull() {
+			configParts = append(configParts, fmt.Sprintf("mib:syslocation:%s", mib.SysLocation.ValueString()))
+		}
+	}
 
-// 	// Sort to ensure consistent hash
-// 	sort.Strings(configParts)
-// 	configStr := strings.Join(configParts, ";")
+	// Sort to ensure consistent hash
+	sort.Strings(configParts)
+	configStr := strings.Join(configParts, ";")
 
-// 	// Generate SHA-256 hash
-// 	hash := sha256.Sum256([]byte(configStr))
-// 	return hex.EncodeToString(hash[:])
-// }
+	// Generate SHA-256 hash
+	hash := sha256.Sum256([]byte(configStr))
+	return hex.EncodeToString(hash[:])
+}
 
 // extractSnmpCommunities safely extracts SNMP communities from a types.List
 func extractSnmpCommunities(ctx context.Context, list types.List) ([]SnmpCommunityModel, diag.Diagnostics) {
