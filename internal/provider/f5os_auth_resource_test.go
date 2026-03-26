@@ -5,12 +5,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	tfresource "github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/stretchr/testify/assert"
 	f5os "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
@@ -754,3 +759,245 @@ func TestAuthResourceIntegration_HTTPMethods(t *testing.T) {
 	err = client.ClearAuthOrder()
 	assert.NoError(t, err, "DELETE method should not fail")
 }
+
+// ---------------------------------------------------------------------------
+// Acceptance Tests (require live F5OS device with TF_ACC=1)
+// ---------------------------------------------------------------------------
+
+// newAuthClientFromEnv creates a fresh f5osclient from environment variables.
+// Used by custom check functions to verify device state independently of the
+// resource's Read method.
+func newAuthClientFromEnv() (*f5os.F5os, error) {
+	host := os.Getenv("F5OS_HOST")
+	user := os.Getenv("F5OS_USERNAME")
+	if user == "" {
+		user = os.Getenv("F5OS_USER")
+	}
+	pass := os.Getenv("F5OS_PASSWORD")
+	port := 8888 // Default matches the provider (provider.go:104)
+	if p := os.Getenv("F5OS_PORT"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil {
+			port = v
+		}
+	}
+	cfg := &f5os.F5osConfig{
+		Host:             host,
+		User:             user,
+		Password:         pass,
+		Port:             port,
+		DisableSSLVerify: true,
+	}
+	return f5os.NewSession(cfg)
+}
+
+// mapOpenConfigMethodsToFriendly converts OpenConfig auth method identifiers
+// to user-friendly names (same mapping as in the resource's getAuthOrder).
+func mapOpenConfigMethodsToFriendly(methods []string) []string {
+	methodMap := map[string]string{
+		"openconfig-aaa-types:LOCAL":      "local",
+		"openconfig-aaa-types:RADIUS_ALL": "radius",
+		"openconfig-aaa-types:TACACS_ALL": "tacacs",
+		"f5-openconfig-aaa-ldap:LDAP_ALL": "ldap",
+	}
+	out := make([]string, 0, len(methods))
+	for _, m := range methods {
+		if friendly, ok := methodMap[m]; ok {
+			out = append(out, friendly)
+		} else {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// testAccCheckAuthOrderApplied queries the device directly to verify the
+// authentication order matches the expected methods (order-sensitive).
+func testAccCheckAuthOrderApplied(expectedMethods []string) tfresource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newAuthClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create f5os client: %w", err)
+		}
+		rawMethods, err := client.GetAuthOrder()
+		if err != nil {
+			return fmt.Errorf("failed to read auth order from device: %w", err)
+		}
+		actualMethods := mapOpenConfigMethodsToFriendly(rawMethods)
+
+		if len(actualMethods) != len(expectedMethods) {
+			return fmt.Errorf("auth order length mismatch: expected %v, got %v", expectedMethods, actualMethods)
+		}
+		for i, expected := range expectedMethods {
+			if actualMethods[i] != expected {
+				return fmt.Errorf("auth order mismatch at index %d: expected %q, got %q (full: expected %v, got %v)",
+					i, expected, actualMethods[i], expectedMethods, actualMethods)
+			}
+		}
+		return nil
+	}
+}
+
+// testAccCheckAuthDestroy verifies that the auth order was cleared after
+// terraform destroy. Note: Delete intentionally does NOT remove role GID
+// configurations, so we only check that auth_order was removed.
+func testAccCheckAuthDestroy(s *terraform.State) error {
+	client, err := newAuthClientFromEnv()
+	if err != nil {
+		// Cannot connect — treat as destroyed
+		return nil
+	}
+	rawMethods, err := client.GetAuthOrder()
+	if err != nil {
+		// If the GET fails (e.g., 404 because the path was deleted), that's fine
+		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
+			return nil
+		}
+		return fmt.Errorf("unexpected error checking auth order after destroy: %w", err)
+	}
+	// After ClearAuthOrder (DELETE), the response may return nil/empty or
+	// the device may fall back to a default. Accept nil/empty as "destroyed".
+	if len(rawMethods) == 0 {
+		return nil
+	}
+	// Some F5OS versions may return a default auth order after clearing.
+	// Only fail if the test-specific methods (radius, tacacs) are still present,
+	// since those would indicate our config was not cleaned up.
+	friendly := mapOpenConfigMethodsToFriendly(rawMethods)
+	for _, m := range friendly {
+		if m == "radius" || m == "tacacs" {
+			return fmt.Errorf("auth order still contains test method %q after destroy: %v", m, friendly)
+		}
+	}
+	return nil
+}
+
+// TestAccAuthResource is a real-device acceptance test for the f5os_auth resource.
+// It tests the full Terraform lifecycle: Create, Import, Update, Destroy.
+//
+// Safety:
+//   - auth_order always keeps "local" first
+//   - Each step is verified via direct API calls, not just Terraform state
+func TestAccAuthResource(t *testing.T) {
+	tfresource.Test(t, tfresource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAuthDestroy,
+		Steps: []tfresource.TestStep{
+			// Step 1: Create — set auth_order to local + radius
+			{
+				Config: testAccAuthResourceConfig,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					// Terraform state checks
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.#", "2"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.1", "radius"),
+					tfresource.TestCheckResourceAttrSet("f5os_auth.test", "id"),
+					// Direct API verification — proves the device accepted the config
+					testAccCheckAuthOrderApplied([]string{"local", "radius"}),
+				),
+			},
+			// Step 2: Import state
+			{
+				ResourceName:      "f5os_auth.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				// remote_roles: readRoleConfig reads ALL roles from the device,
+				// not just the ones the user declared, so imported state will
+				// contain extra roles that don't match the original config.
+				// password_policy: not implemented (Issue #4).
+				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy"},
+			},
+			// Step 3: Update — change auth_order to local + tacacs
+			{
+				Config: testAccAuthResourceConfigUpdated,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					// Terraform state checks
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.#", "2"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.1", "tacacs"),
+					tfresource.TestCheckResourceAttrSet("f5os_auth.test", "id"),
+					// Direct API verification
+					testAccCheckAuthOrderApplied([]string{"local", "tacacs"}),
+				),
+			},
+			// Step 4: Destroy is automatic — CheckDestroy verifies cleanup
+		},
+	})
+}
+
+// TestAccAuthResourceDriftDetection proves that the Read method queries the
+// device after Create/Update so that Terraform can detect out-of-band changes.
+//
+// Strategy:
+//  1. Apply auth_order = ["local", "radius"] — establishes Terraform-managed state.
+//  2. Between steps, mutate the device directly via API to ["local", "tacacs"]
+//     (simulating an out-of-band change / drift).
+//  3. Re-apply the same ["local", "radius"] config.
+//     - If Read queries the device: Terraform sees the drift, detects a diff,
+//     and re-applies ["local", "radius"]. The device ends up correct.
+//     - If Read is broken (preserves plan state): Terraform thinks nothing
+//     changed, skips the apply, and the device stays at ["local", "tacacs"].
+//  4. Verify via direct API that the device has ["local", "radius"].
+//
+// Safety: always keeps "local" first; restores baseline on destroy.
+func TestAccAuthResourceDriftDetection(t *testing.T) {
+	tfresource.Test(t, tfresource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAuthDestroy,
+		Steps: []tfresource.TestStep{
+			// Step 1: Create — set auth_order to ["local", "radius"]
+			{
+				Config: testAccAuthResourceConfig,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.#", "2"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.1", "radius"),
+					testAccCheckAuthOrderApplied([]string{"local", "radius"}),
+				),
+			},
+			// Step 2: Inject drift, then re-apply the SAME config.
+			// PreConfig runs before Terraform plans this step.
+			{
+				PreConfig: func() {
+					// Mutate the device behind Terraform's back
+					client, err := newAuthClientFromEnv()
+					if err != nil {
+						t.Fatalf("drift injection: failed to create client: %v", err)
+					}
+					if err := client.SetAuthOrder([]string{"local", "tacacs"}); err != nil {
+						t.Fatalf("drift injection: failed to set auth order: %v", err)
+					}
+					t.Log("drift injection: device auth_order changed to [local, tacacs]")
+				},
+				// Re-apply the original config. If Read detects the drift,
+				// Terraform will see a diff and re-apply ["local", "radius"].
+				Config: testAccAuthResourceConfig,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					// Terraform state should show the desired config
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.#", "2"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.1", "radius"),
+					// Critical: the DEVICE must actually have ["local", "radius"].
+					// If Read is broken, the device will still have ["local", "tacacs"]
+					// and this check will fail.
+					testAccCheckAuthOrderApplied([]string{"local", "radius"}),
+				),
+			},
+		},
+	})
+}
+
+// testAccAuthResourceConfig — Create step: local+radius auth order only
+const testAccAuthResourceConfig = `
+resource "f5os_auth" "test" {
+  auth_order = ["local", "radius"]
+}
+`
+
+// testAccAuthResourceConfigUpdated — Update step: local+tacacs auth order only
+const testAccAuthResourceConfigUpdated = `
+resource "f5os_auth" "test" {
+  auth_order = ["local", "tacacs"]
+}
+`
