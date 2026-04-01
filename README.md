@@ -36,6 +36,24 @@ terraform {
 }
 ```
 
+### Proxy support
+
+Provider runtime HTTP/HTTPS requests honor standard Go proxy environment variables:
+
+* `HTTPS_PROXY` or `https_proxy`
+* `HTTP_PROXY` or `http_proxy`
+* `NO_PROXY` or `no_proxy`
+
+Example:
+
+```sh
+export HTTPS_PROXY=http://proxy.example.com:8080
+export HTTP_PROXY=http://proxy.example.com:8080
+export NO_PROXY=localhost,127.0.0.1,.internal.example.com
+```
+
+When these variables are set, API and telemetry calls are routed through the proxy unless the target matches `NO_PROXY`.
+
 ## Documentation, questions and discussions
 Official documentation on how to use this provider can be found on the
 [Terraform Registry](https://registry.terraform.io/providers/F5Networks/f5os/latest/docs).

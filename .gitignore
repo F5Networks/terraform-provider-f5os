@@ -34,6 +34,8 @@ cover.out
 *.pub
 *.back
 *.goback
+.agents
+reports/
 
 website/vendor
 
