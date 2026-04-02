@@ -37,6 +37,7 @@ type RawTelemetry struct {
 
 func SendReport(telemetryRecords *RawTelemetry) error {
 	tr := &http.Transport{
+		Proxy:           http.ProxyFromEnvironment,
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	client := &http.Client{Transport: tr}
 	url := fmt.Sprintf("https://%s/ee/v1/telemetry", prodEndPoint)
