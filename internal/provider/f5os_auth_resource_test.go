@@ -213,20 +213,19 @@ func setupMockServer() *httptest.Server {
 			case "DELETE":
 				w.WriteHeader(http.StatusNoContent)
 			}
-		case "/restconf/data/openconfig-system:roles":
+		case "/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:roles":
 			switch r.Method {
 			case "GET":
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
 				_, _ = fmt.Fprint(w, `{
-					"openconfig-system:roles": {
+					"f5-system-aaa:roles": {
 						"role": [
-							{
-								"name": "test-role",
-								"config": {
-									"role-name": "test-role"
-								}
-							}
+							{"rolename": "admin", "config": {"rolename": "admin", "gid": 9000}},
+							{"rolename": "operator", "config": {"rolename": "operator", "gid": 9001}},
+							{"rolename": "resource-admin", "config": {"rolename": "resource-admin", "gid": 9003}},
+							{"rolename": "superuser", "config": {"rolename": "superuser", "gid": 9004}},
+							{"rolename": "user", "config": {"rolename": "user", "gid": 9002}}
 						]
 					}
 				}`)
@@ -338,6 +337,111 @@ func TestAuthResourceMocked_ComplexConfig(t *testing.T) {
 	result, err := client.GetAuthOrder()
 	assert.NoError(t, err, "GetAuthOrder after complex config should not fail")
 	assert.NotNil(t, result, "GetAuthOrder should return result after complex config")
+}
+
+// TestAuthResourceMocked_ReadRoleConfigFiltering verifies that readRoleConfig
+// only populates state with roles the user declared in their config, not every
+// role on the device. Without filtering, a device with 5 built-in roles
+// (admin, operator, resource-admin, superuser, user) would inject all 5 into
+// state even if the user only configured 1, causing drift on the next plan.
+func TestAuthResourceMocked_ReadRoleConfigFiltering(t *testing.T) {
+	server := setupMockServer()
+	defer server.Close()
+
+	cfg := &f5os.F5osConfig{
+		Host:             server.URL,
+		User:             "test",
+		Password:         "test",
+		DisableSSLVerify: true,
+	}
+	client, err := f5os.NewSession(cfg)
+	assert.NoError(t, err, "Client initialization should not fail")
+
+	res := &AuthResource{client: client}
+	ctx := context.Background()
+
+	// Simulate a state where the user configured only the "operator" role.
+	// Use a GID (1234) that differs from what the mock returns (9001) so we
+	// can confirm readRoleConfig actually read from the device and updated
+	// state, rather than being a no-op that left state untouched.
+	operatorRole := authRemoteRoleModel{
+		Rolename:  types.StringValue("operator"),
+		RemoteGID: types.Int64Value(1234),
+	}
+	configuredSet, diags := types.SetValueFrom(ctx, types.ObjectType{AttrTypes: map[string]attr.Type{
+		"rolename":   types.StringType,
+		"remote_gid": types.Int64Type,
+		"ldap_group": types.StringType,
+	}}, []authRemoteRoleModel{operatorRole})
+	assert.False(t, diags.HasError(), "Building configured roles set should not error")
+
+	state := &AuthResourceModel{
+		RemoteRoles: configuredSet,
+	}
+
+	// readRoleConfig should filter the 5 device roles down to just "operator"
+	err = res.readRoleConfig(ctx, state)
+	assert.NoError(t, err, "readRoleConfig should not return error")
+
+	var resultRoles []authRemoteRoleModel
+	diags = state.RemoteRoles.ElementsAs(ctx, &resultRoles, false)
+	assert.False(t, diags.HasError(), "Extracting roles from state should not error")
+
+	var resultNames []string
+	for _, r := range resultRoles {
+		resultNames = append(resultNames, r.Rolename.ValueString())
+	}
+
+	assert.Equal(t, 1, len(resultRoles),
+		"readRoleConfig should return only user-configured roles, got %v", resultNames)
+
+	if len(resultRoles) == 1 {
+		assert.Equal(t, "operator", resultRoles[0].Rolename.ValueString(),
+			"Single returned role should be 'operator'")
+		assert.Equal(t, int64(9001), resultRoles[0].RemoteGID.ValueInt64(),
+			"GID should be 9001 (from the device), not 1234 (from the seed state)")
+	}
+}
+
+// TestAuthResourceMocked_ReadRoleConfigImport verifies that readRoleConfig
+// returns all device roles when state.RemoteRoles is null (the import scenario).
+// During import, there's no prior config to filter against, so all roles should
+// be included in state.
+func TestAuthResourceMocked_ReadRoleConfigImport(t *testing.T) {
+	server := setupMockServer()
+	defer server.Close()
+
+	cfg := &f5os.F5osConfig{
+		Host:             server.URL,
+		User:             "test",
+		Password:         "test",
+		DisableSSLVerify: true,
+	}
+	client, err := f5os.NewSession(cfg)
+	assert.NoError(t, err, "Client initialization should not fail")
+
+	res := &AuthResource{client: client}
+	ctx := context.Background()
+
+	// Simulate import: RemoteRoles is null (no prior state)
+	state := &AuthResourceModel{
+		RemoteRoles: types.SetNull(types.ObjectType{AttrTypes: map[string]attr.Type{
+			"rolename":   types.StringType,
+			"remote_gid": types.Int64Type,
+			"ldap_group": types.StringType,
+		}}),
+	}
+
+	err = res.readRoleConfig(ctx, state)
+	assert.NoError(t, err, "readRoleConfig should not return error")
+
+	var resultRoles []authRemoteRoleModel
+	diags := state.RemoteRoles.ElementsAs(ctx, &resultRoles, false)
+	assert.False(t, diags.HasError(), "Extracting roles from state should not error")
+
+	// During import, all 5 device roles should be returned
+	assert.Equal(t, 5, len(resultRoles),
+		"readRoleConfig should return all device roles during import")
 }
 
 // Helper functions - removed unused helper functions
