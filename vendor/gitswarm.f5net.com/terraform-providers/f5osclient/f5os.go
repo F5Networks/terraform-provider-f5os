@@ -177,6 +177,8 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 		f5osObj.ConfigOptions = defaultConfigOptions
 	}
 	tr := &http.Transport{}
+	// Honor HTTPS_PROXY/HTTP_PROXY/NO_PROXY from the environment.
+	tr.Proxy = http.ProxyFromEnvironment
 	// f5osLogger.Info("[NewSession]", "DisableSSLVerify", hclog.Fmt("%+v", f5osObj.DisableSSLVerify))
 	tr.TLSClientConfig = &tls.Config{
 		InsecureSkipVerify: f5osObj.DisableSSLVerify,
