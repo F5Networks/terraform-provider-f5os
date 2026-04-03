@@ -334,14 +334,36 @@ func (r *AuthResource) readRoleConfig(ctx context.Context, state *AuthResourceMo
 		return err
 	}
 
+	// Build the set of role names the user configured so we can filter the
+	// device response to only those roles
+	configuredNames := make(map[string]bool)
+	if !state.RemoteRoles.IsNull() && !state.RemoteRoles.IsUnknown() {
+		var existing []authRemoteRoleModel
+		diags := state.RemoteRoles.ElementsAs(ctx, &existing, false)
+		if diags.HasError() {
+			return fmt.Errorf("failed to read configured roles from state: %s", diags.Errors()[0].Detail())
+		}
+		for _, er := range existing {
+			if !er.Rolename.IsNull() && !er.Rolename.IsUnknown() {
+				configuredNames[er.Rolename.ValueString()] = true
+			}
+		}
+	}
+
 	var roleModels []authRemoteRoleModel
 	for name, gid := range roles {
+		// Only include roles the user declared in their config. During import,
+		// configuredNames is empty (no prior state), so include all roles.
+		if len(configuredNames) > 0 && !configuredNames[name] {
+			continue
+		}
 		item := authRemoteRoleModel{Rolename: types.StringValue(name)}
 		if gid >= 0 {
 			item.RemoteGID = types.Int64Value(int64(gid))
 		}
 		roleModels = append(roleModels, item)
 	}
+
 	sv, _ := types.SetValueFrom(ctx, types.ObjectType{AttrTypes: map[string]attr.Type{
 		"rolename":   types.StringType,
 		"remote_gid": types.Int64Type,
