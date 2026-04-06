@@ -121,23 +121,29 @@ func (r *NTPServerResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
+	ntpService, ntpAuth, err := r.client.GetNTPGlobalConfig()
+	if err != nil {
+		resp.Diagnostics.AddError("NTP Global Config Read Error", err.Error())
+		return
+	}
+
 	state.ID = types.StringValue(state.Server.ValueString())
-	state.Server = types.StringValue(state.Server.ValueString())
-	// state.Server = types.StringValue(ntp.Address)
-	state.KeyID = types.Int64Value(int64(ntp.KeyID))
+	state.Server = types.StringValue(ntp.Address)
+	state.KeyID = types.Int64Value(ntp.KeyID)
 	state.Prefer = types.BoolValue(ntp.Prefer)
 	state.IBurst = types.BoolValue(ntp.IBurst)
-	state.NTPService = types.BoolValue(ntp.NTPService)
-	state.NTPAuthentication = types.BoolValue(ntp.NTPAuthentication)
+	state.NTPService = types.BoolValue(ntpService)
+	state.NTPAuthentication = types.BoolValue(ntpAuth)
 
-	tflog.Debug(ctx, "MDEBUG: Current Read Result", map[string]any{
-		"server": ntp.Address,
-		"key_id": ntp.KeyID,
-		"id":     state.ID,
+	tflog.Debug(ctx, "NTP Read Result", map[string]any{
+		"server":             ntp.Address,
+		"key_id":             ntp.KeyID,
+		"prefer":             ntp.Prefer,
+		"iburst":             ntp.IBurst,
+		"ntp_service":        ntpService,
+		"ntp_authentication": ntpAuth,
+		"id":                 state.ID.ValueString(),
 	})
-	if state.ID.IsNull() || state.ID.IsUnknown() {
-		tflog.Error(ctx, "MDEBUG: ID is missing after read", nil)
-	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }

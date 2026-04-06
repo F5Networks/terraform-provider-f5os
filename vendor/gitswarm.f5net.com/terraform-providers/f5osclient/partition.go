@@ -578,11 +578,37 @@ func (c *F5os) GetNTPServer(server string) (*NTPServerStruct, error) {
 	if err != nil {
 		return nil, fmt.Errorf("GET NTP server failed: %w", err)
 	}
-	var ntpResp NTPServerStruct
-	if err := json.Unmarshal(resp, &ntpResp); err != nil {
+
+	var envelope ntpServerResponse
+	if err := json.Unmarshal(resp, &envelope); err != nil {
 		return nil, fmt.Errorf("invalid JSON for NTP server: %w", err)
 	}
-	return &ntpResp, nil
+	if len(envelope.Server) == 0 {
+		return nil, fmt.Errorf("NTP server %s not found in response", server)
+	}
+
+	entry := envelope.Server[0]
+	return &NTPServerStruct{
+		Address: entry.Config.Address,
+		KeyID:   entry.Config.KeyID,
+		Prefer:  entry.Config.Prefer,
+		IBurst:  entry.Config.IBurst,
+	}, nil
+}
+
+// GetNTPGlobalConfig reads the global NTP service and authentication settings
+// from /openconfig-system:system/ntp/config.
+func (c *F5os) GetNTPGlobalConfig() (service bool, auth bool, err error) {
+	resp, err := c.GetRequest(uriNTPConfigPatch)
+	if err != nil {
+		return false, false, fmt.Errorf("GET NTP global config failed: %w", err)
+	}
+
+	var envelope ntpGlobalConfigResponse
+	if err := json.Unmarshal(resp, &envelope); err != nil {
+		return false, false, fmt.Errorf("invalid JSON for NTP global config: %w", err)
+	}
+	return envelope.Config.Enabled, envelope.Config.EnableNTPAuth, nil
 }
 
 func (c *F5os) UpdateNTPServer(server string, payload []byte) error {
