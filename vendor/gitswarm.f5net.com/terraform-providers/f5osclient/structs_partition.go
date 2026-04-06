@@ -606,13 +606,61 @@ type NTPServerModel struct {
 	NTPAuthentication types.Bool   `tfsdk:"ntp_authentication"`
 }
 
-// NTPServerStruct is the internal Go representation
-// used for HTTP payloads and response parsing.
+// ntpServerResponse models the RESTCONF JSON returned by
+// GET /openconfig-system:system/ntp/openconfig-system:servers/server={addr}
+//
+//	{
+//	  "openconfig-system:server": [{
+//	    "address": "10.20.30.40",
+//	    "config": {
+//	      "address":                          "10.20.30.40",
+//	      "f5-openconfig-system-ntp:key-id":  123,
+//	      "prefer":                           true,
+//	      "iburst":                           true
+//	    }
+//	  }]
+//	}
+type ntpServerResponse struct {
+	Server []ntpServerEntry `json:"openconfig-system:server"`
+}
+
+type ntpServerEntry struct {
+	Address string              `json:"address"`
+	Config  ntpServerReadConfig `json:"config"`
+}
+
+type ntpServerReadConfig struct {
+	Address string `json:"address"`
+	KeyID   int64  `json:"f5-openconfig-system-ntp:key-id,omitempty"`
+	Prefer  bool   `json:"prefer,omitempty"`
+	IBurst  bool   `json:"iburst,omitempty"`
+}
+
+// ntpGlobalConfigResponse models the RESTCONF JSON returned by
+// GET /openconfig-system:system/ntp/config
+//
+//	{
+//	  "openconfig-system:config": {
+//	    "enabled":        true,
+//	    "enable-ntp-auth": true
+//	  }
+//	}
+type ntpGlobalConfigResponse struct {
+	Config ntpGlobalConfigFields `json:"openconfig-system:config"`
+}
+
+type ntpGlobalConfigFields struct {
+	Enabled       bool `json:"enabled,omitempty"`
+	EnableNTPAuth bool `json:"enable-ntp-auth,omitempty"`
+}
+
+// NTPServerStruct is the flattened Go representation returned by
+// GetNTPServer + GetNTPGlobalConfig for the provider Read method.
 type NTPServerStruct struct {
-	Address           string `json:"address"`
-	KeyID             int64  `json:"key_id,omitempty"`
-	Prefer            bool   `json:"prefer,omitempty"`
-	IBurst            bool   `json:"iburst,omitempty"`
-	NTPService        bool   `json:"ntp_service,omitempty"`
-	NTPAuthentication bool   `json:"ntp_authentication,omitempty"`
+	Address           string
+	KeyID             int64
+	Prefer            bool
+	IBurst            bool
+	NTPService        bool
+	NTPAuthentication bool
 }
