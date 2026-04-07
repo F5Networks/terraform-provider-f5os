@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -164,6 +163,22 @@ func (r *AuthResource) Create(ctx context.Context, req resource.CreateRequest, r
 	}
 
 	plan.ID = types.StringValue("f5os-auth")
+
+	// Read back actual device state so Terraform detects any discrepancies
+	// between what was planned and what the device accepted.
+	if !plan.AuthOrder.IsNull() {
+		if err := r.readAuthOrder(ctx, &plan); err != nil {
+			resp.Diagnostics.AddError("Failed to read back auth order after create", err.Error())
+			return
+		}
+	}
+	if !plan.RemoteRoles.IsNull() {
+		if err := r.readRoleConfig(ctx, &plan); err != nil {
+			resp.Diagnostics.AddError("Failed to read back role config after create", err.Error())
+			return
+		}
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -174,36 +189,25 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	// For unit tests, completely skip device reads to avoid post-apply consistency issues
-	// Check if we're in a unit test by looking for test-specific configuration
-	if strings.Contains(r.client.Host, "127.0.0.1") || strings.Contains(r.client.Host, "localhost") {
-		tflog.Debug(ctx, "Skipping device read in unit test environment")
-		// Only set ID if it's not already set
-		if state.ID.IsNull() || state.ID.IsUnknown() || state.ID.ValueString() == "" {
-			state.ID = types.StringValue("f5os-auth")
-		}
-		resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
-		return
-	}
+	tflog.Debug(ctx, "Reading auth configuration from device")
 
-	// For real devices, only read during import (when ID is not set)
-	if state.ID.IsNull() || state.ID.IsUnknown() || state.ID.ValueString() == "" {
-		tflog.Debug(ctx, "Reading auth configuration from device (import scenario)")
-
+	// Read auth_order from device when managed or during import.
+	if !state.AuthOrder.IsNull() || state.ID.IsNull() || state.ID.IsUnknown() || state.ID.ValueString() == "" {
 		if err := r.readAuthOrder(ctx, &state); err != nil {
-			tflog.Warn(ctx, "failed to read authentication order during import", map[string]any{"error": err.Error()})
+			resp.Diagnostics.AddError("Failed to read auth order from device", err.Error())
+			return
 		}
-
-		if err := r.readRoleConfig(ctx, &state); err != nil {
-			tflog.Warn(ctx, "failed to read role configuration during import", map[string]any{"error": err.Error()})
-		}
-
-		state.ID = types.StringValue("f5os-auth")
-	} else {
-		tflog.Debug(ctx, "Preserving existing auth resource state (post-apply consistency)")
-		// State is already populated from the request - no changes needed
 	}
 
+	// Read remote_roles from device when managed or during import.
+	if !state.RemoteRoles.IsNull() || state.ID.IsNull() || state.ID.IsUnknown() || state.ID.ValueString() == "" {
+		if err := r.readRoleConfig(ctx, &state); err != nil {
+			resp.Diagnostics.AddError("Failed to read role config from device", err.Error())
+			return
+		}
+	}
+
+	state.ID = types.StringValue("f5os-auth")
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -252,6 +256,22 @@ func (r *AuthResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 
 	plan.ID = types.StringValue("f5os-auth")
+
+	// Read back actual device state so Terraform detects any discrepancies
+	// between what was planned and what the device accepted.
+	if !plan.AuthOrder.IsNull() {
+		if err := r.readAuthOrder(ctx, &plan); err != nil {
+			resp.Diagnostics.AddError("Failed to read back auth order after update", err.Error())
+			return
+		}
+	}
+	if !plan.RemoteRoles.IsNull() {
+		if err := r.readRoleConfig(ctx, &plan); err != nil {
+			resp.Diagnostics.AddError("Failed to read back role config after update", err.Error())
+			return
+		}
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
