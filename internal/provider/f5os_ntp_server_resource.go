@@ -5,6 +5,8 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 
@@ -36,6 +38,9 @@ func (r *NTPServerResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"server": schema.StringAttribute{
 				MarkdownDescription: "IPv4/IPv6 address or FQDN of the NTP server.",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"key_id": schema.Int64Attribute{
 				MarkdownDescription: "Key ID used for authentication with the NTP server. This should be configured with a key ID that has been already created on the system.",
@@ -52,10 +57,12 @@ func (r *NTPServerResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"ntp_service": schema.BoolAttribute{
 				MarkdownDescription: "Enable or disable the NTP service.",
 				Optional:            true,
+				Computed:            true,
 			},
 			"ntp_authentication": schema.BoolAttribute{
 				MarkdownDescription: "Enable or disable NTP authentication.",
 				Optional:            true,
+				Computed:            true,
 			},
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -82,19 +89,48 @@ func (r *NTPServerResource) Create(ctx context.Context, req resource.CreateReque
 		resp.Diagnostics.AddError("NTP Create Error", err.Error())
 		return
 	}
-	tflog.Info(ctx, "MDEBUG: Creating NTP Server", map[string]any{
+
+	// Patch global NTP config (service enable / authentication enable)
+	// when either attribute is explicitly set in the plan (not null and not
+	// unknown).  Unknown means the user omitted the attribute and Terraform
+	// is letting the provider compute it.
+	if !plan.NTPService.IsNull() && !plan.NTPService.IsUnknown() || !plan.NTPAuthentication.IsNull() && !plan.NTPAuthentication.IsUnknown() {
+		var svc, auth *bool
+		if !plan.NTPService.IsNull() && !plan.NTPService.IsUnknown() {
+			v := plan.NTPService.ValueBool()
+			svc = &v
+		}
+		if !plan.NTPAuthentication.IsNull() && !plan.NTPAuthentication.IsUnknown() {
+			v := plan.NTPAuthentication.ValueBool()
+			auth = &v
+		}
+		if err := r.client.PatchNTPGlobalConfig(svc, auth); err != nil {
+			resp.Diagnostics.AddError("NTP Global Config Error", err.Error())
+			return
+		}
+	}
+
+	// When ntp_service / ntp_authentication are omitted from the config they
+	// arrive as Unknown (Computed).  Resolve them from the device so the
+	// state always contains concrete values after apply.
+	if plan.NTPService.IsUnknown() || plan.NTPAuthentication.IsUnknown() {
+		svc, auth, err := r.client.GetNTPGlobalConfig()
+		if err != nil {
+			resp.Diagnostics.AddError("NTP Global Config Read Error", err.Error())
+			return
+		}
+		if plan.NTPService.IsUnknown() {
+			plan.NTPService = types.BoolValue(svc)
+		}
+		if plan.NTPAuthentication.IsUnknown() {
+			plan.NTPAuthentication = types.BoolValue(auth)
+		}
+	}
+
+	tflog.Info(ctx, "Creating NTP Server", map[string]any{
 		"server": plan.Server.ValueString(),
 	})
 
-	// print all the plan fields here
-	tflog.Debug(ctx, "MDEBUG: Create Plan", map[string]any{
-		"server":             plan.Server.ValueString(),
-		"key_id":             plan.KeyID.ValueInt64(),
-		"prefer":             plan.Prefer.ValueBool(),
-		"iburst":             plan.IBurst.ValueBool(),
-		"ntp_service":        plan.NTPService.ValueBool(),
-		"ntp_authentication": plan.NTPAuthentication.ValueBool(),
-	})
 	plan.ID = plan.Server
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
@@ -164,6 +200,39 @@ func (r *NTPServerResource) Update(ctx context.Context, req resource.UpdateReque
 	if err := r.client.UpdateNTPServer(plan.Server.ValueString(), payload); err != nil {
 		resp.Diagnostics.AddError("NTP Update Error", err.Error())
 		return
+	}
+
+	// Patch global NTP config (service enable / authentication enable)
+	// when either attribute is explicitly set in the plan.
+	if !plan.NTPService.IsNull() && !plan.NTPService.IsUnknown() || !plan.NTPAuthentication.IsNull() && !plan.NTPAuthentication.IsUnknown() {
+		var svc, auth *bool
+		if !plan.NTPService.IsNull() && !plan.NTPService.IsUnknown() {
+			v := plan.NTPService.ValueBool()
+			svc = &v
+		}
+		if !plan.NTPAuthentication.IsNull() && !plan.NTPAuthentication.IsUnknown() {
+			v := plan.NTPAuthentication.ValueBool()
+			auth = &v
+		}
+		if err := r.client.PatchNTPGlobalConfig(svc, auth); err != nil {
+			resp.Diagnostics.AddError("NTP Global Config Update Error", err.Error())
+			return
+		}
+	}
+
+	// Resolve unknown computed values from the device.
+	if plan.NTPService.IsUnknown() || plan.NTPAuthentication.IsUnknown() {
+		svc, auth, err := r.client.GetNTPGlobalConfig()
+		if err != nil {
+			resp.Diagnostics.AddError("NTP Global Config Read Error", err.Error())
+			return
+		}
+		if plan.NTPService.IsUnknown() {
+			plan.NTPService = types.BoolValue(svc)
+		}
+		if plan.NTPAuthentication.IsUnknown() {
+			plan.NTPAuthentication = types.BoolValue(auth)
+		}
 	}
 
 	plan.ID = plan.Server

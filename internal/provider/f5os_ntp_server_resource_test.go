@@ -1,10 +1,13 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -241,6 +244,434 @@ func TestUnitF5osNTPServerResource(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Acceptance test (real device)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Unit test: Create calls PatchNTPGlobalConfig when ntp_service/ntp_authentication are set
+// ---------------------------------------------------------------------------
+
+func TestUnitNTPGlobalConfigPatchedOnCreate(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	var ntpConfigPatchCount int32
+
+	// Mock: POST to create NTP server
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	// Mock: GET/PATCH/DELETE for specific NTP server
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"openconfig-system:server": [{
+					"address": "10.20.30.40",
+					"config": {
+						"address": "10.20.30.40",
+						"f5-openconfig-system-ntp:key-id": 123,
+						"prefer": true,
+						"iburst": true
+					}
+				}]
+			}`))
+		case "DELETE":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	// Mock: GET/PATCH for global NTP config — track PATCH calls
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			atomic.AddInt32(&ntpConfigPatchCount, 1)
+			body, _ := io.ReadAll(r.Body)
+			defer r.Body.Close()
+
+			var payload struct {
+				Config struct {
+					Enabled       *bool `json:"enabled,omitempty"`
+					EnableNTPAuth *bool `json:"enable-ntp-auth,omitempty"`
+				} `json:"config"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Errorf("failed to unmarshal PATCH /ntp/config body: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if payload.Config.Enabled == nil {
+				t.Error("expected 'enabled' in PATCH body, got nil")
+			} else if *payload.Config.Enabled != true {
+				t.Errorf("expected enabled=true, got %v", *payload.Config.Enabled)
+			}
+			if payload.Config.EnableNTPAuth == nil {
+				t.Error("expected 'enable-ntp-auth' in PATCH body, got nil")
+			} else if *payload.Config.EnableNTPAuth != true {
+				t.Errorf("expected enable-ntp-auth=true, got %v", *payload.Config.EnableNTPAuth)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"openconfig-system:config": {
+					"enabled": true,
+					"enable-ntp-auth": true
+				}
+			}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testUnitNTPServerBasicConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_service", "true"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_authentication", "true"),
+					func(_ *terraform.State) error {
+						count := atomic.LoadInt32(&ntpConfigPatchCount)
+						if count == 0 {
+							return fmt.Errorf("PatchNTPGlobalConfig was never called during Create (PATCH /ntp/config count = 0)")
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Update calls PatchNTPGlobalConfig when ntp_service/ntp_authentication change
+// ---------------------------------------------------------------------------
+
+const testUnitNTPServerUpdateNTPServiceConfig = `
+resource "f5os_ntp_server" "test" {
+  server             = "10.20.30.40"
+  key_id             = 123
+  prefer             = true
+  iburst             = true
+  ntp_service        = false
+  ntp_authentication = false
+}
+`
+
+func TestUnitNTPGlobalConfigPatchedOnUpdate(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	var ntpConfigPatchCount int32
+	// Track the most recent PATCH payload to /ntp/config so we can verify
+	// that the Update step sends the updated values.
+	var lastPatchService, lastPatchAuth *bool
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	// Track whether service was enabled or disabled in GET responses.
+	// Start enabled=true, auth=true; after PATCH with false, return false.
+	var globalEnabled int32 = 1
+	var globalAuth int32 = 1
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"openconfig-system:server": [{
+					"address": "10.20.30.40",
+					"config": {
+						"address": "10.20.30.40",
+						"f5-openconfig-system-ntp:key-id": 123,
+						"prefer": true,
+						"iburst": true
+					}
+				}]
+			}`))
+		case "PATCH":
+			w.WriteHeader(http.StatusNoContent)
+		case "DELETE":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			atomic.AddInt32(&ntpConfigPatchCount, 1)
+			body, _ := io.ReadAll(r.Body)
+			defer r.Body.Close()
+
+			var payload struct {
+				Config struct {
+					Enabled       *bool `json:"enabled,omitempty"`
+					EnableNTPAuth *bool `json:"enable-ntp-auth,omitempty"`
+				} `json:"config"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Errorf("failed to unmarshal PATCH body: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			lastPatchService = payload.Config.Enabled
+			lastPatchAuth = payload.Config.EnableNTPAuth
+
+			// Update the mock state so subsequent GETs reflect the change.
+			if payload.Config.Enabled != nil {
+				if *payload.Config.Enabled {
+					atomic.StoreInt32(&globalEnabled, 1)
+				} else {
+					atomic.StoreInt32(&globalEnabled, 0)
+				}
+			}
+			if payload.Config.EnableNTPAuth != nil {
+				if *payload.Config.EnableNTPAuth {
+					atomic.StoreInt32(&globalAuth, 1)
+				} else {
+					atomic.StoreInt32(&globalAuth, 0)
+				}
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case "GET":
+			en := atomic.LoadInt32(&globalEnabled) == 1
+			au := atomic.LoadInt32(&globalAuth) == 1
+			w.WriteHeader(http.StatusOK)
+			resp := fmt.Sprintf(`{
+				"openconfig-system:config": {
+					"enabled": %v,
+					"enable-ntp-auth": %v
+				}
+			}`, en, au)
+			_, _ = w.Write([]byte(resp))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create with ntp_service=true, ntp_authentication=true
+			{
+				Config: testUnitNTPServerBasicConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_service", "true"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_authentication", "true"),
+				),
+			},
+			// Step 2: Update to ntp_service=false, ntp_authentication=false
+			{
+				Config: testUnitNTPServerUpdateNTPServiceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_service", "false"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_authentication", "false"),
+					func(_ *terraform.State) error {
+						count := atomic.LoadInt32(&ntpConfigPatchCount)
+						// At least 2: once for Create, once for Update
+						if count < 2 {
+							return fmt.Errorf("expected PATCH /ntp/config to be called at least 2 times (Create + Update), got %d", count)
+						}
+						if lastPatchService == nil || *lastPatchService != false {
+							return fmt.Errorf("expected last PATCH to set enabled=false, got %v", lastPatchService)
+						}
+						if lastPatchAuth == nil || *lastPatchAuth != false {
+							return fmt.Errorf("expected last PATCH to set enable-ntp-auth=false, got %v", lastPatchAuth)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: PatchNTPGlobalConfig is NOT called when ntp_service/ntp_authentication are omitted
+// ---------------------------------------------------------------------------
+
+const testUnitNTPServerNoGlobalConfig = `
+resource "f5os_ntp_server" "test" {
+  server = "10.20.30.40"
+  key_id = 123
+  prefer = true
+  iburst = true
+}
+`
+
+func TestUnitNTPGlobalConfigNotPatchedWhenOmitted(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	var ntpConfigPatchCount int32
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"openconfig-system:server": [{
+					"address": "10.20.30.40",
+					"config": {
+						"address": "10.20.30.40",
+						"f5-openconfig-system-ntp:key-id": 123,
+						"prefer": true,
+						"iburst": true
+					}
+				}]
+			}`))
+		case "DELETE":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			atomic.AddInt32(&ntpConfigPatchCount, 1)
+			w.WriteHeader(http.StatusNoContent)
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"openconfig-system:config": {
+					"enabled": false,
+					"enable-ntp-auth": false
+				}
+			}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testUnitNTPServerNoGlobalConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "server", "10.20.30.40"),
+					func(_ *terraform.State) error {
+						count := atomic.LoadInt32(&ntpConfigPatchCount)
+						if count != 0 {
+							return fmt.Errorf("expected PATCH /ntp/config to NOT be called when ntp_service/ntp_authentication are omitted, but got %d calls", count)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance test (real device)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Acceptance-test HCL configs for NTP global config patching
+// Uses 10.255.255.2 to avoid colliding with the basic NTP acceptance test
+// ---------------------------------------------------------------------------
+
+const testAccNTPGlobalConfigCreateEnabled = `
+resource "f5os_ntp_server" "global" {
+  server             = "10.255.255.2"
+  key_id             = 0
+  prefer             = true
+  iburst             = true
+  ntp_service        = true
+  ntp_authentication = true
+}
+`
+
+const testAccNTPGlobalConfigUpdateDisabled = `
+resource "f5os_ntp_server" "global" {
+  server             = "10.255.255.2"
+  key_id             = 0
+  prefer             = true
+  iburst             = true
+  ntp_service        = false
+  ntp_authentication = false
+}
+`
+
+const testAccNTPGlobalConfigUpdateReEnabled = `
+resource "f5os_ntp_server" "global" {
+  server             = "10.255.255.2"
+  key_id             = 0
+  prefer             = true
+  iburst             = true
+  ntp_service        = true
+  ntp_authentication = true
+}
+`
+
+// ---------------------------------------------------------------------------
+// Acceptance test: PatchNTPGlobalConfig is called on Create and Update
+// ---------------------------------------------------------------------------
+
+func TestAccNTPGlobalConfigPatched(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckNTPServerDestroy,
+		Steps: []resource.TestStep{
+			// Step 1: Create with ntp_service=true, ntp_authentication=true
+			//         Verify the global config was actually written to the device.
+			{
+				Config: testAccNTPGlobalConfigCreateEnabled,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// Terraform state checks
+					resource.TestCheckResourceAttr("f5os_ntp_server.global", "server", "10.255.255.2"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.global", "ntp_service", "true"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.global", "ntp_authentication", "true"),
+					// Direct device API verification — the whole point of this test
+					testAccCheckNTPServerOnDevice("10.255.255.2", 0, true, true),
+					testAccCheckNTPGlobalConfigOnDevice(true, true),
+				),
+			},
+			// Step 2: Update to ntp_service=false, ntp_authentication=false
+			//         Verify PatchNTPGlobalConfig wrote the change to the device.
+			{
+				Config: testAccNTPGlobalConfigUpdateDisabled,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.global", "ntp_service", "false"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.global", "ntp_authentication", "false"),
+					// Direct device API verification
+					testAccCheckNTPGlobalConfigOnDevice(false, false),
+				),
+			},
+			// Step 3: Update back to ntp_service=true, ntp_authentication=true
+			//         Confirms the toggle works in both directions.
+			{
+				Config: testAccNTPGlobalConfigUpdateReEnabled,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.global", "ntp_service", "true"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.global", "ntp_authentication", "true"),
+					// Direct device API verification
+					testAccCheckNTPGlobalConfigOnDevice(true, true),
+				),
+			},
+			// Step 4: Destroy is automatic — CheckDestroy verifies NTP server cleanup
+		},
+	})
+}
 
 func TestAccF5osNTPServerResource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
