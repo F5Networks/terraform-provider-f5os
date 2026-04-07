@@ -226,6 +226,7 @@ func TestUnitF5osNTPServerResource(t *testing.T) {
 		IsUnitTest:               true,
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
+			// Step 1: Create and verify
 			{
 				Config: testUnitNTPServerBasicConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
@@ -236,6 +237,14 @@ func TestUnitF5osNTPServerResource(t *testing.T) {
 					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_service", "true"),
 					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_authentication", "true"),
 				),
+			},
+			// Step 2: Import state by server address — verifies ImportState
+			// passes the import ID through to the "server" attribute so that
+			// Read can query the device (mock) and populate all fields.
+			{
+				ResourceName:      "f5os_ntp_server.test",
+				ImportState:       true,
+				ImportStateVerify: true,
 			},
 		},
 	})
@@ -695,7 +704,15 @@ func TestAccF5osNTPServerResource(t *testing.T) {
 					testAccCheckNTPGlobalConfigOnDevice(true, true),
 				),
 			},
-			// Step 2: Update and verify
+			// Step 2: Import state by server address — verifies ImportState
+			// passes the ID through to the "server" attribute so Read can
+			// query the device and populate all fields.
+			{
+				ResourceName:      "f5os_ntp_server.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+			// Step 3: Update and verify
 			{
 				Config: testAccNTPServerUpdatedConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
@@ -707,7 +724,7 @@ func TestAccF5osNTPServerResource(t *testing.T) {
 					testAccCheckNTPServerOnDevice("10.255.255.1", 0, false, false),
 				),
 			},
-			// Step 3: Destroy is automatic — CheckDestroy verifies cleanup
+			// Step 4: Destroy is automatic — CheckDestroy verifies cleanup
 		},
 	})
 }
