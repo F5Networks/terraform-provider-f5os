@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -12,6 +13,8 @@ import (
 
 	f5os "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
+
+var _ resource.ResourceWithImportState = &NTPServerResource{}
 
 type NTPServerResource struct {
 	client *f5os.F5os
@@ -250,6 +253,12 @@ func (r *NTPServerResource) Delete(ctx context.Context, req resource.DeleteReque
 		resp.Diagnostics.AddError("NTP Delete Error", err.Error())
 		return
 	}
+}
+
+func (r *NTPServerResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	resource.ImportStatePassthroughID(ctx, path.Root("server"), req, resp)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	tflog.Info(ctx, "Importing NTP Server", map[string]any{"server": req.ID})
 }
 
 type NTPServerModel struct {
