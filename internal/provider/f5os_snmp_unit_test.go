@@ -20,6 +20,8 @@ type mockSnmp struct {
 	delCommunities []string
 	delUsers       []string
 	failOn         string
+	snmpConfigResp []byte
+	snmpMibResp    []byte
 }
 
 func (m *mockSnmp) record(call string, payload []byte) error {
@@ -63,6 +65,24 @@ func (m *mockSnmp) DeleteSnmpUser(name string) error {
 		return errors.New("forced error: DeleteSnmpUser")
 	}
 	return nil
+}
+func (m *mockSnmp) GetSnmpConfig() ([]byte, error) {
+	if m.failOn == "GetSnmpConfig" {
+		return nil, errors.New("forced error: GetSnmpConfig")
+	}
+	if m.snmpConfigResp != nil {
+		return m.snmpConfigResp, nil
+	}
+	return []byte(`{"f5-system-snmp:snmp":{}}`), nil
+}
+func (m *mockSnmp) GetSnmpMib() ([]byte, error) {
+	if m.failOn == "GetSnmpMib" {
+		return nil, errors.New("forced error: GetSnmpMib")
+	}
+	if m.snmpMibResp != nil {
+		return m.snmpMibResp, nil
+	}
+	return []byte(`{"SNMPv2-MIB:system":{"sysName":"","sysContact":"","sysLocation":""}}`), nil
 }
 
 // --- Tests ---

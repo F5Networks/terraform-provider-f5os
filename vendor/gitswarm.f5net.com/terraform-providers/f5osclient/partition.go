@@ -797,11 +797,19 @@ func (c *F5os) UpdateSnmpMib(payload []byte) error {
 	return nil
 }
 
-// SNMP Read method
+// SNMP Read methods
 func (c *F5os) GetSnmpConfig() ([]byte, error) {
 	resp, err := c.GetRequest(uriSnmpBase)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get SNMP config: %w", err)
+	}
+	return resp, nil
+}
+
+func (c *F5os) GetSnmpMib() ([]byte, error) {
+	resp, err := c.GetRequest(uriSnmpMib)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get SNMP MIB: %w", err)
 	}
 	return resp, nil
 }
