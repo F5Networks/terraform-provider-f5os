@@ -287,12 +287,16 @@ func TestAuthResourceMocked_ClientMethods(t *testing.T) {
 		assert.NoError(t, err, "SetRoleConfig should not return error")
 	})
 
-	// // Test GetRoles method
-	// t.Run("GetRoles", func(t *testing.T) {
-	// 	result, err := client.GetRoles()
-	// 	assert.NoError(t, err, "GetRoles should not return error")
-	// 	assert.NotNil(t, result, "GetRoles should return result")
-	// })
+	// Test GetRoles method
+	t.Run("GetRoles", func(t *testing.T) {
+		result, err := client.GetRoles()
+		assert.NoError(t, err, "GetRoles should not return error")
+		assert.NotNil(t, result, "GetRoles should return result")
+		// operator is the only role with a numeric remote-gid in the mock
+		assert.Equal(t, 9001, result["operator"], "operator remote-gid should be 9001")
+		// roles with remote-gid: "-" should have 0
+		assert.Equal(t, 0, result["admin"], "admin remote-gid should be 0 (not configured)")
+	})
 }
 
 func TestAuthResourceMocked_ErrorHandling(t *testing.T) {
@@ -1040,6 +1044,10 @@ func TestAccAuthResourceWithRoles(t *testing.T) {
 		t.Skip("Skipping: device has no 'operator' role to test with")
 	}
 	t.Cleanup(func() {
+		if originalOperatorGID == 0 {
+			t.Logf("Skipping operator GID restore: no remote-gid was configured before test")
+			return
+		}
 		restoreClient, err := newAuthClientFromEnv()
 		if err != nil {
 			t.Logf("WARNING: failed to create client for operator GID restore: %v", err)
@@ -1054,9 +1062,10 @@ func TestAccAuthResourceWithRoles(t *testing.T) {
 	})
 
 	// Verify we can write a role GID before running the full test.
-	// Use 9010 to avoid conflicting with built-in role GIDs (9000-9004).
-	testGID := int64(9010)
-	if err := client.SetRoleConfig("operator", &testGID); err != nil {
+	// Use 9099 (different from the test GIDs 9010/9011) so the pre-flight
+	// doesn't make Step 1's Create a no-op. Cleanup restores the original.
+	probeGID := int64(9099)
+	if err := client.SetRoleConfig("operator", &probeGID); err != nil {
 		if strings.Contains(err.Error(), "access denied") || strings.Contains(err.Error(), "403") {
 			t.Skip("Skipping role test: admin user lacks permission to modify role config on this device")
 		}

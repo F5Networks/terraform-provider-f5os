@@ -389,11 +389,14 @@ func (r *AuthResource) readRoleConfig(ctx context.Context, state *AuthResourceMo
 		roleModels = append(roleModels, item)
 	}
 
-	sv, _ := types.SetValueFrom(ctx, types.ObjectType{AttrTypes: map[string]attr.Type{
+	sv, diags := types.SetValueFrom(ctx, types.ObjectType{AttrTypes: map[string]attr.Type{
 		"rolename":   types.StringType,
 		"remote_gid": types.Int64Type,
 		"ldap_group": types.StringType,
 	}}, roleModels)
+	if diags.HasError() {
+		return fmt.Errorf("failed to convert role models to set: %s", diags.Errors()[0].Detail())
+	}
 	state.RemoteRoles = sv
 	return nil
 }
