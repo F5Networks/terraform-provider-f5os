@@ -901,11 +901,10 @@ func TestAccAuthResource(t *testing.T) {
 				ResourceName:      "f5os_auth.test",
 				ImportState:       true,
 				ImportStateVerify: true,
-				// Read does not query the device during import (auth_order and
-				// remote_roles are null in state, and ID is already set, so
-				// the Read method skips device queries).
+				// remote_roles: import reads all device roles, not just
+				// user-declared ones, so imported state won't match config.
 				// password_policy: not implemented.
-				ImportStateVerifyIgnore: []string{"auth_order", "remote_roles", "password_policy"},
+				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy"},
 			},
 			// Step 3: Update — change auth_order to local + tacacs
 			{
@@ -1082,19 +1081,16 @@ func TestAccAuthResourceWithRoles(t *testing.T) {
 				),
 			},
 			// Step 2: Import state
-			// The Read method skips device queries when the ID is already set
-			// (it only reads from the device when auth_order/remote_roles are
-			// non-null in state). During import, ID is set but auth_order and
-			// remote_roles are null, so Read returns empty state for both.
-			// This is a known limitation — ImportStateVerifyIgnore is required.
+			// remote_roles: import reads all device roles (by design), not
+			// just user-declared ones, so imported state won't match config.
+			// password_policy: not implemented.
 			{
 				ResourceName:      "f5os_auth.test",
 				ImportState:       true,
 				ImportStateVerify: true,
 				ImportStateVerifyIgnore: []string{
-					"auth_order",      // Read does not populate during import
-					"remote_roles",    // Read does not populate during import
-					"password_policy", // password_policy is not implemented
+					"remote_roles",    // import reads all device roles, not just user-declared
+					"password_policy", // not implemented
 				},
 			},
 			// Step 3: Update — change auth_order and operator GID

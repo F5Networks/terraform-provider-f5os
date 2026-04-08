@@ -192,8 +192,12 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 	tflog.Debug(ctx, "Reading auth configuration from device")
 
+	// Detect import: all user-configurable fields are null because
+	// ImportStatePassthroughID only sets the ID.
+	isImport := state.AuthOrder.IsNull() && state.RemoteRoles.IsNull() && state.PasswordPolicy.IsNull()
+
 	// Read auth_order from device when managed or during import.
-	if !state.AuthOrder.IsNull() || state.ID.IsNull() || state.ID.IsUnknown() || state.ID.ValueString() == "" {
+	if !state.AuthOrder.IsNull() || isImport {
 		if err := r.readAuthOrder(ctx, &state); err != nil {
 			resp.Diagnostics.AddError("Failed to read auth order from device", err.Error())
 			return
@@ -201,7 +205,7 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	}
 
 	// Read remote_roles from device when managed or during import.
-	if !state.RemoteRoles.IsNull() || state.ID.IsNull() || state.ID.IsUnknown() || state.ID.ValueString() == "" {
+	if !state.RemoteRoles.IsNull() || isImport {
 		if err := r.readRoleConfig(ctx, &state); err != nil {
 			resp.Diagnostics.AddError("Failed to read role config from device", err.Error())
 			return
