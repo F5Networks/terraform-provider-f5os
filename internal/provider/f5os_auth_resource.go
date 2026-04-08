@@ -87,6 +87,7 @@ func (r *AuthResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 						},
 						"remote_gid": schema.Int64Attribute{
 							Optional: true,
+							Computed: true,
 							Validators: []validator.Int64{
 								int64validator.AtLeast(1),
 							},
@@ -355,7 +356,7 @@ func (r *AuthResource) readRoleConfig(ctx context.Context, state *AuthResourceMo
 	}
 
 	// Build the set of role names the user configured so we can filter the
-	// device response to only those roles
+	// device response to only those roles.
 	configuredNames := make(map[string]bool)
 	if !state.RemoteRoles.IsNull() && !state.RemoteRoles.IsUnknown() {
 		var existing []authRemoteRoleModel
@@ -378,7 +379,7 @@ func (r *AuthResource) readRoleConfig(ctx context.Context, state *AuthResourceMo
 			continue
 		}
 		item := authRemoteRoleModel{Rolename: types.StringValue(name)}
-		if gid >= 0 {
+		if gid > 0 {
 			item.RemoteGID = types.Int64Value(int64(gid))
 		}
 		roleModels = append(roleModels, item)
