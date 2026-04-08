@@ -662,10 +662,10 @@ func (r *SystemResource) SystemResourceModelToState(ctx context.Context, resSyst
 
 	data.HttpdCipherSuite = types.StringValue(resHttpdBlock.Config.SSLCipherSuite)
 
-	data.SshdCiphers.ElementsAs(ctx, &resSshdBlock.Config.Ciphers, false)
-	data.SshdMacAlg.ElementsAs(ctx, &resSshdBlock.Config.MACs, false)
-	data.SshdKeyAlg.ElementsAs(ctx, &resSshdBlock.Config.KexAlgorithms, false)
-	data.SshdHkeyAlg.ElementsAs(ctx, &resSshdBlock.Config.HostKeyAlgos, false)
+	data.SshdCiphers, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.Ciphers)
+	data.SshdMacAlg, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.MACs)
+	data.SshdKeyAlg, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.KexAlgorithms)
+	data.SshdHkeyAlg, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.HostKeyAlgos)
 
 	switch v := resSystemSettingsConfig.Settings.Config.CliTimeout.(type) {
 	case string:
