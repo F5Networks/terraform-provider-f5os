@@ -297,8 +297,8 @@ func TestUnitNTPGlobalConfigPatchedOnCreate(t *testing.T) {
 		switch r.Method {
 		case "PATCH":
 			atomic.AddInt32(&ntpConfigPatchCount, 1)
+			defer func() { _ = r.Body.Close() }()
 			body, _ := io.ReadAll(r.Body)
-			defer r.Body.Close()
 
 			var payload struct {
 				Config struct {
@@ -418,8 +418,8 @@ func TestUnitNTPGlobalConfigPatchedOnUpdate(t *testing.T) {
 		switch r.Method {
 		case "PATCH":
 			atomic.AddInt32(&ntpConfigPatchCount, 1)
+			defer func() { _ = r.Body.Close() }()
 			body, _ := io.ReadAll(r.Body)
-			defer r.Body.Close()
 
 			var payload struct {
 				Config struct {
