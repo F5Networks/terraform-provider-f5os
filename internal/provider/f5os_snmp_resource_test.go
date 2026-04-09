@@ -697,6 +697,170 @@ func TestAccSnmpResourceMibNotManaged(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestAccSnmpResourceDeleteResetsMib — verifies that terraform destroy resets
+// MIB sysName/sysContact/sysLocation to empty strings instead of leaving
+// orphaned values on the device.
+// Captures the device baseline MIB before the test and restores it via
+// a deferred cleanup.
+// ---------------------------------------------------------------------------
+
+// snmpMibBaseline holds the original MIB values to restore after the test.
+type snmpMibBaseline struct {
+	SysName     string
+	SysContact  string
+	SysLocation string
+}
+
+// captureSnmpMibBaseline reads the current MIB values from the device.
+func captureSnmpMibBaseline() (*snmpMibBaseline, error) {
+	client, err := newSnmpClientFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create client: %w", err)
+	}
+	data, err := client.GetSnmpMib()
+	if err != nil {
+		return nil, fmt.Errorf("GetSnmpMib failed: %w", err)
+	}
+	var envelope struct {
+		System struct {
+			SysName     string `json:"sysName"`
+			SysContact  string `json:"sysContact"`
+			SysLocation string `json:"sysLocation"`
+		} `json:"SNMPv2-MIB:system"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("failed to parse MIB: %w", err)
+	}
+	return &snmpMibBaseline{
+		SysName:     envelope.System.SysName,
+		SysContact:  envelope.System.SysContact,
+		SysLocation: envelope.System.SysLocation,
+	}, nil
+}
+
+// restoreSnmpMibBaseline writes the captured baseline MIB values back to the device.
+func restoreSnmpMibBaseline(b *snmpMibBaseline) error {
+	client, err := newSnmpClientFromEnv()
+	if err != nil {
+		return fmt.Errorf("failed to create client: %w", err)
+	}
+	payload := map[string]interface{}{
+		"SNMPv2-MIB:system": map[string]interface{}{
+			"SNMPv2-MIB:sysName":     b.SysName,
+			"SNMPv2-MIB:sysContact":  b.SysContact,
+			"SNMPv2-MIB:sysLocation": b.SysLocation,
+		},
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal MIB payload: %w", err)
+	}
+	return client.UpdateSnmpMib(payloadBytes)
+}
+
+// testAccCheckSnmpMibResetOnDevice verifies that after destroy, all three
+// MIB fields are empty strings on the device.
+func testAccCheckSnmpMibResetOnDevice() resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newSnmpClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+		data, err := client.GetSnmpMib()
+		if err != nil {
+			return fmt.Errorf("GetSnmpMib failed: %w", err)
+		}
+		var envelope struct {
+			System struct {
+				SysName     string `json:"sysName"`
+				SysContact  string `json:"sysContact"`
+				SysLocation string `json:"sysLocation"`
+			} `json:"SNMPv2-MIB:system"`
+		}
+		if err := json.Unmarshal(data, &envelope); err != nil {
+			return fmt.Errorf("failed to parse MIB: %w", err)
+		}
+		if envelope.System.SysName != "" {
+			return fmt.Errorf("sysName should be empty after destroy, got %q", envelope.System.SysName)
+		}
+		if envelope.System.SysContact != "" {
+			return fmt.Errorf("sysContact should be empty after destroy, got %q", envelope.System.SysContact)
+		}
+		if envelope.System.SysLocation != "" {
+			return fmt.Errorf("sysLocation should be empty after destroy, got %q", envelope.System.SysLocation)
+		}
+		return nil
+	}
+}
+
+const testAccSnmpMibResetConfig = `
+resource "f5os_snmp" "mib_reset" {
+  state = "present"
+
+  snmp_community = [
+    {
+      name           = "test_mib_reset_community"
+      security_model = ["v2c"]
+    }
+  ]
+
+  snmp_mib = {
+    sysname     = "MibResetTest"
+    syscontact  = "reset@example.com"
+    syslocation = "Reset Lab"
+  }
+}
+`
+
+func TestAccSnmpResourceDeleteResetsMib(t *testing.T) {
+	// Capture baseline MIB before test so we can restore after.
+	baseline, err := captureSnmpMibBaseline()
+	if err != nil {
+		t.Skipf("Cannot capture MIB baseline: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := restoreSnmpMibBaseline(baseline); err != nil {
+			t.Logf("WARNING: failed to restore MIB baseline: %v", err)
+		} else {
+			t.Logf("MIB baseline restored: sysName=%q sysContact=%q sysLocation=%q",
+				baseline.SysName, baseline.SysContact, baseline.SysLocation)
+		}
+	})
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		// CheckDestroy verifies MIB was reset to empty strings AND
+		// that test communities were removed.
+		CheckDestroy: func(s *terraform.State) error {
+			// First check: test communities cleaned up
+			if err := testAccCheckSnmpDestroy(s); err != nil {
+				return err
+			}
+			// Second check: MIB fields are empty strings
+			return testAccCheckSnmpMibResetOnDevice()(s)
+		},
+		Steps: []resource.TestStep{
+			// Step 1: Create with MIB values — verify they land on the device.
+			{
+				Config: testAccSnmpMibResetConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_snmp.mib_reset", "snmp_mib.sysname", "MibResetTest"),
+					resource.TestCheckResourceAttr("f5os_snmp.mib_reset", "snmp_mib.syscontact", "reset@example.com"),
+					resource.TestCheckResourceAttr("f5os_snmp.mib_reset", "snmp_mib.syslocation", "Reset Lab"),
+					testAccCheckSnmpMibOnDevice("MibResetTest", "reset@example.com", "Reset Lab"),
+					testAccCheckSnmpCommunityOnDevice("test_mib_reset_community", "v2c"),
+				),
+			},
+			// Destroy is automatic. CheckDestroy above verifies:
+			// 1. test_mib_reset_community is gone
+			// 2. sysName, sysContact, sysLocation are all ""
+			// t.Cleanup restores the original baseline MIB values.
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Acceptance test HCL configs
 // ---------------------------------------------------------------------------
 

@@ -273,7 +273,7 @@ func TestUpdateSnmpConfig_OrderAndCalls(t *testing.T) {
 	}
 }
 
-// 7) deleteSnmpConfig order & names
+// 7) deleteSnmpConfig order & names (with MIB reset)
 func TestDeleteSnmpConfig_OrderAndNames(t *testing.T) {
 	m := &mockSnmp{}
 	r := &SnmpResource{client: m}
@@ -283,14 +283,25 @@ func TestDeleteSnmpConfig_OrderAndNames(t *testing.T) {
 	communities := []SnmpCommunityModel{{Name: types.StringValue("c1")}}
 	users := []SnmpUserModel{{Name: types.StringValue("u1")}}
 
-	if err := r.deleteSnmpConfig(ctx, communities, targets, users); err != nil {
+	if err := r.deleteSnmpConfig(ctx, communities, targets, users, true); err != nil {
 		t.Fatalf("deleteSnmpConfig error: %v", err)
 	}
 
-	// Verify call order roughly: deletes recorded as methods called
-	wantPrefix := []string{"DeleteSnmpTarget", "DeleteSnmpTarget", "DeleteSnmpCommunity", "DeleteSnmpUser"}
-	if !reflect.DeepEqual(m.calls, wantPrefix) {
-		t.Fatalf("delete order mismatch\n got: %v\nwant: %v", m.calls, wantPrefix)
+	// Verify call order: targets first, then communities, then users, then MIB reset
+	wantCalls := []string{"DeleteSnmpTarget", "DeleteSnmpTarget", "DeleteSnmpCommunity", "DeleteSnmpUser", "UpdateSnmpMib"}
+	if !reflect.DeepEqual(m.calls, wantCalls) {
+		t.Fatalf("delete order mismatch\n got: %v\nwant: %v", m.calls, wantCalls)
+	}
+
+	// Verify the MIB reset payload contains empty strings
+	lastPayload := m.payloads[len(m.payloads)-1]
+	var mibReset map[string]map[string]string
+	if err := json.Unmarshal(lastPayload, &mibReset); err != nil {
+		t.Fatalf("failed to unmarshal MIB reset payload: %v", err)
+	}
+	sys := mibReset["SNMPv2-MIB:system"]
+	if sys["SNMPv2-MIB:sysName"] != "" || sys["SNMPv2-MIB:sysContact"] != "" || sys["SNMPv2-MIB:sysLocation"] != "" {
+		t.Fatalf("MIB reset should set all fields to empty strings, got: %v", sys)
 	}
 	if !reflect.DeepEqual(m.delTargets, []string{"t1", "t2"}) {
 		t.Fatalf("deleted targets mismatch: %v", m.delTargets)
@@ -300,6 +311,34 @@ func TestDeleteSnmpConfig_OrderAndNames(t *testing.T) {
 	}
 	if !reflect.DeepEqual(m.delUsers, []string{"u1"}) {
 		t.Fatalf("deleted users mismatch: %v", m.delUsers)
+	}
+}
+
+// 7b) deleteSnmpConfig skips MIB reset when resetMib is false
+func TestDeleteSnmpConfig_SkipsMibResetWhenNotManaged(t *testing.T) {
+	m := &mockSnmp{}
+	r := &SnmpResource{client: m}
+	ctx := context.Background()
+
+	targets := []SnmpTargetModel{{Name: types.StringValue("t1")}}
+	communities := []SnmpCommunityModel{{Name: types.StringValue("c1")}}
+	var users []SnmpUserModel
+
+	if err := r.deleteSnmpConfig(ctx, communities, targets, users, false); err != nil {
+		t.Fatalf("deleteSnmpConfig error: %v", err)
+	}
+
+	// MIB reset must NOT appear in the call list
+	wantCalls := []string{"DeleteSnmpTarget", "DeleteSnmpCommunity"}
+	if !reflect.DeepEqual(m.calls, wantCalls) {
+		t.Fatalf("call mismatch\n got: %v\nwant: %v", m.calls, wantCalls)
+	}
+
+	// No UpdateSnmpMib payload should have been recorded
+	for _, call := range m.calls {
+		if call == "UpdateSnmpMib" {
+			t.Fatal("UpdateSnmpMib should not be called when resetMib is false")
+		}
 	}
 }
 
