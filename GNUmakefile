@@ -8,7 +8,7 @@ install: build
 
 # See https://golangci-lint.run/
 lint:
-	golangci-lint run --timeout=2m
+	golangci-lint run --timeout=3m
 
 generate:
 	go generate ./...

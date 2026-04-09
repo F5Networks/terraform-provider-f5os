@@ -751,7 +751,7 @@ func (r *SnmpResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	state := plan.State.ValueString()
 	if state == "absent" {
 		// If state is absent, we should remove the configuration
-		if err := r.deleteSnmpConfig(ctx, communities, targets, users); err != nil {
+		if err := r.deleteSnmpConfig(ctx, communities, targets, users, mib != nil); err != nil {
 			resp.Diagnostics.AddError(
 				"SNMP Configuration Error",
 				fmt.Sprintf("Failed to remove SNMP configuration: %s", err),
@@ -811,8 +811,11 @@ func (r *SnmpResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
+	// Only reset MIB fields if the user actually managed them.
+	resetMib := !state.SnmpMib.IsNull()
+
 	// Delete SNMP configuration
-	if err := r.deleteSnmpConfig(ctx, communities, targets, users); err != nil {
+	if err := r.deleteSnmpConfig(ctx, communities, targets, users, resetMib); err != nil {
 		resp.Diagnostics.AddError(
 			"SNMP Deletion Error",
 			fmt.Sprintf("Failed to delete SNMP configuration: %s", err),
@@ -967,8 +970,11 @@ func (r *SnmpResource) updateSnmpConfig(ctx context.Context, communities []SnmpC
 	return nil
 }
 
-// deleteSnmpConfig handles the deletion of SNMP configuration
-func (r *SnmpResource) deleteSnmpConfig(ctx context.Context, communities []SnmpCommunityModel, targets []SnmpTargetModel, users []SnmpUserModel) error {
+// deleteSnmpConfig handles the deletion of SNMP configuration.
+// When resetMib is true the MIB sysName/sysContact/sysLocation fields are
+// reset to empty strings on the device. Pass false when the user never
+// declared snmp_mib so we don't wipe device-level values they don't own.
+func (r *SnmpResource) deleteSnmpConfig(ctx context.Context, communities []SnmpCommunityModel, targets []SnmpTargetModel, users []SnmpUserModel, resetMib bool) error {
 	// Delete targets first (they may depend on communities/users)
 	for _, target := range targets {
 		err := r.client.DeleteSnmpTarget(target.Name.ValueString())
@@ -999,6 +1005,24 @@ func (r *SnmpResource) deleteSnmpConfig(ctx context.Context, communities []SnmpC
 				"user":  user.Name.ValueString(),
 				"error": err.Error(),
 			})
+		}
+	}
+
+	// Only reset MIB fields when the user declared snmp_mib in their config.
+	// Otherwise we would wipe device-level values the user never claimed.
+	if resetMib {
+		emptyMib := map[string]interface{}{
+			"SNMPv2-MIB:system": map[string]interface{}{
+				"SNMPv2-MIB:sysContact":  "",
+				"SNMPv2-MIB:sysName":     "",
+				"SNMPv2-MIB:sysLocation": "",
+			},
+		}
+		mibBytes, err := json.Marshal(emptyMib)
+		if err != nil {
+			tflog.Warn(ctx, "Failed to marshal empty MIB payload", map[string]interface{}{"error": err.Error()})
+		} else if err := r.client.UpdateSnmpMib(mibBytes); err != nil {
+			tflog.Warn(ctx, "Failed to reset SNMP MIB on delete", map[string]interface{}{"error": err.Error()})
 		}
 	}
 
