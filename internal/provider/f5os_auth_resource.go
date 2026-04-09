@@ -87,6 +87,7 @@ func (r *AuthResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 						},
 						"remote_gid": schema.Int64Attribute{
 							Optional: true,
+							Computed: true,
 							Validators: []validator.Int64{
 								int64validator.AtLeast(1),
 							},
@@ -191,8 +192,12 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 	tflog.Debug(ctx, "Reading auth configuration from device")
 
+	// Detect import: all user-configurable fields are null because
+	// ImportStatePassthroughID only sets the ID.
+	isImport := state.AuthOrder.IsNull() && state.RemoteRoles.IsNull() && state.PasswordPolicy.IsNull()
+
 	// Read auth_order from device when managed or during import.
-	if !state.AuthOrder.IsNull() || state.ID.IsNull() || state.ID.IsUnknown() || state.ID.ValueString() == "" {
+	if !state.AuthOrder.IsNull() || isImport {
 		if err := r.readAuthOrder(ctx, &state); err != nil {
 			resp.Diagnostics.AddError("Failed to read auth order from device", err.Error())
 			return
@@ -200,7 +205,7 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	}
 
 	// Read remote_roles from device when managed or during import.
-	if !state.RemoteRoles.IsNull() || state.ID.IsNull() || state.ID.IsUnknown() || state.ID.ValueString() == "" {
+	if !state.RemoteRoles.IsNull() || isImport {
 		if err := r.readRoleConfig(ctx, &state); err != nil {
 			resp.Diagnostics.AddError("Failed to read role config from device", err.Error())
 			return
@@ -355,7 +360,7 @@ func (r *AuthResource) readRoleConfig(ctx context.Context, state *AuthResourceMo
 	}
 
 	// Build the set of role names the user configured so we can filter the
-	// device response to only those roles
+	// device response to only those roles.
 	configuredNames := make(map[string]bool)
 	if !state.RemoteRoles.IsNull() && !state.RemoteRoles.IsUnknown() {
 		var existing []authRemoteRoleModel
@@ -378,17 +383,20 @@ func (r *AuthResource) readRoleConfig(ctx context.Context, state *AuthResourceMo
 			continue
 		}
 		item := authRemoteRoleModel{Rolename: types.StringValue(name)}
-		if gid >= 0 {
+		if gid > 0 {
 			item.RemoteGID = types.Int64Value(int64(gid))
 		}
 		roleModels = append(roleModels, item)
 	}
 
-	sv, _ := types.SetValueFrom(ctx, types.ObjectType{AttrTypes: map[string]attr.Type{
+	sv, diags := types.SetValueFrom(ctx, types.ObjectType{AttrTypes: map[string]attr.Type{
 		"rolename":   types.StringType,
 		"remote_gid": types.Int64Type,
 		"ldap_group": types.StringType,
 	}}, roleModels)
+	if diags.HasError() {
+		return fmt.Errorf("failed to convert role models to set: %s", diags.Errors()[0].Detail())
+	}
 	state.RemoteRoles = sv
 	return nil
 }

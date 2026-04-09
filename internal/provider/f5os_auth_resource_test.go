@@ -226,11 +226,11 @@ func setupMockServer() *httptest.Server {
 				_, _ = fmt.Fprint(w, `{
 					"f5-system-aaa:roles": {
 						"role": [
-							{"rolename": "admin", "config": {"rolename": "admin", "gid": 9000}},
-							{"rolename": "operator", "config": {"rolename": "operator", "gid": 9001}},
-							{"rolename": "resource-admin", "config": {"rolename": "resource-admin", "gid": 9003}},
-							{"rolename": "superuser", "config": {"rolename": "superuser", "gid": 9004}},
-							{"rolename": "user", "config": {"rolename": "user", "gid": 9002}}
+							{"rolename": "admin", "config": {"rolename": "admin", "gid": 9000, "remote-gid": "-"}},
+							{"rolename": "operator", "config": {"rolename": "operator", "gid": 9001, "remote-gid": 9001}},
+							{"rolename": "resource-admin", "config": {"rolename": "resource-admin", "gid": 9003, "remote-gid": "-"}},
+							{"rolename": "superuser", "config": {"rolename": "superuser", "gid": 9004, "remote-gid": "-"}},
+							{"rolename": "user", "config": {"rolename": "user", "gid": 9002, "remote-gid": "-"}}
 						]
 					}
 				}`)
@@ -287,12 +287,16 @@ func TestAuthResourceMocked_ClientMethods(t *testing.T) {
 		assert.NoError(t, err, "SetRoleConfig should not return error")
 	})
 
-	// // Test GetRoles method
-	// t.Run("GetRoles", func(t *testing.T) {
-	// 	result, err := client.GetRoles()
-	// 	assert.NoError(t, err, "GetRoles should not return error")
-	// 	assert.NotNil(t, result, "GetRoles should return result")
-	// })
+	// Test GetRoles method
+	t.Run("GetRoles", func(t *testing.T) {
+		result, err := client.GetRoles()
+		assert.NoError(t, err, "GetRoles should not return error")
+		assert.NotNil(t, result, "GetRoles should return result")
+		// operator is the only role with a numeric remote-gid in the mock
+		assert.Equal(t, 9001, result["operator"], "operator remote-gid should be 9001")
+		// roles with remote-gid: "-" should have 0
+		assert.Equal(t, 0, result["admin"], "admin remote-gid should be 0 (not configured)")
+	})
 }
 
 func TestAuthResourceMocked_ErrorHandling(t *testing.T) {
@@ -901,10 +905,9 @@ func TestAccAuthResource(t *testing.T) {
 				ResourceName:      "f5os_auth.test",
 				ImportState:       true,
 				ImportStateVerify: true,
-				// remote_roles: readRoleConfig reads ALL roles from the device,
-				// not just the ones the user declared, so imported state will
-				// contain extra roles that don't match the original config.
-				// password_policy: not implemented (Issue #4).
+				// remote_roles: import reads all device roles, not just
+				// user-declared ones, so imported state won't match config.
+				// password_policy: not implemented.
 				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy"},
 			},
 			// Step 3: Update — change auth_order to local + tacacs
@@ -988,6 +991,134 @@ func TestAccAuthResourceDriftDetection(t *testing.T) {
 	})
 }
 
+// testAccCheckRoleGIDApplied queries the device directly to verify a role's
+// GID matches the expected value.
+func testAccCheckRoleGIDApplied(rolename string, expectedGID int) tfresource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newAuthClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create f5os client: %w", err)
+		}
+		roles, err := client.GetRoles()
+		if err != nil {
+			return fmt.Errorf("failed to read roles from device: %w", err)
+		}
+		actualGID, exists := roles[rolename]
+		if !exists {
+			return fmt.Errorf("role %q not found on device; available roles: %v", rolename, roles)
+		}
+		if actualGID != expectedGID {
+			return fmt.Errorf("role %q GID mismatch: expected %d, got %d", rolename, expectedGID, actualGID)
+		}
+		return nil
+	}
+}
+
+// TestAccAuthResourceWithRoles tests the full lifecycle of auth_order together
+// with remote_roles: Create, Import, Update, Destroy.
+//
+// This validates that:
+//   - SetRoleConfig can write role GIDs via PATCH to the RESTCONF API
+//   - Import correctly reads role GIDs and filters to user-configured roles only
+//   - Role GID updates are applied to the device
+//
+// Safety:
+//   - auth_order always keeps "local" first
+//   - Only modifies the "operator" role GID (never admin/root/tenant-console)
+//   - Restores the original operator GID after the test via t.Cleanup
+//   - Pre-flight check skips gracefully if the device blocks role writes
+func TestAccAuthResourceWithRoles(t *testing.T) {
+	// Pre-flight: check if we can modify role config on this device
+	client, err := newAuthClientFromEnv()
+	if err != nil {
+		t.Skipf("Cannot create f5os client: %v", err)
+	}
+
+	// Save the operator role's current GID so we can restore it after the test
+	originalRoles, err := client.GetRoles()
+	if err != nil {
+		t.Skipf("Cannot read roles from device: %v", err)
+	}
+	originalOperatorGID, hasOperator := originalRoles["operator"]
+	if !hasOperator {
+		t.Skip("Skipping: device has no 'operator' role to test with")
+	}
+	t.Cleanup(func() {
+		if originalOperatorGID == 0 {
+			t.Logf("Skipping operator GID restore: no remote-gid was configured before test")
+			return
+		}
+		restoreClient, err := newAuthClientFromEnv()
+		if err != nil {
+			t.Logf("WARNING: failed to create client for operator GID restore: %v", err)
+			return
+		}
+		gid := int64(originalOperatorGID)
+		if err := restoreClient.SetRoleConfig("operator", &gid); err != nil {
+			t.Logf("WARNING: failed to restore operator GID to %d: %v", originalOperatorGID, err)
+		} else {
+			t.Logf("Restored operator GID to %d", originalOperatorGID)
+		}
+	})
+
+	// Verify we can write a role GID before running the full test.
+	// Use 9099 (different from the test GIDs 9010/9011) so the pre-flight
+	// doesn't make Step 1's Create a no-op. Cleanup restores the original.
+	probeGID := int64(9099)
+	if err := client.SetRoleConfig("operator", &probeGID); err != nil {
+		if strings.Contains(err.Error(), "access denied") || strings.Contains(err.Error(), "403") {
+			t.Skip("Skipping role test: admin user lacks permission to modify role config on this device")
+		}
+		t.Skipf("Skipping role test: unexpected error testing role config access: %v", err)
+	}
+
+	tfresource.Test(t, tfresource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAuthDestroy,
+		Steps: []tfresource.TestStep{
+			// Step 1: Create — auth_order + operator role GID
+			{
+				Config: testAccAuthResourceWithRolesConfig,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.#", "2"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.1", "radius"),
+					tfresource.TestCheckResourceAttrSet("f5os_auth.test", "id"),
+					testAccCheckAuthOrderApplied([]string{"local", "radius"}),
+					testAccCheckRoleGIDApplied("operator", 9010),
+				),
+			},
+			// Step 2: Import state
+			// remote_roles: import reads all device roles (by design), not
+			// just user-declared ones, so imported state won't match config.
+			// password_policy: not implemented.
+			{
+				ResourceName:      "f5os_auth.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"remote_roles",    // import reads all device roles, not just user-declared
+					"password_policy", // not implemented
+				},
+			},
+			// Step 3: Update — change auth_order and operator GID
+			{
+				Config: testAccAuthResourceWithRolesConfigUpdated,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.#", "2"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.1", "tacacs"),
+					tfresource.TestCheckResourceAttrSet("f5os_auth.test", "id"),
+					testAccCheckAuthOrderApplied([]string{"local", "tacacs"}),
+					testAccCheckRoleGIDApplied("operator", 9011),
+				),
+			},
+			// Step 4: Destroy is automatic — CheckDestroy verifies cleanup
+		},
+	})
+}
+
 // testAccAuthResourceConfig — Create step: local+radius auth order only
 const testAccAuthResourceConfig = `
 resource "f5os_auth" "test" {
@@ -999,5 +1130,35 @@ resource "f5os_auth" "test" {
 const testAccAuthResourceConfigUpdated = `
 resource "f5os_auth" "test" {
   auth_order = ["local", "tacacs"]
+}
+`
+
+// testAccAuthResourceWithRolesConfig — Create step with roles.
+// GID 9010 is chosen to avoid conflicting with built-in role GIDs (9000-9004).
+const testAccAuthResourceWithRolesConfig = `
+resource "f5os_auth" "test" {
+  auth_order = ["local", "radius"]
+
+  remote_roles = [
+    {
+      rolename   = "operator"
+      remote_gid = 9010
+    },
+  ]
+}
+`
+
+// testAccAuthResourceWithRolesConfigUpdated — Update step with roles.
+// GID 9011 is chosen to avoid conflicting with built-in role GIDs (9000-9004).
+const testAccAuthResourceWithRolesConfigUpdated = `
+resource "f5os_auth" "test" {
+  auth_order = ["local", "tacacs"]
+
+  remote_roles = [
+    {
+      rolename   = "operator"
+      remote_gid = 9011
+    },
+  ]
 }
 `

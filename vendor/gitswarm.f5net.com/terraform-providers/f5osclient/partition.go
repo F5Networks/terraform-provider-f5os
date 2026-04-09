@@ -831,7 +831,7 @@ type authOrderPayload struct {
 
 type authRoleConfig struct {
 	Rolename string `json:"f5-system-aaa:rolename"`
-	GID      *int64 `json:"f5-system-aaa:gid,omitempty"`
+	GID      *int64 `json:"f5-system-aaa:remote-gid,omitempty"`
 }
 
 type authRolePayload struct {
@@ -934,14 +934,15 @@ func (c *F5os) SetRoleConfig(rolename string, gid *int64) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal role config payload: %w", err)
 	}
-	_, err = c.PutRequest(uri, body)
+	_, err = c.PatchRequest(uri, body)
 	if err != nil {
-		return fmt.Errorf("PUT role config failed: %w", err)
+		return fmt.Errorf("PATCH role config failed: %w", err)
 	}
 	return nil
 }
 
-// GetRoles returns map[rolename]gid
+// GetRoles returns map[rolename]remote-gid for all roles on the device.
+// Roles without a remote-gid configured will have a value of 0.
 func (c *F5os) GetRoles() (map[string]int, error) {
 	resp, err := c.GetRequest(uriAAARoles)
 	if err != nil {
@@ -973,9 +974,15 @@ func (c *F5os) GetRoles() (map[string]int, error) {
 			}
 			if configRaw, ok := roleMap["config"]; ok {
 				if configMap, ok := configRaw.(map[string]any); ok {
-					if gidRaw, ok := configMap["gid"]; ok {
-						if gidFloat, ok := gidRaw.(float64); ok {
-							gid = int(gidFloat)
+					// Read remote-gid, the group ID used for remote
+					// authentication mapping. This is distinct from gid
+					// (the built-in system group ID for the role).
+					// Roles without a remote-gid configured return "-"
+					// (a string), which won't parse as float64, so gid
+					// stays at the zero value.
+					if rgidRaw, ok := configMap["remote-gid"]; ok {
+						if rgidFloat, ok := rgidRaw.(float64); ok {
+							gid = int(rgidFloat)
 						}
 					}
 				}
