@@ -413,6 +413,7 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 		data.Memory = types.Int64Value(int64(memoryInt))
 	}
 	data.Cryptos = types.StringValue(respData.F5TenantsTenant[0].State.Cryptos)
+	data.Type = types.StringValue(respData.F5TenantsTenant[0].State.Type)
 }
 
 func (r *TenantResource) getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.F5ReqTenants {
