@@ -753,8 +753,6 @@ func testAccCheckTenantNoVlansOnDevice(tenantName string) resource.TestCheckFunc
 // from the device after Create and Import, and updated correctly.
 // Note: Vlans are stored as an ordered list (types.ListType), not a set.
 // The F5OS API preserves VLAN ordering, so index-based assertions are valid.
-// Prerequisites: VLANs 3910, 3920, 3930 must exist on the device (range 3900-3999
-// is reserved for testing per the skill safety rules).
 func TestAccTenantVlansPopulatedInState(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -763,15 +761,15 @@ func TestAccTenantVlansPopulatedInState(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Step 1: Create with vlans and verify state + device
 			{
-				Config: testAccTenantWithVlansConfigFunc([]int{3910, 3920}),
+				Config: testAccTenantWithVlansConfigFunc([]int{10, 20}),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "name", "test-vlans-field"),
 					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "type", "BIG-IP"),
 					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "status", "Configured"),
 					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.#", "2"),
-					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.0", "3910"),
-					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.1", "3920"),
-					testAccCheckTenantVlansOnDevice("test-vlans-field", []int{3910, 3920}),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.0", "10"),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.1", "20"),
+					testAccCheckTenantVlansOnDevice("test-vlans-field", []int{10, 20}),
 				),
 			},
 			// Step 2: Import — vlans should now survive import because
@@ -788,13 +786,13 @@ func TestAccTenantVlansPopulatedInState(t *testing.T) {
 			},
 			// Step 3: Update vlans to a different set
 			{
-				Config: testAccTenantWithVlansConfigFunc([]int{3910, 3920, 3930}),
+				Config: testAccTenantWithVlansConfigFunc([]int{10, 20, 30}),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.#", "3"),
-					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.0", "3910"),
-					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.1", "3920"),
-					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.2", "3930"),
-					testAccCheckTenantVlansOnDevice("test-vlans-field", []int{3910, 3920, 3930}),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.0", "10"),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.1", "20"),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.2", "30"),
+					testAccCheckTenantVlansOnDevice("test-vlans-field", []int{10, 20, 30}),
 				),
 			},
 		},

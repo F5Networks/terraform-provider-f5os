@@ -165,7 +165,7 @@ func (p *F5os) getUploadId(fileObj *os.File) (string, error) {
 }
 
 func (p *F5os) ImportImage(tenantImage *F5ReqTenantImage, timeOut int) ([]byte, error) {
-	f5osLogger.Debug("[ImportImage]", "Image struct:", hclog.Fmt("%+v", tenantImage))
+	f5osLogger.Debug("[ImportImage]", "RemoteHost:", tenantImage.RemoteHost, "RemoteFile:", tenantImage.RemoteFile, "LocalFile:", tenantImage.LocalFile, "Protocol:", tenantImage.Protocol, "Username:", tenantImage.Username)
 	byteBody, err := json.Marshal(tenantImage)
 	if err != nil {
 		return byteBody, err

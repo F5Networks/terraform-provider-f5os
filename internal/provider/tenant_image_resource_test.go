@@ -1,7 +1,9 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"regexp"
@@ -31,6 +33,11 @@ func TestAccTenantImageCreateTC1Resource(t *testing.T) {
 				ResourceName:      "f5os_tenant_image.test",
 				ImportState:       true,
 				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"local_path", "remote_host", "remote_path", "remote_user",
+					"remote_password", "remote_port", "protocol", "insecure",
+					"upload_from_path", "timeout",
+				},
 			},
 		},
 	})
@@ -551,6 +558,95 @@ func TestAccTenantImageTimeoutNoReplace(t *testing.T) {
 	})
 }
 
+// TestAccTenantImageRequiresReplaceOnProtocolChange verifies that changing
+// protocol (a RequiresReplace attribute) causes Terraform to attempt
+// destroy+recreate against a real device.
+//
+// Step 1 adopts the pre-existing in-use image with no protocol set (defaults).
+// Step 2 adds protocol="scp" which triggers RequiresReplace. The destroy
+// fails because the image is in-use, but the error itself proves Terraform
+// executed a replace plan.
+func TestAccTenantImageRequiresReplaceOnProtocolChange(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create — adopts the existing in-use image (no protocol).
+			{
+				Config: testAccTenantImageAccFieldConfig("", 0),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.field_test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					testAccCheckTenantImageExistsOnDevice("BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+				),
+			},
+			// Step 2: Add protocol="scp" — RequiresReplace triggers destroy.
+			// Destroy fails because the image is in-use. The error confirms
+			// the replace plan was generated.
+			{
+				Config:      testAccTenantImageAccFieldConfig("scp", 0),
+				ExpectError: regexp.MustCompile(`Unable to Delete Imported Image`),
+			},
+		},
+	})
+}
+
+// TestAccTenantImageRequiresReplaceOnRemotePortChange verifies that changing
+// remote_port (a RequiresReplace attribute) causes Terraform to attempt
+// destroy+recreate against a real device.
+//
+// Step 1 adopts the pre-existing in-use image with no remote_port set.
+// Step 2 adds remote_port=2222 which triggers RequiresReplace.
+func TestAccTenantImageRequiresReplaceOnRemotePortChange(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create — adopts the existing in-use image (no port).
+			{
+				Config: testAccTenantImageAccFieldConfig("", 0),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.field_test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					testAccCheckTenantImageExistsOnDevice("BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+				),
+			},
+			// Step 2: Add remote_port=2222 — RequiresReplace triggers destroy.
+			{
+				Config:      testAccTenantImageAccFieldConfig("", 2222),
+				ExpectError: regexp.MustCompile(`Unable to Delete Imported Image`),
+			},
+		},
+	})
+}
+
+// TestAccTenantImageNewFieldsCreateAndVerify verifies that a config using
+// all four newly-wired fields (protocol, remote_user, remote_password,
+// remote_port) is accepted by the provider and the image is present on
+// the device afterward. Since the image already exists on the device,
+// Create adopts it without performing a new import, so this test
+// validates schema acceptance rather than wire-level delivery. The
+// wire-level payload content is verified by the unit test
+// TestUnitTenantImageImportPayloadIncludesAllFields.
+func TestAccTenantImageNewFieldsCreateAndVerify(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantImageDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageAccAllFieldsConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.all_fields_test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.all_fields_test", "protocol", "https"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.all_fields_test", "remote_user", "imageuser"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.all_fields_test", "remote_password", "imagepass"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.all_fields_test", "remote_port", "8443"),
+					testAccCheckTenantImageExistsOnDevice("BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+				),
+			},
+		},
+	})
+}
+
 // ---------------------------------------------------------------------------
 // Acceptance test HCL config functions
 // ---------------------------------------------------------------------------
@@ -578,6 +674,45 @@ resource "f5os_tenant_image" "acc_test" {
 }
 `, timeout)
 }
+
+// testAccTenantImageAccFieldConfig generates an HCL config for testing
+// RequiresReplace on protocol and remote_port. Pass empty string / 0
+// to omit each optional attribute.
+func testAccTenantImageAccFieldConfig(protocol string, remotePort int) string {
+	var extra string
+	if protocol != "" {
+		extra += fmt.Sprintf("  protocol    = %q\n", protocol)
+	}
+	if remotePort != 0 {
+		extra += fmt.Sprintf("  remote_port = %d\n", remotePort)
+	}
+	return fmt.Sprintf(`
+resource "f5os_tenant_image" "field_test" {
+  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  remote_path = "v17.1.0.1/daily/current/VM"
+  local_path  = "images/tenant"
+  timeout     = 360
+%s}
+`, extra)
+}
+
+// testAccTenantImageAccAllFieldsConfig exercises all four newly-wired
+// attributes (protocol, remote_user, remote_password, remote_port) against
+// a real device.
+const testAccTenantImageAccAllFieldsConfig = `
+resource "f5os_tenant_image" "all_fields_test" {
+  image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  remote_host     = "spkapexsrvc01.olympus.f5net.com"
+  remote_path     = "v17.1.0.1/daily/current/VM"
+  local_path      = "images/tenant"
+  protocol        = "https"
+  remote_user     = "imageuser"
+  remote_password = "imagepass"
+  remote_port     = 8443
+  timeout         = 360
+}
+`
 
 //func TestUnitTenantImageUpload(t *testing.T) {
 //	testAccPreUnitCheck(t)
@@ -693,6 +828,470 @@ resource "f5os_tenant_image" "test" {
   remote_path = "v17.1.0.1/daily/current/VM"
   local_path  = "images"
   timeout = 380
+}
+`
+
+// TestUnitTenantImageImportPayloadIncludesAllFields verifies that when protocol,
+// remote_user, remote_password, and remote_port are set in the HCL config, all
+// four values are included in the JSON body POSTed to the file-transfer import
+// endpoint. Before this fix, these fields were accepted by the schema but
+// silently discarded.
+func TestUnitTenantImageImportPayloadIncludesAllFields(t *testing.T) {
+	testAccPreUnitCheck(t)
+	var capturedBody map[string]interface{}
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+	var firstGet = true
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if r.Method == "GET" && firstGet {
+			_, _ = fmt.Fprintf(w, "%s", "")
+			firstGet = false
+		} else {
+			_, _ = fmt.Fprintf(w, "%s", `{"f5-tenant-images:image": [{
+            "name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "in-use": false,
+            "type": "vm-image",
+            "status": "replicated",
+            "date": "2023-3-27",
+            "size": "2.27 GB"}]}`)
+		}
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &capturedBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", `{
+    "f5-tenant-images:output": {
+        "result": "Successful."
+    }
+}`)
+	})
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageAllFieldsConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "protocol", "scp"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_user", "admin"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_password", "secret123"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_port", "2222"),
+					func(s *terraform.State) error {
+						if capturedBody == nil {
+							return fmt.Errorf("import endpoint was never called")
+						}
+						if v, ok := capturedBody["protocol"]; !ok || v != "scp" {
+							return fmt.Errorf("expected protocol=scp in request body, got %v", v)
+						}
+						if v, ok := capturedBody["username"]; !ok || v != "admin" {
+							return fmt.Errorf("expected username=admin in request body, got %v", v)
+						}
+						if v, ok := capturedBody["password"]; !ok || v != "secret123" {
+							return fmt.Errorf("expected password=secret123 in request body, got %v", v)
+						}
+						// JSON numbers decode as float64
+						if v, ok := capturedBody["remote-port"]; !ok || v != float64(2222) {
+							return fmt.Errorf("expected remote-port=2222 in request body, got %v", v)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// testAccTenantImageAllFieldsConfig exercises all four previously-ignored
+// import attributes: protocol, remote_user, remote_password, remote_port.
+const testAccTenantImageAllFieldsConfig = `
+resource "f5os_tenant_image" "test" {
+  image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  remote_host     = "spkapexsrvc01.olympus.f5net.com"
+  remote_path     = "v17.1.0.1/daily/current/VM"
+  local_path      = "images"
+  protocol        = "scp"
+  remote_user     = "admin"
+  remote_password = "secret123"
+  remote_port     = 2222
+  timeout         = 360
+}
+`
+
+// ---------------------------------------------------------------------------
+// Shared mock-server setup for RequiresReplace / payload unit tests
+// ---------------------------------------------------------------------------
+
+// tenantImageMockState holds mutable mock-server state shared across handlers.
+type tenantImageMockState struct {
+	createCount  int
+	deleteCount  int
+	imageExists  bool
+	capturedBody map[string]interface{}
+}
+
+// setupTenantImageMock registers all the standard mock handlers needed for
+// tenant_image unit tests and returns a pointer to the shared state so the
+// test can inspect call counts and captured payloads. The caller is
+// responsible for calling teardown() when the test completes.
+//
+// transferPaths lists the remote-file-path values that the transfer-status
+// endpoint should report as Completed. This lets multi-step tests that change
+// remote_path (or other attributes that alter the remote file) see a matching
+// transfer entry in each step.
+func setupTenantImageMock(t *testing.T, transferPaths []string) *tenantImageMockState {
+	t.Helper()
+	testAccPreUnitCheck(t)
+
+	st := &tenantImageMockState{}
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if !st.imageExists {
+			_, _ = fmt.Fprintf(w, "%s", "")
+		} else {
+			_, _ = fmt.Fprintf(w, "%s", `{"f5-tenant-images:image": [{
+            "name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "in-use": false,
+            "type": "vm-image",
+            "status": "replicated",
+            "date": "2023-3-27",
+            "size": "2.27 GB"}]}`)
+		}
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
+		st.createCount++
+		st.imageExists = true
+		body, _ := io.ReadAll(r.Body)
+		st.capturedBody = make(map[string]interface{})
+		_ = json.Unmarshal(body, &st.capturedBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+
+	// Build transfer-status JSON with one Completed entry per path.
+	type transferEntry struct {
+		LocalFilePath  string `json:"local-file-path"`
+		RemoteHost     string `json:"remote-host"`
+		RemoteFilePath string `json:"remote-file-path"`
+		Operation      string `json:"operation"`
+		Protocol       string `json:"protocol"`
+		Status         string `json:"status"`
+		Timestamp      string `json:"timestamp"`
+	}
+	entries := make([]transferEntry, 0, len(transferPaths))
+	for _, p := range transferPaths {
+		entries = append(entries, transferEntry{
+			LocalFilePath:  "images/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+			RemoteHost:     "spkapexsrvc01.olympus.f5net.com",
+			RemoteFilePath: p,
+			Operation:      "Import file",
+			Protocol:       "HTTPS   ",
+			Status:         "         Completed",
+			Timestamp:      "Mon Jun 26 16:05:22 2023",
+		})
+	}
+	type transferStatus struct {
+		Ops []transferEntry `json:"f5-utils-file-transfer:transfer-operation"`
+	}
+	tsBytes, _ := json.Marshal(transferStatus{Ops: entries})
+
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(tsBytes)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
+		st.deleteCount++
+		st.imageExists = false
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", `{
+    "f5-tenant-images:output": {
+        "result": "Successful."
+    }
+}`)
+	})
+
+	return st
+}
+
+// ---------------------------------------------------------------------------
+// RequiresReplace unit tests for each newly-wired attribute
+// ---------------------------------------------------------------------------
+
+// TestUnitTenantImageRequiresReplaceOnProtocolChange verifies that changing
+// protocol triggers destroy+recreate (RequiresReplace).
+func TestUnitTenantImageRequiresReplaceOnProtocolChange(t *testing.T) {
+	st := setupTenantImageMock(t, []string{
+		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+	})
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageAllFieldsConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "protocol", "scp"),
+				),
+			},
+			{
+				Config: testAccTenantImageProtocolChangedConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "protocol", "https"),
+					func(s *terraform.State) error {
+						if st.createCount < 2 {
+							return fmt.Errorf("expected >=2 import calls (create+replace), got %d", st.createCount)
+						}
+						if st.deleteCount < 1 {
+							return fmt.Errorf("expected >=1 delete call (replacement destroy), got %d", st.deleteCount)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageRequiresReplaceOnRemotePortChange verifies that changing
+// remote_port triggers destroy+recreate (RequiresReplace).
+func TestUnitTenantImageRequiresReplaceOnRemotePortChange(t *testing.T) {
+	st := setupTenantImageMock(t, []string{
+		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+	})
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageAllFieldsConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_port", "2222"),
+				),
+			},
+			{
+				Config: testAccTenantImageRemotePortChangedConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_port", "3333"),
+					func(s *terraform.State) error {
+						if st.createCount < 2 {
+							return fmt.Errorf("expected >=2 import calls (create+replace), got %d", st.createCount)
+						}
+						if st.deleteCount < 1 {
+							return fmt.Errorf("expected >=1 delete call (replacement destroy), got %d", st.deleteCount)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageRequiresReplaceOnRemoteUserChange verifies that changing
+// remote_user triggers destroy+recreate (RequiresReplace).
+func TestUnitTenantImageRequiresReplaceOnRemoteUserChange(t *testing.T) {
+	st := setupTenantImageMock(t, []string{
+		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+	})
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageAllFieldsConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_user", "admin"),
+				),
+			},
+			{
+				Config: testAccTenantImageRemoteUserChangedConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_user", "operator"),
+					func(s *terraform.State) error {
+						if st.createCount < 2 {
+							return fmt.Errorf("expected >=2 import calls (create+replace), got %d", st.createCount)
+						}
+						if st.deleteCount < 1 {
+							return fmt.Errorf("expected >=1 delete call (replacement destroy), got %d", st.deleteCount)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageRequiresReplaceOnRemoteHostChange verifies that changing
+// remote_host triggers destroy+recreate (RequiresReplace).
+func TestUnitTenantImageRequiresReplaceOnRemoteHostChange(t *testing.T) {
+	st := setupTenantImageMock(t, []string{
+		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+	})
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageAllFieldsConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_host", "spkapexsrvc01.olympus.f5net.com"),
+				),
+			},
+			{
+				Config: testAccTenantImageRemoteHostChangedConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_host", "mirror.olympus.f5net.com"),
+					func(s *terraform.State) error {
+						if st.createCount < 2 {
+							return fmt.Errorf("expected >=2 import calls (create+replace), got %d", st.createCount)
+						}
+						if st.deleteCount < 1 {
+							return fmt.Errorf("expected >=1 delete call (replacement destroy), got %d", st.deleteCount)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageOmitsOptionalFieldsWhenUnset verifies that when the
+// optional attributes (protocol, remote_user, remote_password, remote_port)
+// are not set in the HCL config, they are omitted from the JSON payload sent
+// to the import API (omitempty).
+func TestUnitTenantImageOmitsOptionalFieldsWhenUnset(t *testing.T) {
+	st := setupTenantImageMock(t, []string{
+		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+	})
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageCreateTC2ResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					func(s *terraform.State) error {
+						if st.capturedBody == nil {
+							return fmt.Errorf("import endpoint was never called")
+						}
+						for _, key := range []string{"protocol", "username", "password", "remote-port"} {
+							if v, ok := st.capturedBody[key]; ok {
+								// remote-port may be 0 (Go int zero value) — treat that as omitted
+								if f, isFloat := v.(float64); isFloat && f == 0 {
+									continue
+								}
+								return fmt.Errorf("expected %q to be absent from request body, but got %v", key, v)
+							}
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// HCL configs for attribute-change RequiresReplace tests
+// ---------------------------------------------------------------------------
+
+const testAccTenantImageProtocolChangedConfig = `
+resource "f5os_tenant_image" "test" {
+  image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  remote_host     = "spkapexsrvc01.olympus.f5net.com"
+  remote_path     = "v17.1.0.1/daily/current/VM"
+  local_path      = "images"
+  protocol        = "https"
+  remote_user     = "admin"
+  remote_password = "secret123"
+  remote_port     = 2222
+  timeout         = 360
+}
+`
+
+const testAccTenantImageRemotePortChangedConfig = `
+resource "f5os_tenant_image" "test" {
+  image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  remote_host     = "spkapexsrvc01.olympus.f5net.com"
+  remote_path     = "v17.1.0.1/daily/current/VM"
+  local_path      = "images"
+  protocol        = "scp"
+  remote_user     = "admin"
+  remote_password = "secret123"
+  remote_port     = 3333
+  timeout         = 360
+}
+`
+
+const testAccTenantImageRemoteUserChangedConfig = `
+resource "f5os_tenant_image" "test" {
+  image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  remote_host     = "spkapexsrvc01.olympus.f5net.com"
+  remote_path     = "v17.1.0.1/daily/current/VM"
+  local_path      = "images"
+  protocol        = "scp"
+  remote_user     = "operator"
+  remote_password = "secret123"
+  remote_port     = 2222
+  timeout         = 360
+}
+`
+
+const testAccTenantImageRemoteHostChangedConfig = `
+resource "f5os_tenant_image" "test" {
+  image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  remote_host     = "mirror.olympus.f5net.com"
+  remote_path     = "v17.1.0.1/daily/current/VM"
+  local_path      = "images"
+  protocol        = "scp"
+  remote_user     = "admin"
+  remote_password = "secret123"
+  remote_port     = 2222
+  timeout         = 360
 }
 `
 
