@@ -2,10 +2,12 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -16,6 +18,16 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5os "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
+
+// privateKeyOriginalAuthOrder is the private state key used to store the
+// device's pre-existing auth_order so Delete can restore it.
+const privateKeyOriginalAuthOrder = "original_auth_order"
+
+// privateStateSetter is satisfied by resp.Private on CreateResponse,
+// ReadResponse, and UpdateResponse.
+type privateStateSetter interface {
+	SetKey(ctx context.Context, key string, value []byte) diag.Diagnostics
+}
 
 // Ensure interface satisfaction
 var _ resource.Resource = &AuthResource{}
@@ -118,6 +130,13 @@ func (r *AuthResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	// Create authentication order if provided
 	if !plan.AuthOrder.IsNull() && !plan.AuthOrder.IsUnknown() {
+		// Save the original auth order from the device before overwriting,
+		// so Delete can restore it instead of removing it entirely.
+		resp.Diagnostics.Append(r.snapshotAuthOrder(ctx, resp.Private)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
 		var methods []string
 		if diags := plan.AuthOrder.ElementsAs(ctx, &methods, false); !diags.HasError() {
 			tflog.Debug(ctx, "Creating auth order", map[string]any{"methods": methods})
@@ -195,6 +214,23 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	// Detect import: all user-configurable fields are null because
 	// ImportStatePassthroughID only sets the ID.
 	isImport := state.AuthOrder.IsNull() && state.RemoteRoles.IsNull() && state.PasswordPolicy.IsNull()
+
+	// During import, snapshot the device's current auth_order into private
+	// state so Delete can restore it. Create handles this for the normal
+	// lifecycle, but import bypasses Create entirely.
+	if isImport {
+		existing, diags := req.Private.GetKey(ctx, privateKeyOriginalAuthOrder)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if existing == nil {
+			resp.Diagnostics.Append(r.snapshotAuthOrder(ctx, resp.Private)...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+		}
+	}
 
 	// Read auth_order from device when managed or during import.
 	if !state.AuthOrder.IsNull() || isImport {
@@ -281,10 +317,41 @@ func (r *AuthResource) Update(ctx context.Context, req resource.UpdateRequest, r
 }
 
 func (r *AuthResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	// Best-effort removal of auth order only; do not alter global roles.
-	if err := r.deleteAuthOrder(ctx); err != nil {
-		tflog.Warn(ctx, "failed deleting auth order", map[string]any{"error": err.Error()})
+	// Restore the original auth order that was saved during Create, rather
+	// than deleting the authentication-method array entirely. This avoids
+	// nuking auth config that existed before Terraform managed it.
+	origData, diags := req.Private.GetKey(ctx, privateKeyOriginalAuthOrder)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
 	}
+
+	if origData != nil {
+		var origMethods []string
+		if err := json.Unmarshal(origData, &origMethods); err != nil {
+			tflog.Warn(ctx, "failed to deserialize original auth order from private state, falling back to delete",
+				map[string]any{"error": err.Error()})
+			if err := r.deleteAuthOrder(ctx); err != nil {
+				tflog.Warn(ctx, "failed deleting auth order", map[string]any{"error": err.Error()})
+			}
+		} else {
+			if err := r.restoreAuthOrder(ctx, origMethods); err != nil {
+				tflog.Warn(ctx, "failed restoring original auth order, falling back to delete",
+					map[string]any{"error": err.Error(), "methods": origMethods})
+				if err := r.deleteAuthOrder(ctx); err != nil {
+					tflog.Warn(ctx, "failed deleting auth order", map[string]any{"error": err.Error()})
+				}
+			}
+		}
+	} else {
+		// No original auth order saved (e.g., resource created before this fix).
+		// Fall back to the old behavior of deleting the auth order.
+		tflog.Warn(ctx, "No original auth order in private state, falling back to delete")
+		if err := r.deleteAuthOrder(ctx); err != nil {
+			tflog.Warn(ctx, "failed deleting auth order", map[string]any{"error": err.Error()})
+		}
+	}
+
 	resp.State.RemoveResource(ctx)
 }
 
@@ -325,6 +392,31 @@ func (r *AuthResource) getAuthOrder(ctx context.Context) ([]string, error) {
 //go:cover ignore
 func (r *AuthResource) listRoles(ctx context.Context) (map[string]int, error) {
 	return r.client.GetRoles()
+}
+
+// snapshotAuthOrder reads the current auth_order from the device and saves it
+// to private state so Delete can restore it later. Does nothing if the device
+// has no auth_order configured.
+func (r *AuthResource) snapshotAuthOrder(ctx context.Context, private privateStateSetter) diag.Diagnostics {
+	var diags diag.Diagnostics
+	methods, err := r.getAuthOrder(ctx)
+	if err != nil {
+		diags.AddError("Failed to read original auth order from device", err.Error())
+		return diags
+	}
+	if methods == nil {
+		return diags
+	}
+	data, err := json.Marshal(methods)
+	if err != nil {
+		diags.AddError("Failed to serialize original auth order", err.Error())
+		return diags
+	}
+	diags.Append(private.SetKey(ctx, privateKeyOriginalAuthOrder, data)...)
+	if !diags.HasError() {
+		tflog.Debug(ctx, "Saved original auth order to private state", map[string]any{"original": methods})
+	}
+	return diags
 }
 
 // createAuthOrder sets the authentication method order
@@ -411,6 +503,12 @@ func (r *AuthResource) updateAuthOrder(ctx context.Context, methods []string) er
 func (r *AuthResource) updateRoleConfig(ctx context.Context, rolename string, gid *int64) error {
 	tflog.Debug(ctx, "Updating role config", map[string]any{"rolename": rolename, "gid": gid})
 	return r.client.SetRoleConfig(rolename, gid)
+}
+
+// restoreAuthOrder restores the authentication method order to a previous state
+func (r *AuthResource) restoreAuthOrder(ctx context.Context, methods []string) error {
+	tflog.Debug(ctx, "Restoring auth order", map[string]any{"methods": methods})
+	return r.client.SetAuthOrder(methods)
 }
 
 // deleteAuthOrder removes the authentication method order
