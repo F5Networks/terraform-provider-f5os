@@ -12,7 +12,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -45,6 +48,7 @@ type TenantImageResourceModel struct {
 	RemotePassword types.String `tfsdk:"remote_password"`
 	RemotePath     types.String `tfsdk:"remote_path"`
 	RemotePort     types.Int64  `tfsdk:"remote_port"`
+	Insecure       types.Bool   `tfsdk:"insecure"`
 	Timeout        types.Int64  `tfsdk:"timeout"`
 	Id             types.String `tfsdk:"id"`
 	Status         types.String `tfsdk:"status"`
@@ -86,14 +90,20 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 					stringvalidator.ConflictsWith(path.MatchRoot("remote_port")),
 					stringvalidator.ConflictsWith(path.MatchRoot("remote_user")),
 					stringvalidator.ConflictsWith(path.MatchRoot("remote_password")),
+					stringvalidator.ConflictsWith(path.MatchRoot("protocol")),
+					stringvalidator.ConflictsWith(path.MatchRoot("remote_path")),
+					stringvalidator.ConflictsWith(path.MatchRoot("insecure")),
 				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"protocol": schema.StringAttribute{
-				MarkdownDescription: "Protocol for image transfer.",
+				MarkdownDescription: "Protocol for image transfer. Supported values: `scp`, `sftp`, `https`, `http`.",
 				Optional:            true,
+				Validators: []validator.String{
+					stringvalidator.OneOf("scp", "sftp", "https", "http"),
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -130,6 +140,18 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 			"remote_port": schema.Int64Attribute{
 				MarkdownDescription: "The port on the remote host to which you want to connect.\nIf the port is not provided, a default port for the selected protocol is used.",
 				Optional:            true,
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.RequiresReplace(),
+				},
+			},
+			"insecure": schema.BoolAttribute{
+				MarkdownDescription: "When set to `true`, the image transfer skips TLS certificate verification on the remote host.\nUseful when importing images over HTTPS from servers with self-signed certificates.",
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.RequiresReplace(),
+				},
 			},
 			"timeout": schema.Int64Attribute{
 				MarkdownDescription: "The number of seconds to wait for image import to finish.",
@@ -173,12 +195,10 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	resp1Byte, _ := r.client.GetImage(data.ImageName.ValueString())
-
-	// if err != nil {
-	// 	resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Import Image, got error: %s", err))
-	// 	return
-	// }
+	resp1Byte, getErr := r.client.GetImage(data.ImageName.ValueString())
+	if getErr != nil {
+		resp.Diagnostics.AddWarning("Client Warning", fmt.Sprintf("Unable to check if image already exists, will attempt import: %s", getErr))
+	}
 
 	if resp1Byte == nil || len(resp1Byte.TenantImages) == 0 {
 		if data.UploadFromPath.IsNull() {
@@ -236,11 +256,28 @@ func (r *TenantImageResource) importImage(ctx context.Context, data *TenantImage
 	timeout := int(data.Timeout.ValueInt64())
 	tflog.Info(ctx, fmt.Sprintf("timeout data :%+v", timeout))
 	importConfig := &f5ossdk.F5ReqTenantImage{}
-	importConfig.Insecure = ""
+	if data.Insecure.ValueBool() {
+		importConfig.Insecure = "true"
+	} else {
+		importConfig.Insecure = ""
+	}
 	importConfig.RemoteHost = data.RemoteHost.ValueString()
 	importConfig.RemoteFile = fmt.Sprintf("%s/%s", data.RemotePath.ValueString(), data.ImageName.ValueString())
 	importConfig.LocalFile = data.LocalPath.ValueString()
-	tflog.Info(ctx, fmt.Sprintf("Create Data:%+v", importConfig))
+	if !data.Protocol.IsNull() && !data.Protocol.IsUnknown() {
+		importConfig.Protocol = data.Protocol.ValueString()
+	}
+	if !data.RemoteUser.IsNull() && !data.RemoteUser.IsUnknown() {
+		importConfig.Username = data.RemoteUser.ValueString()
+	}
+	if !data.RemotePassword.IsNull() && !data.RemotePassword.IsUnknown() {
+		importConfig.Password = data.RemotePassword.ValueString()
+	}
+	if !data.RemotePort.IsNull() && !data.RemotePort.IsUnknown() {
+		importConfig.RemotePort = int(data.RemotePort.ValueInt64())
+	}
+	tflog.Info(ctx, fmt.Sprintf("Create Data: RemoteHost=%s, RemoteFile=%s, LocalFile=%s, Protocol=%s, Username=%s, RemotePort=%d",
+		importConfig.RemoteHost, importConfig.RemoteFile, importConfig.LocalFile, importConfig.Protocol, importConfig.Username, importConfig.RemotePort))
 	return r.client.ImportImage(importConfig, timeout)
 }
 
