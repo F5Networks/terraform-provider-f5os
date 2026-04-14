@@ -387,7 +387,24 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	data.MgmtIP = types.StringValue(respData.F5TenantsTenant[0].State.MgmtIp)
 	data.MgmtPrefix = types.Int64Value(int64(respData.F5TenantsTenant[0].State.PrefixLength))
 	data.CpuCores = types.Int64Value(int64(respData.F5TenantsTenant[0].State.VcpuCoresPerNode))
-	data.Nodes, _ = types.ListValueFrom(ctx, types.Int64Type, respData.F5TenantsTenant[0].Config.Nodes)
+	if respData.F5TenantsTenant[0].Config.Nodes != nil {
+		nodesList, diags := types.ListValueFrom(ctx, types.Int64Type, respData.F5TenantsTenant[0].Config.Nodes)
+		if diags.HasError() {
+			tflog.Warn(ctx, "failed to convert nodes to list", map[string]interface{}{"nodes": respData.F5TenantsTenant[0].Config.Nodes})
+		}
+		data.Nodes = nodesList
+	} else {
+		data.Nodes = types.ListNull(types.Int64Type)
+	}
+	if respData.F5TenantsTenant[0].Config.Vlans != nil {
+		vlansList, diags := types.ListValueFrom(ctx, types.Int64Type, respData.F5TenantsTenant[0].Config.Vlans)
+		if diags.HasError() {
+			tflog.Warn(ctx, "failed to convert vlans to list", map[string]interface{}{"vlans": respData.F5TenantsTenant[0].Config.Vlans})
+		}
+		data.Vlans = vlansList
+	} else {
+		data.Vlans = types.ListNull(types.Int64Type)
+	}
 	data.MgmtGateway = types.StringValue(respData.F5TenantsTenant[0].State.Gateway)
 	data.Status = types.StringValue(respData.F5TenantsTenant[0].State.Status)
 	data.DagIpv6prefixLength = types.Int64Value(int64(respData.F5TenantsTenant[0].State.DagIpv6PrefixLength))
