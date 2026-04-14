@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -451,6 +452,255 @@ func TestAuthResourceMocked_ReadRoleConfigImport(t *testing.T) {
 	// During import, all 5 device roles should be returned
 	assert.Equal(t, 5, len(resultRoles),
 		"readRoleConfig should return all device roles during import")
+}
+
+// TestAuthResourceMocked_SnapshotRestoreRoundtrip exercises the full
+// Create → Destroy lifecycle through the Terraform framework with a mock
+// HTTP server. It verifies that:
+//  1. Create snapshots the pre-existing auth_order into private state.
+//  2. Delete reads the snapshot and restores it via PUT (not DELETE).
+//
+// The mock server tracks its state so CheckDestroy can verify the final
+// device state matches the pre-existing baseline.
+func TestAuthResourceMocked_SnapshotRestoreRoundtrip(t *testing.T) {
+	preExisting := `["openconfig-aaa-types:LOCAL","f5-openconfig-aaa-ldap:LDAP_ALL"]`
+	currentAuthMethods := preExisting
+	deleteCalled := false
+
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"openconfig-system:config":{"authentication-method":%s}}`, currentAuthMethods)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config/authentication-method", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PUT":
+			var payload struct {
+				Methods []string `json:"openconfig-system:authentication-method"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			b, _ := json.Marshal(payload.Methods)
+			currentAuthMethods = string(b)
+			w.WriteHeader(http.StatusNoContent)
+		case "DELETE":
+			deleteCalled = true
+			currentAuthMethods = "[]"
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy: func(s *terraform.State) error {
+			if currentAuthMethods != preExisting {
+				return fmt.Errorf("expected auth_order restored to %s, got %s", preExisting, currentAuthMethods)
+			}
+			if deleteCalled {
+				return fmt.Errorf("DELETE was called; expected PUT to restore original")
+			}
+			return nil
+		},
+		Steps: []tfresource.TestStep{
+			{
+				Config: `resource "f5os_auth" "test" { auth_order = ["local", "radius"] }`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.1", "radius"),
+					func(s *terraform.State) error {
+						expected := `["openconfig-aaa-types:LOCAL","openconfig-aaa-types:RADIUS_ALL"]`
+						if currentAuthMethods != expected {
+							return fmt.Errorf("after create, expected device to have %s, got %s", expected, currentAuthMethods)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestAuthResourceMocked_DeleteFallbackWhenNoSnapshot exercises the fallback
+// path in Delete when private state has no saved auth_order. This happens
+// when the device had no authentication-method configured at Create time
+// (getAuthOrder returns nil, so snapshotAuthOrder stores nothing). In this
+// case Delete should fall back to calling ClearAuthOrder (DELETE).
+func TestAuthResourceMocked_DeleteFallbackWhenNoSnapshot(t *testing.T) {
+	deleteCalled := false
+
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	// GET /config returns NO authentication-method — simulates a device
+	// with no pre-existing auth_order.
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"openconfig-system:config":{}}`)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config/authentication-method", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PUT":
+			w.WriteHeader(http.StatusNoContent)
+		case "DELETE":
+			deleteCalled = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy: func(s *terraform.State) error {
+			if !deleteCalled {
+				return fmt.Errorf("expected DELETE fallback when no snapshot exists, but DELETE was not called")
+			}
+			return nil
+		},
+		Steps: []tfresource.TestStep{
+			{
+				Config: `resource "f5os_auth" "test" { auth_order = ["local", "radius"] }`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.1", "radius"),
+				),
+			},
+		},
+	})
+}
+
+// TestAccAuthResourceDeleteRestoresOriginal verifies that when Terraform
+// destroys the f5os_auth resource, the auth_order is restored to whatever
+// was configured on the device before Terraform managed it, rather than
+// being deleted entirely.
+//
+// Strategy:
+//  1. Capture the device's current auth_order (the true baseline).
+//  2. Set a known auth_order on the device via direct API: ["local", "ldap"]
+//  3. Apply a Terraform config with auth_order = ["local", "radius"]
+//     — Create should snapshot ["local", "ldap"] into private state
+//  4. Terraform destroy runs automatically at the end of the test
+//     — Delete should restore ["local", "ldap"] from private state
+//  5. CheckDestroy verifies the device has ["local", "ldap"]
+//  6. t.Cleanup restores the true baseline captured in step 1.
+//
+// Safety: always keeps "local" first; restores original baseline in Cleanup.
+func TestAccAuthResourceDeleteRestoresOriginal(t *testing.T) {
+	preExisting := []string{"local", "ldap"}
+
+	client, err := newAuthClientFromEnv()
+	if err != nil {
+		t.Skipf("Cannot create f5os client: %v", err)
+	}
+
+	// Capture the true device baseline before we touch anything.
+	trueBaseline, err := client.GetAuthOrder()
+	if err != nil {
+		t.Fatalf("Failed to read true device baseline: %v", err)
+	}
+	t.Logf("True device baseline auth_order: %v", mapOpenConfigMethodsToFriendly(trueBaseline))
+
+	// Set a known pre-existing auth_order so Create has something to snapshot.
+	if err := client.SetAuthOrder(preExisting); err != nil {
+		t.Fatalf("Failed to set pre-existing auth order: %v", err)
+	}
+	t.Logf("Pre-set device auth_order to %v", preExisting)
+
+	// Cleanup: restore the true baseline regardless of test outcome.
+	t.Cleanup(func() {
+		cleanupClient, err := newAuthClientFromEnv()
+		if err != nil {
+			t.Logf("WARNING: cleanup failed to create client: %v", err)
+			return
+		}
+		if trueBaseline == nil {
+			if err := cleanupClient.ClearAuthOrder(); err != nil {
+				t.Logf("WARNING: cleanup failed to clear auth order: %v", err)
+			} else {
+				t.Log("Cleanup: cleared auth_order (baseline had none)")
+			}
+		} else {
+			if err := cleanupClient.SetAuthOrder(mapOpenConfigMethodsToFriendly(trueBaseline)); err != nil {
+				t.Logf("WARNING: cleanup failed to restore auth order to %v: %v",
+					mapOpenConfigMethodsToFriendly(trueBaseline), err)
+			} else {
+				t.Logf("Cleanup: restored auth_order to %v", mapOpenConfigMethodsToFriendly(trueBaseline))
+			}
+		}
+	})
+
+	tfresource.Test(t, tfresource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy: func(s *terraform.State) error {
+			// After destroy, the device should have the pre-existing auth
+			// order restored, NOT an empty/deleted auth-method array.
+			c, err := newAuthClientFromEnv()
+			if err != nil {
+				return fmt.Errorf("failed to create client for destroy check: %w", err)
+			}
+			rawMethods, err := c.GetAuthOrder()
+			if err != nil {
+				return fmt.Errorf("failed to read auth order after destroy: %w", err)
+			}
+			actual := mapOpenConfigMethodsToFriendly(rawMethods)
+			if len(actual) != len(preExisting) {
+				return fmt.Errorf("expected auth_order %v restored after destroy, got %v", preExisting, actual)
+			}
+			for i, want := range preExisting {
+				if actual[i] != want {
+					return fmt.Errorf("auth_order[%d] mismatch: expected %q, got %q (full: expected %v, got %v)",
+						i, want, actual[i], preExisting, actual)
+				}
+			}
+			return nil
+		},
+		Steps: []tfresource.TestStep{
+			// Step 1: Create — Terraform sets auth_order to ["local", "radius"],
+			// which should snapshot the pre-existing ["local", "ldap"] first.
+			{
+				Config: testAccAuthResourceConfig,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.#", "2"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.1", "radius"),
+					testAccCheckAuthOrderApplied([]string{"local", "radius"}),
+				),
+			},
+			// Step 2: Destroy is automatic — CheckDestroy verifies the
+			// pre-existing ["local", "ldap"] was restored.
+		},
+	})
 }
 
 // Helper functions - removed unused helper functions
