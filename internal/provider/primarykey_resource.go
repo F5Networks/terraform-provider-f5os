@@ -119,18 +119,9 @@ func (r *PrimaryKeyResource) Create(ctx context.Context, req resource.CreateRequ
 
 	_ = r.client.SendTeem(map[string]any{"teemData": r.teemData})
 
-	// Skip if already present and not forced
-	if !data.ForceUpdate.ValueBool() {
-		existing, err := r.client.GetPrimaryKey()
-		if err == nil && existing.PrimaryKey.State.Status != "" {
-			tflog.Info(ctx, "[CREATE] Skipping creation as primary key exists and force_update is false")
-			r.primaryKeyResourceModelToState(existing, data)
-			resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-			return
-		}
-	}
-
-	// Set the key
+	// Always set the key on Create. Create is only called for new or
+	// recreated resources (passphrase/salt have RequiresReplace), so
+	// SetPrimaryKey must always run to apply the configured credentials.
 	_, err := r.client.SetPrimaryKey(primaryKeyReq)
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to create PrimaryKey: %s", err))
@@ -186,15 +177,19 @@ func (r *PrimaryKeyResource) Update(ctx context.Context, req resource.UpdateRequ
 
 	tflog.Info(ctx, "[UPDATE] Updating Primary Key configuration")
 
-	// Prepare request payload
-	keyReqConfig := getPrimaryKeyConfig(data)
-	tflog.Debug(ctx, fmt.Sprintf("PrimaryKey Update Payload: %+v", keyReqConfig))
+	if data.ForceUpdate.ValueBool() {
+		// Only re-key when force_update=true. Changing force_update alone
+		// (false → true) is the user's explicit signal to rotate the key.
+		keyReqConfig := getPrimaryKeyConfig(data)
+		tflog.Debug(ctx, fmt.Sprintf("PrimaryKey Update Payload: %+v", keyReqConfig))
 
-	// Send the update to the F5OS system
-	_, err := r.client.SetPrimaryKey(keyReqConfig) // Use SetPrimaryKey as this acts as upsert
-	if err != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to update Primary Key: %s", err))
-		return
+		_, err := r.client.SetPrimaryKey(keyReqConfig)
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to update Primary Key: %s", err))
+			return
+		}
+	} else {
+		tflog.Info(ctx, "[UPDATE] force_update=false — skipping SetPrimaryKey, refreshing state only")
 	}
 
 	// Fetch the latest status after update
