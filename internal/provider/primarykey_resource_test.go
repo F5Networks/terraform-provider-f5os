@@ -141,11 +141,11 @@ func TestAccPrimaryKeyForceUpdateChange(t *testing.T) {
 	})
 }
 
-// TestAccPrimaryKeySkipWhenExistsAndNoForce verifies on a real device that when
-// force_update=false and a primary key already exists on the device, Create
-// skips SetPrimaryKey and returns the existing hash and status. The DUT always
-// has a primary key pre-configured, so this exercises the idempotency guard.
-func TestAccPrimaryKeySkipWhenExistsAndNoForce(t *testing.T) {
+// TestAccPrimaryKeyCreateAlwaysSetsOnDevice verifies on a real device that
+// Create with force_update=false still calls SetPrimaryKey and populates
+// hash and status. Create must always apply the configured passphrase/salt
+// because it only runs on new or recreated resources.
+func TestAccPrimaryKeyCreateAlwaysSetsOnDevice(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
@@ -154,7 +154,7 @@ func TestAccPrimaryKeySkipWhenExistsAndNoForce(t *testing.T) {
 				Config: testAccPrimaryKeyResourceNoForceConfig, // force_update=false
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_primarykey.default", "force_update", "false"),
-					// Existing key state must be adopted — hash and status populated
+					// Create always calls SetPrimaryKey — hash and status must be populated
 					resource.TestCheckResourceAttrSet("f5os_primarykey.default", "hash"),
 					resource.TestCheckResourceAttrSet("f5os_primarykey.default", "status"),
 				),
@@ -242,14 +242,12 @@ func TestUnitPrimaryKeyOldTagsProduceEmpty(t *testing.T) {
 	})
 }
 
-// TestUnitPrimaryKeyForceUpdateChange verifies the Update path. When force_update
-// changes from true to false, Terraform calls Update (not Create). The Update
-// method calls SetPrimaryKey (POST to .../f5-primary-key:set) and then
-// GetPrimaryKey (GET) to refresh hash and status. This test confirms:
-//  1. The POST to :set is sent (setCount increments: once for Create step,
-//     once for Update step).
-//  2. hash and status are correctly populated in state after the update —
-//     verifying that the deserialization fix applies to the Update path too.
+// TestUnitPrimaryKeyForceUpdateChange verifies that Update calls SetPrimaryKey
+// when force_update changes from false to true. This is the explicit re-key
+// signal: the user is asking to rotate the primary key.
+// Steps: Create (force_update=false, SetPrimaryKey called once) →
+//
+//	Update (force_update=true, SetPrimaryKey called a second time).
 func TestUnitPrimaryKeyForceUpdateChange(t *testing.T) {
 	var setCount int32
 	setupPrimaryKeyMock(t, primaryKeyResponseCorrect, &setCount)
@@ -259,35 +257,41 @@ func TestUnitPrimaryKeyForceUpdateChange(t *testing.T) {
 		IsUnitTest:               true,
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
-			// Step 1: Create with force_update=true
-			{
-				Config: testAccPrimaryKeyResourceConfig, // force_update=true
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_primarykey.default", "force_update", "true"),
-					resource.TestCheckResourceAttr("f5os_primarykey.default", "hash", "abc123hash"),
-					resource.TestCheckResourceAttr("f5os_primarykey.default", "status", "COMPLETE"),
-				),
-			},
-			// Step 2: Update force_update=false → triggers Update method
+			// Step 1: Create with force_update=false — SetPrimaryKey called once (Create always sets)
 			{
 				Config: testAccPrimaryKeyResourceNoForceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_primarykey.default", "force_update", "false"),
-					// hash and status must still be populated after the Update path
 					resource.TestCheckResourceAttr("f5os_primarykey.default", "hash", "abc123hash"),
 					resource.TestCheckResourceAttr("f5os_primarykey.default", "status", "COMPLETE"),
+				),
+			},
+			// Step 2: Update force_update=true — Update must call SetPrimaryKey again
+			{
+				Config: testAccPrimaryKeyResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "force_update", "true"),
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "hash", "abc123hash"),
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "status", "COMPLETE"),
+					func(s *terraform.State) error {
+						// Create (step 1) + Update with force_update=true (step 2) = 2 calls
+						if atomic.LoadInt32(&setCount) != 2 {
+							return fmt.Errorf("expected SetPrimaryKey called twice (Create + force Update), got %d", setCount)
+						}
+						return nil
+					},
 				),
 			},
 		},
 	})
 }
 
-// TestUnitPrimaryKeySkipWhenExistsAndNoForce verifies that when force_update=false
-// and GetPrimaryKey returns a non-empty status, the Create method skips calling
-// SetPrimaryKey (no PATCH) and simply adopts the existing state. This confirms
-// the idempotency guard in Create works and that hash/status are populated from
-// the existing device state even when no key is actually set.
-func TestUnitPrimaryKeySkipWhenExistsAndNoForce(t *testing.T) {
+// TestUnitPrimaryKeyCreateAlwaysSets verifies that Create always calls
+// SetPrimaryKey regardless of force_update. Before the fix, Create with
+// force_update=false would skip SetPrimaryKey when a key already existed,
+// silently failing to apply new passphrase/salt on key rotation (after a
+// RequiresReplace destroy+recreate cycle).
+func TestUnitPrimaryKeyCreateAlwaysSets(t *testing.T) {
 	var setCount int32
 	setupPrimaryKeyMock(t, primaryKeyResponseCorrect, &setCount)
 	defer teardown()
@@ -300,12 +304,54 @@ func TestUnitPrimaryKeySkipWhenExistsAndNoForce(t *testing.T) {
 				Config: testAccPrimaryKeyResourceNoForceConfig, // force_update=false
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_primarykey.default", "force_update", "false"),
-					// hash and status populated from existing device state (no POST to :set)
 					resource.TestCheckResourceAttr("f5os_primarykey.default", "hash", "abc123hash"),
 					resource.TestCheckResourceAttr("f5os_primarykey.default", "status", "COMPLETE"),
 					func(s *terraform.State) error {
-						if atomic.LoadInt32(&setCount) != 0 {
-							return fmt.Errorf("expected no SetPrimaryKey call when force_update=false and key exists, but got %d", setCount)
+						// Create must always call SetPrimaryKey, even when force_update=false.
+						if atomic.LoadInt32(&setCount) != 1 {
+							return fmt.Errorf("expected exactly 1 SetPrimaryKey call from Create, got %d", setCount)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitPrimaryKeyUpdateSkipsSetWhenNoForce verifies that Update skips
+// SetPrimaryKey when force_update=false, and only refreshes state from the
+// device. This is the correct home for the force_update guard.
+func TestUnitPrimaryKeyUpdateSkipsSetWhenNoForce(t *testing.T) {
+	var setCount int32
+	setupPrimaryKeyMock(t, primaryKeyResponseCorrect, &setCount)
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create with force_update=true — SetPrimaryKey called once
+			{
+				Config: testAccPrimaryKeyResourceConfig, // force_update=true
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "force_update", "true"),
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "hash", "abc123hash"),
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "status", "COMPLETE"),
+				),
+			},
+			// Step 2: Update force_update=false — Update must NOT call SetPrimaryKey
+			{
+				Config: testAccPrimaryKeyResourceNoForceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "force_update", "false"),
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "hash", "abc123hash"),
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "status", "COMPLETE"),
+					func(s *terraform.State) error {
+						// Create (step 1) called SetPrimaryKey once.
+						// Update (step 2, force_update=false) must NOT add another call.
+						if atomic.LoadInt32(&setCount) != 1 {
+							return fmt.Errorf("expected SetPrimaryKey called exactly once (Create only), got %d", setCount)
 						}
 						return nil
 					},
