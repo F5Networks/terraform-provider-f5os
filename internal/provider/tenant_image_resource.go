@@ -288,7 +288,7 @@ func (r *TenantImageResource) uploadImage(ctx context.Context, data *TenantImage
 	imageName := data.ImageName.ValueString()
 	filePath := go_path.Join(imageDir, imageName)
 	tflog.Info(ctx, "Uploading image")
-	r.client.ConfigOptions.APICallTimeout = time.Duration(time.Duration(timeout).Seconds())
+	r.client.ConfigOptions.APICallTimeout = time.Duration(timeout) * time.Second
 	return r.client.UploadImage(filePath)
 }
 
