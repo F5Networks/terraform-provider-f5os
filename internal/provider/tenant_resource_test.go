@@ -40,7 +40,6 @@ func TestAccTenantDeployResource(t *testing.T) {
 				ImportStateVerifyIgnore: []string{
 					"timeout",
 					"virtual_disk_size",
-					"vlans",
 				},
 			},
 		},
@@ -196,7 +195,6 @@ func TestUnitTenantDeployResourceUnitTC1(t *testing.T) {
 				ImportStateVerifyIgnore: []string{
 					"timeout",           // not returned by API
 					"virtual_disk_size", // state vs config size mismatch
-					"vlans",             // Read does not populate vlans from device
 				},
 			},
 			// Step 3: Update and verify type is still correct
@@ -293,7 +291,6 @@ func TestUnitTenantTypePopulatedOnImport(t *testing.T) {
 				ImportStateVerifyIgnore: []string{
 					"timeout",
 					"virtual_disk_size",
-					"vlans",
 				},
 				ImportStateCheck: func(states []*terraform.InstanceState) error {
 					if len(states) != 1 {
@@ -305,6 +302,138 @@ func TestUnitTenantTypePopulatedOnImport(t *testing.T) {
 					}
 					return nil
 				},
+			},
+		},
+	})
+}
+
+// TestUnitTenantVlansPopulatedFromDevice verifies that when the device API
+// returns a non-nil vlans array, tenantResourceModeltoState populates
+// data.Vlans with the correct values.
+func TestUnitTenantVlansPopulatedFromDevice(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2/state", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_get_status.json"))
+	})
+	deleted := false
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "DELETE" {
+			deleted = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == "GET" && !deleted {
+			w.WriteHeader(http.StatusOK)
+			// Return fixture with vlans: [10, 20, 30]
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_config_multi_vlans.json"))
+		} else if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"invalid-value","error-message":"uri keypath not found"}]}}`)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantVlansMultiConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "vlans.#", "3"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "vlans.0", "10"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "vlans.1", "20"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "vlans.2", "30"),
+				),
+			},
+		},
+	})
+}
+
+// TestUnitTenantVlansNullWhenDeviceReturnsNone verifies that when the device
+// API response has no vlans field (nil), tenantResourceModeltoState sets
+// data.Vlans to types.ListNull so the state doesn't contain stale values.
+func TestUnitTenantVlansNullWhenDeviceReturnsNone(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2/state", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_get_status.json"))
+	})
+	deleted := false
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "DELETE" {
+			deleted = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == "GET" && !deleted {
+			w.WriteHeader(http.StatusOK)
+			// Return fixture with NO vlans field
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_config_no_vlans.json"))
+		} else if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"invalid-value","error-message":"uri keypath not found"}]}}`)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantNoVlansConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
+					resource.TestCheckNoResourceAttr("f5os_tenant.test2", "vlans.#"),
+				),
 			},
 		},
 	})
@@ -557,7 +686,146 @@ func TestAccTenantDeployResourceTypeField(t *testing.T) {
 				ImportStateVerifyIgnore: []string{
 					"timeout",           // not returned by API
 					"virtual_disk_size", // state vs config size may differ
-					"vlans",             // Read does not populate vlans from device
+				},
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance test: verifies that vlans are populated in state from the
+// device after Create and Import, and updated correctly.
+// ---------------------------------------------------------------------------
+
+// testAccCheckTenantVlansOnDevice queries the device directly and verifies
+// the tenant config vlans match the expected values.
+func testAccCheckTenantVlansOnDevice(tenantName string, expectedVlans []int) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTenantClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+		resp, err := client.GetTenant(tenantName)
+		if err != nil {
+			return fmt.Errorf("GetTenant failed: %w", err)
+		}
+		if len(resp.F5TenantsTenant) == 0 {
+			return fmt.Errorf("tenant %q not found on device", tenantName)
+		}
+		actual := resp.F5TenantsTenant[0].Config.Vlans
+		if len(actual) != len(expectedVlans) {
+			return fmt.Errorf("tenant %q vlans: expected %v, got %v", tenantName, expectedVlans, actual)
+		}
+		for i, v := range expectedVlans {
+			if actual[i] != v {
+				return fmt.Errorf("tenant %q vlans[%d]: expected %d, got %d", tenantName, i, v, actual[i])
+			}
+		}
+		return nil
+	}
+}
+
+// testAccCheckTenantNoVlansOnDevice queries the device and verifies the
+// tenant has no vlans configured. This handles both nil (omitted from JSON)
+// and empty array cases since len(nil) == 0 and len([]int{}) == 0.
+func testAccCheckTenantNoVlansOnDevice(tenantName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTenantClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+		resp, err := client.GetTenant(tenantName)
+		if err != nil {
+			return fmt.Errorf("GetTenant failed: %w", err)
+		}
+		if len(resp.F5TenantsTenant) == 0 {
+			return fmt.Errorf("tenant %q not found on device", tenantName)
+		}
+		actual := resp.F5TenantsTenant[0].Config.Vlans
+		if len(actual) != 0 {
+			return fmt.Errorf("tenant %q expected no vlans, got %v", tenantName, actual)
+		}
+		return nil
+	}
+}
+
+// TestAccTenantVlansPopulatedInState verifies vlans are populated in state
+// from the device after Create and Import, and updated correctly.
+// Note: Vlans are stored as an ordered list (types.ListType), not a set.
+// The F5OS API preserves VLAN ordering, so index-based assertions are valid.
+// Prerequisites: VLANs 3910, 3920, 3930 must exist on the device (range 3900-3999
+// is reserved for testing per the skill safety rules).
+func TestAccTenantVlansPopulatedInState(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantDestroy,
+		Steps: []resource.TestStep{
+			// Step 1: Create with vlans and verify state + device
+			{
+				Config: testAccTenantWithVlansConfigFunc([]int{3910, 3920}),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "name", "test-vlans-field"),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "type", "BIG-IP"),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "status", "Configured"),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.#", "2"),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.0", "3910"),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.1", "3920"),
+					testAccCheckTenantVlansOnDevice("test-vlans-field", []int{3910, 3920}),
+				),
+			},
+			// Step 2: Import — vlans should now survive import because
+			// tenantResourceModeltoState reads Config.Vlans from the
+			// device response.
+			{
+				ResourceName:      "f5os_tenant.vlans_test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"timeout",
+					"virtual_disk_size",
+				},
+			},
+			// Step 3: Update vlans to a different set
+			{
+				Config: testAccTenantWithVlansConfigFunc([]int{3910, 3920, 3930}),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.#", "3"),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.0", "3910"),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.1", "3920"),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "vlans.2", "3930"),
+					testAccCheckTenantVlansOnDevice("test-vlans-field", []int{3910, 3920, 3930}),
+				),
+			},
+		},
+	})
+}
+
+func TestAccTenantNoVlansInState(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantDestroy,
+		Steps: []resource.TestStep{
+			// Step 1: Create with no vlans — verify no vlans on device
+			{
+				Config: testAccTenantWithoutVlansConfigFunc(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "name", "test-vlans-field"),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "type", "BIG-IP"),
+					resource.TestCheckResourceAttr("f5os_tenant.vlans_test", "status", "Configured"),
+					resource.TestCheckNoResourceAttr("f5os_tenant.vlans_test", "vlans.#"),
+					testAccCheckTenantNoVlansOnDevice("test-vlans-field"),
+				),
+			},
+			// Step 2: Import — vlans should be null after import
+			{
+				ResourceName:      "f5os_tenant.vlans_test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"timeout",
+					"virtual_disk_size",
 				},
 			},
 		},
@@ -586,6 +854,46 @@ resource "f5os_tenant" "test2" {
   name              = "testtenant-ecosys2"
   image_name        = %q
   mgmt_ip           = "10.10.10.26"
+  mgmt_gateway      = "10.10.10.1"
+  mgmt_prefix       = 24
+  type              = "BIG-IP"
+  cpu_cores         = 2
+  running_state     = "configured"
+  virtual_disk_size = 82
+}
+`, tenantTestImage())
+}
+
+func testAccTenantWithVlansConfigFunc(vlans []int) string {
+	vlanStr := ""
+	for i, v := range vlans {
+		if i > 0 {
+			vlanStr += ", "
+		}
+		vlanStr += fmt.Sprintf("%d", v)
+	}
+	return fmt.Sprintf(`
+resource "f5os_tenant" "vlans_test" {
+  name              = "test-vlans-field"
+  image_name        = %q
+  mgmt_ip           = "10.10.10.51"
+  mgmt_gateway      = "10.10.10.1"
+  mgmt_prefix       = 24
+  type              = "BIG-IP"
+  cpu_cores         = 2
+  running_state     = "configured"
+  virtual_disk_size = 82
+  vlans             = [%s]
+}
+`, tenantTestImage(), vlanStr)
+}
+
+func testAccTenantWithoutVlansConfigFunc() string {
+	return fmt.Sprintf(`
+resource "f5os_tenant" "vlans_test" {
+  name              = "test-vlans-field"
+  image_name        = %q
+  mgmt_ip           = "10.10.10.51"
   mgmt_gateway      = "10.10.10.1"
   mgmt_prefix       = 24
   type              = "BIG-IP"
@@ -692,6 +1000,35 @@ resource "f5os_tenant" "test-tenant22" {
 //  vlans             = [1,2,3]
 //}
 //`
+
+const testAccTenantVlansMultiConfig = `
+resource "f5os_tenant" "test2" {
+  name              = "testtenant-ecosys2"
+  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  mgmt_ip           = "10.10.10.26"
+  mgmt_gateway      = "10.10.10.1"
+  mgmt_prefix       = 24
+  type              = "BIG-IP"
+  cpu_cores         = 8
+  running_state     = "configured"
+  virtual_disk_size = 82
+  vlans             = [10, 20, 30]
+}
+`
+
+const testAccTenantNoVlansConfig = `
+resource "f5os_tenant" "test2" {
+  name              = "testtenant-ecosys2"
+  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  mgmt_ip           = "10.10.10.26"
+  mgmt_gateway      = "10.10.10.1"
+  mgmt_prefix       = 24
+  type              = "BIG-IP"
+  cpu_cores         = 8
+  running_state     = "configured"
+  virtual_disk_size = 82
+}
+`
 
 const testAccTenantDeployTC5 = `
 resource "f5os_tenant" "velos_bigip_next_tenant_tc5" {
