@@ -63,12 +63,18 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 			"image_name": schema.StringAttribute{
 				MarkdownDescription: "Name of the tenant image.",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"local_path": schema.StringAttribute{
 				MarkdownDescription: "The path on the F5OS where the the tenant image is to be imported to.",
 				Optional:            true,
 				Validators: []validator.String{
 					stringvalidator.OneOf([]string{"images/tenant", "images", "images/staging", "images/import/iso"}...),
+				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"upload_from_path": schema.StringAttribute{
@@ -81,27 +87,45 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 					stringvalidator.ConflictsWith(path.MatchRoot("remote_user")),
 					stringvalidator.ConflictsWith(path.MatchRoot("remote_password")),
 				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"protocol": schema.StringAttribute{
 				MarkdownDescription: "Protocol for image transfer.",
 				Optional:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"remote_host": schema.StringAttribute{
 				MarkdownDescription: "The hostname or IP address of the remote server on which the tenant image is stored.\nThe server must make the image accessible via the specified protocol.",
 				Optional:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"remote_user": schema.StringAttribute{
 				MarkdownDescription: "User name for the remote server on which the tenant image is stored.",
 				Optional:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"remote_password": schema.StringAttribute{
 				MarkdownDescription: "Password for the user on the remote server on which the tenant image is stored.",
 				Optional:            true,
 				Sensitive:           true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"remote_path": schema.StringAttribute{
 				MarkdownDescription: "The path to the tenant image on the remote server.",
 				Optional:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"remote_port": schema.Int64Attribute{
 				MarkdownDescription: "The port on the remote host to which you want to connect.\nIf the port is not provided, a default port for the selected protocol is used.",

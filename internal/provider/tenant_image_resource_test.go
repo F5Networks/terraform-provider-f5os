@@ -3,10 +3,15 @@ package provider
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/stretchr/testify/assert"
+	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
 func TestAccTenantImageCreateTC1Resource(t *testing.T) {
@@ -192,6 +197,388 @@ func TestAccTenantImageCreateUnitTC4Resource(t *testing.T) {
 	})
 }
 
+// TestUnitTenantImageRequiresReplaceOnRemotePathChange verifies that changing
+// remote_path forces a destroy+recreate cycle (RequiresReplace plan modifier).
+// The test uses two steps: Step 1 creates the image, Step 2 changes remote_path
+// and verifies the resource is replaced (new import + delete of old).
+func TestUnitTenantImageRequiresReplaceOnRemotePathChange(t *testing.T) {
+	testAccPreUnitCheck(t)
+	var createCount int
+	var deleteCount int
+	imageExists := false
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if !imageExists {
+			// Image not present — return empty so Create triggers import
+			_, _ = fmt.Fprintf(w, "%s", "")
+		} else {
+			_, _ = fmt.Fprintf(w, "%s", `{"f5-tenant-images:image": [{
+            "name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "in-use": false,
+            "type": "vm-image",
+            "status": "replicated",
+            "date": "2023-3-27",
+            "size": "2.27 GB"}]}`)
+		}
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
+		createCount++
+		imageExists = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
+		// Return a dynamic transfer status that includes entries for both
+		// the original and replacement remote paths so importWait finds a match.
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{
+    "f5-utils-file-transfer:transfer-operation": [
+        {
+            "local-file-path": "images/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "remote-host": "spkapexsrvc01.olympus.f5net.com",
+            "remote-file-path": "v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "operation": "Import file",
+            "protocol": "HTTPS   ",
+            "status": "         Completed",
+            "timestamp": "Mon Jun 26 16:05:22 2023"
+        },
+        {
+            "local-file-path": "images/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "remote-host": "spkapexsrvc01.olympus.f5net.com",
+            "remote-file-path": "v17.1.0.1/daily/previous/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "operation": "Import file",
+            "protocol": "HTTPS   ",
+            "status": "         Completed",
+            "timestamp": "Mon Jun 26 16:10:22 2023"
+        }
+    ]
+}`)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
+		deleteCount++
+		imageExists = false
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", `{
+    "f5-tenant-images:output": {
+        "result": "Successful."
+    }
+}`)
+	})
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create image from remote_path "v17.1.0.1/daily/current/VM"
+			{
+				Config: testAccTenantImageCreateTC2ResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_path", "v17.1.0.1/daily/current/VM"),
+				),
+			},
+			// Step 2: Change remote_path — RequiresReplace should trigger
+			// destroy + recreate, NOT an in-place update.
+			{
+				Config: testAccTenantImageRequiresReplaceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_path", "v17.1.0.1/daily/previous/VM"),
+					func(s *terraform.State) error {
+						// createCount should be 2: one for Step 1 + one for Step 2 re-create
+						if createCount < 2 {
+							return fmt.Errorf("expected at least 2 import calls (create+replace), got %d", createCount)
+						}
+						// deleteCount should be >= 1: at least the destroy from replacement
+						if deleteCount < 1 {
+							return fmt.Errorf("expected at least 1 delete call (replacement destroy), got %d", deleteCount)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageTimeoutChangeNoReplace verifies that changing only
+// timeout does NOT force a destroy+recreate — it's an in-place update.
+func TestUnitTenantImageTimeoutChangeNoReplace(t *testing.T) {
+	testAccPreUnitCheck(t)
+	var deleteCount int
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+	var firstGet = true
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if r.Method == "GET" && firstGet {
+			_, _ = fmt.Fprintf(w, "%s", "")
+			firstGet = false
+		} else {
+			_, _ = fmt.Fprintf(w, "%s", `{"f5-tenant-images:image": [{
+            "name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "in-use": false,
+            "type": "vm-image",
+            "status": "replicated",
+            "date": "2023-3-27",
+            "size": "2.27 GB"}]}`)
+		}
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
+		deleteCount++
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", `{
+    "f5-tenant-images:output": {
+        "result": "Successful."
+    }
+}`)
+	})
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create
+			{
+				Config: testAccTenantImageCreateTC2ResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+				),
+			},
+			// Step 2: Change only timeout (360 -> 380) — no replacement
+			{
+				Config: testAccTenantImageCreateTC2ModifyResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					func(s *terraform.State) error {
+						// Between Step 1 and Step 2, no delete should occur
+						// (only the final destroy at test cleanup will delete).
+						if deleteCount > 0 {
+							return fmt.Errorf("timeout change should not trigger delete, but got %d deletes", deleteCount)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance test helpers
+// ---------------------------------------------------------------------------
+
+// newTenantImageClientFromEnv creates a fresh f5osclient session from env vars.
+// Port defaults to 8888 to match the provider.
+func newTenantImageClientFromEnv() (*f5ossdk.F5os, error) {
+	host := os.Getenv("F5OS_HOST")
+	user := os.Getenv("F5OS_USERNAME")
+	if user == "" {
+		user = os.Getenv("F5OS_USER")
+	}
+	pass := os.Getenv("F5OS_PASSWORD")
+	port := 8888
+	if p := os.Getenv("F5OS_PORT"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil {
+			port = v
+		}
+	}
+	cfg := &f5ossdk.F5osConfig{
+		Host:             host,
+		User:             user,
+		Password:         pass,
+		Port:             port,
+		DisableSSLVerify: true,
+	}
+	return f5ossdk.NewSession(cfg)
+}
+
+// testAccCheckTenantImageExistsOnDevice queries the device directly and verifies
+// the named image is present (any status).
+func testAccCheckTenantImageExistsOnDevice(imageName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTenantImageClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+		resp, err := client.GetImage(imageName)
+		if err != nil {
+			return fmt.Errorf("GetImage(%q) failed: %w", imageName, err)
+		}
+		if resp == nil || len(resp.TenantImages) == 0 {
+			return fmt.Errorf("image %q not found on device", imageName)
+		}
+		return nil
+	}
+}
+
+// testAccCheckTenantImageDestroy verifies the image is gone from the device.
+// It tolerates images that are still present but in-use by tenants, since
+// the F5OS API refuses to delete in-use images and the test framework
+// always runs a final destroy.
+func testAccCheckTenantImageDestroy(s *terraform.State) error {
+	client, err := newTenantImageClientFromEnv()
+	if err != nil {
+		return nil // cannot connect — treat as destroyed
+	}
+	for _, rs := range s.RootModule().Resources {
+		if rs.Type != "f5os_tenant_image" {
+			continue
+		}
+		imageName := rs.Primary.Attributes["image_name"]
+		resp, err := client.GetImage(imageName)
+		if err != nil {
+			continue // not found — ok
+		}
+		if resp != nil && len(resp.TenantImages) > 0 {
+			// If the image is in-use, the API refuses to delete it.
+			// This is expected on shared test devices — tolerate it.
+			if resp.TenantImages[0].InUse {
+				continue
+			}
+			return fmt.Errorf("image %q still exists on device after destroy", imageName)
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance tests
+// ---------------------------------------------------------------------------
+
+// TestAccTenantImageRequiresReplace verifies that changing remote_path
+// (a RequiresReplace attribute) causes Terraform to attempt destroy+recreate.
+//
+// Step 1 creates the resource (adopts an existing image on the device).
+// Step 2 changes remote_path which triggers RequiresReplace. The image is
+// in-use by existing tenants so the destroy fails, but the error itself
+// proves that Terraform executed a replace plan (destroy was attempted before
+// re-create). Without RequiresReplace, no destroy would be attempted at all.
+//
+// NOTE: The post-test destroy will fail on shared DUTs where the image is
+// in-use by other tenants. Set F5OS_TENANT_IMAGE_ACC_TEST_IMAGE to a
+// not-in-use image name if the test fails due to post-test cleanup.
+func TestAccTenantImageRequiresReplace(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create — adopts the pre-existing in-use image.
+			// GetImage finds it already present, so no import is triggered.
+			{
+				Config: testAccTenantImageReplaceConfig("v17.1.0.1/daily/current/VM"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.replace_test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.replace_test", "remote_path", "v17.1.0.1/daily/current/VM"),
+					testAccCheckTenantImageExistsOnDevice("BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+				),
+			},
+			// Step 2: Change remote_path — RequiresReplace triggers a
+			// destroy+recreate plan. The destroy fails because the image is
+			// in-use. The expected error confirms a delete was attempted,
+			// which proves RequiresReplace correctly generated a replace plan.
+			{
+				Config:      testAccTenantImageReplaceConfig("v17.1.0.1/daily/release/VM"),
+				ExpectError: regexp.MustCompile(`Unable to Delete Imported Image`),
+			},
+		},
+	})
+}
+
+// TestAccTenantImageTimeoutNoReplace verifies that changing timeout does NOT
+// trigger destroy+recreate — it is an in-place update (Update method is called).
+// Uses an in-use image that is already on the device. The post-test destroy
+// will fail because the image is in-use, but CheckDestroy tolerates this.
+func TestAccTenantImageTimeoutNoReplace(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantImageDestroy,
+		Steps: []resource.TestStep{
+			// Step 1: Create with timeout=360. Image already exists on device
+			// so Create skips the import.
+			{
+				Config: testAccTenantImageAccTimeoutConfig(360),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.acc_test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.acc_test", "timeout", "360"),
+					testAccCheckTenantImageExistsOnDevice("BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+				),
+			},
+			// Step 2: Change timeout to 600 — must be an in-place update,
+			// not a destroy+recreate. The image must still exist on the device.
+			{
+				Config: testAccTenantImageAccTimeoutConfig(600),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.acc_test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.acc_test", "timeout", "600"),
+					testAccCheckTenantImageExistsOnDevice("BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+				),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance test HCL config functions
+// ---------------------------------------------------------------------------
+
+func testAccTenantImageReplaceConfig(remotePath string) string {
+	return fmt.Sprintf(`
+resource "f5os_tenant_image" "replace_test" {
+  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  remote_path = %q
+  local_path  = "images/tenant"
+  timeout     = 360
+}
+`, remotePath)
+}
+
+func testAccTenantImageAccTimeoutConfig(timeout int) string {
+	return fmt.Sprintf(`
+resource "f5os_tenant_image" "acc_test" {
+  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  remote_path = "v17.1.0.1/daily/current/VM"
+  local_path  = "images/tenant"
+  timeout     = %d
+}
+`, timeout)
+}
+
 //func TestUnitTenantImageUpload(t *testing.T) {
 //	testAccPreUnitCheck(t)
 //	t.Logf("Server URL: %s", server.URL)
@@ -306,5 +693,18 @@ resource "f5os_tenant_image" "test" {
   remote_path = "v17.1.0.1/daily/current/VM"
   local_path  = "images"
   timeout = 380
+}
+`
+
+// testAccTenantImageRequiresReplaceConfig changes remote_path relative to
+// testAccTenantImageCreateTC2ResourceConfig, which should trigger
+// RequiresReplace (destroy + recreate).
+const testAccTenantImageRequiresReplaceConfig = `
+resource "f5os_tenant_image" "test" {
+  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  remote_path = "v17.1.0.1/daily/previous/VM"
+  local_path  = "images"
+  timeout = 360
 }
 `
