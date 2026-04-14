@@ -570,9 +570,9 @@ type PrimaryKeyConfig struct {
 type F5RespPrimaryKey struct {
 	PrimaryKey struct {
 		State struct {
-			Hash   string `json:"f5-primary-key:hash"`
-			Status string `json:"f5-primary-key:status"`
-		} `json:"f5-primary-key:state"`
+			Hash   string `json:"hash"`
+			Status string `json:"status"`
+		} `json:"state"`
 	} `json:"f5-primary-key:primary-key"`
 }
 
