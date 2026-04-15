@@ -703,6 +703,407 @@ func TestAccAuthResourceDeleteRestoresOriginal(t *testing.T) {
 	})
 }
 
+// TestAuthResourceMocked_RoleGIDRestoreDeletesWhenBaselineUnset exercises
+// the Delete path where the snapshotted GID is 0 (the role had no
+// remote-gid before Terraform). Delete should call ClearRoleRemoteGID
+// (HTTP DELETE on the remote-gid leaf) rather than SetRoleConfig (PATCH).
+func TestAuthResourceMocked_RoleGIDRestoreDeletesWhenBaselineUnset(t *testing.T) {
+	// Pre-existing state: operator has NO remote-gid (returns 0 from GetRoles).
+	operatorGID := 0
+	deleteCalledForRemoteGID := false
+
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"openconfig-system:config":{"authentication-method":["openconfig-aaa-types:LOCAL","openconfig-aaa-types:RADIUS_ALL"]}}`)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config/authentication-method", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:roles", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		// operator has remote-gid "-" (unset) which GetRoles parses as 0
+		_, _ = fmt.Fprintf(w, `{
+			"f5-system-aaa:roles": {
+				"role": [
+					{"rolename": "admin", "config": {"rolename": "admin", "gid": 9000, "remote-gid": "-"}},
+					{"rolename": "operator", "config": {"rolename": "operator", "gid": 9001, "remote-gid": %s}}
+				]
+			}
+		}`, func() string {
+			if operatorGID == 0 {
+				return `"-"`
+			}
+			return strconv.Itoa(operatorGID)
+		}())
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			var payload struct {
+				Config struct {
+					Rolename string `json:"f5-system-aaa:rolename"`
+					GID      *int64 `json:"f5-system-aaa:remote-gid"`
+				} `json:"f5-system-aaa:config"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if payload.Config.GID != nil {
+				operatorGID = int(*payload.Config.GID)
+			}
+		case "DELETE":
+			deleteCalledForRemoteGID = true
+			operatorGID = 0
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy: func(s *terraform.State) error {
+			if !deleteCalledForRemoteGID {
+				return fmt.Errorf("expected DELETE to clear remote-gid during destroy, but DELETE was not called")
+			}
+			if operatorGID != 0 {
+				return fmt.Errorf("expected operator GID to be 0 (unset) after destroy, got %d", operatorGID)
+			}
+			return nil
+		},
+		Steps: []tfresource.TestStep{
+			{
+				Config: `resource "f5os_auth" "test" {
+  auth_order = ["local", "radius"]
+  remote_roles = [
+    {
+      rolename   = "operator"
+      remote_gid = 9999
+    },
+  ]
+}`,
+				Check: func(s *terraform.State) error {
+					if operatorGID != 9999 {
+						return fmt.Errorf("after create, expected operator GID 9999, got %d", operatorGID)
+					}
+					return nil
+				},
+			},
+		},
+	})
+}
+
+// TestAuthResourceMocked_RoleGIDNoSnapshotSkipsRestore verifies that when
+// private state has no saved role GIDs (e.g., the resource was created
+// before this fix, or no remote_roles were configured), Delete does not
+// attempt any role restoration and completes without error.
+func TestAuthResourceMocked_RoleGIDNoSnapshotSkipsRestore(t *testing.T) {
+	roleConfigPatched := false
+
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"openconfig-system:config":{}}`)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config/authentication-method", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	// No roles endpoint registered for GET — the resource config doesn't
+	// include remote_roles, so snapshotRoleGIDs is never called.
+	// Track whether any role PATCH happens during Delete.
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PATCH" {
+			roleConfigPatched = true
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy: func(s *terraform.State) error {
+			if roleConfigPatched {
+				return fmt.Errorf("expected no role config PATCH during destroy when no snapshot exists, but PATCH was called")
+			}
+			return nil
+		},
+		Steps: []tfresource.TestStep{
+			{
+				// Only auth_order, no remote_roles — no role snapshot should be taken.
+				Config: `resource "f5os_auth" "test" { auth_order = ["local", "radius"] }`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.1", "radius"),
+				),
+			},
+		},
+	})
+}
+
+// TestAuthResourceMocked_RoleGIDUpdateAddsNewRole verifies that when
+// an Update adds a new role that wasn't in the original Create config,
+// the new role's pre-existing GID is captured into the snapshot so that
+// Delete restores it.
+//
+// Scenario:
+//  1. Create with only operator (remote-gid 9999) — snapshots operator's
+//     pre-existing GID (9001) but NOT user-manager's.
+//  2. Update adds user-manager (remote-gid 8888) — ensureRoleGIDsSnapshotted
+//     should capture user-manager's pre-existing GID (7777) into the snapshot.
+//  3. Delete should restore operator to 9001 AND user-manager to 7777.
+func TestAuthResourceMocked_RoleGIDUpdateAddsNewRole(t *testing.T) {
+	operatorGID := 9001
+	userManagerGID := 7777
+
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"openconfig-system:config":{"authentication-method":["openconfig-aaa-types:LOCAL","openconfig-aaa-types:RADIUS_ALL"]}}`)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config/authentication-method", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:roles", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{
+			"f5-system-aaa:roles": {
+				"role": [
+					{"rolename": "admin", "config": {"rolename": "admin", "gid": 9000, "remote-gid": "-"}},
+					{"rolename": "operator", "config": {"rolename": "operator", "gid": 9001, "remote-gid": %d}},
+					{"rolename": "user-manager", "config": {"rolename": "user-manager", "gid": 9005, "remote-gid": %d}}
+				]
+			}
+		}`, operatorGID, userManagerGID)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PATCH" {
+			var payload struct {
+				Config struct {
+					Rolename string `json:"f5-system-aaa:rolename"`
+					GID      *int64 `json:"f5-system-aaa:remote-gid"`
+				} `json:"f5-system-aaa:config"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if payload.Config.GID != nil {
+				switch payload.Config.Rolename {
+				case "operator":
+					operatorGID = int(*payload.Config.GID)
+				case "user-manager":
+					userManagerGID = int(*payload.Config.GID)
+				}
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy: func(s *terraform.State) error {
+			if operatorGID != 9001 {
+				return fmt.Errorf("expected operator GID restored to 9001, got %d", operatorGID)
+			}
+			if userManagerGID != 7777 {
+				return fmt.Errorf("expected user-manager GID restored to 7777, got %d", userManagerGID)
+			}
+			return nil
+		},
+		Steps: []tfresource.TestStep{
+			// Step 1: Create with only operator.
+			{
+				Config: `resource "f5os_auth" "test" {
+  auth_order = ["local", "radius"]
+  remote_roles = [
+    { rolename = "operator", remote_gid = 9999 },
+  ]
+}`,
+				Check: func(s *terraform.State) error {
+					if operatorGID != 9999 {
+						return fmt.Errorf("after create, expected operator GID 9999, got %d", operatorGID)
+					}
+					return nil
+				},
+			},
+			// Step 2: Update — add user-manager.
+			{
+				Config: `resource "f5os_auth" "test" {
+  auth_order = ["local", "radius"]
+  remote_roles = [
+    { rolename = "operator", remote_gid = 9999 },
+    { rolename = "user-manager", remote_gid = 8888 },
+  ]
+}`,
+				Check: func(s *terraform.State) error {
+					if userManagerGID != 8888 {
+						return fmt.Errorf("after update, expected user-manager GID 8888, got %d", userManagerGID)
+					}
+					return nil
+				},
+			},
+			// Step 3: Destroy is automatic — CheckDestroy verifies both
+			// roles are restored to their pre-Terraform values.
+		},
+	})
+}
+
+// TestAccAuthResourceDeleteRestoresRoleGIDs verifies that when Terraform
+// destroys the f5os_auth resource, the operator role GID is restored to
+// whatever was configured on the device before Terraform managed it.
+//
+// Strategy:
+//  1. Capture the device's current operator GID (the true baseline).
+//  2. Set a known operator GID on the device via direct API: 9050
+//  3. Apply a Terraform config with remote_roles operator GID = 9060
+//     — Create should snapshot 9050 into private state
+//  4. Terraform destroy runs automatically at the end of the test
+//     — Delete should restore 9050 from private state
+//  5. CheckDestroy verifies the device has operator GID 9050
+//  6. t.Cleanup restores the true baseline captured in step 1.
+func TestAccAuthResourceDeleteRestoresRoleGIDs(t *testing.T) {
+	preExistingGID := int64(9050)
+
+	client, err := newAuthClientFromEnv()
+	if err != nil {
+		t.Skipf("Cannot create f5os client: %v", err)
+	}
+
+	// Capture the true device baseline before we touch anything.
+	originalRoles, err := client.GetRoles()
+	if err != nil {
+		t.Fatalf("Failed to read true device baseline roles: %v", err)
+	}
+	trueBaselineGID, hasOperator := originalRoles["operator"]
+	if !hasOperator {
+		t.Skip("Skipping: device has no 'operator' role to test with")
+	}
+	t.Logf("True device baseline operator GID: %d", trueBaselineGID)
+
+	// Pre-flight: verify we can modify role config on this device.
+	if err := client.SetRoleConfig("operator", &preExistingGID); err != nil {
+		if strings.Contains(err.Error(), "access denied") || strings.Contains(err.Error(), "403") {
+			t.Skip("Skipping role test: admin user lacks permission to modify role config on this device")
+		}
+		t.Skipf("Skipping role test: unexpected error testing role config access: %v", err)
+	}
+	t.Logf("Pre-set device operator GID to %d", preExistingGID)
+
+	// Cleanup: restore the true baseline regardless of test outcome.
+	t.Cleanup(func() {
+		cleanupClient, err := newAuthClientFromEnv()
+		if err != nil {
+			t.Logf("WARNING: cleanup failed to create client: %v", err)
+			return
+		}
+		if trueBaselineGID == 0 {
+			// Baseline had no remote-gid; delete the leaf to restore
+			// the unset state rather than leaving a test value behind.
+			if err := cleanupClient.ClearRoleRemoteGID("operator"); err != nil {
+				t.Logf("WARNING: cleanup failed to clear operator remote-gid: %v", err)
+			} else {
+				t.Log("Cleanup: cleared operator remote-gid (baseline had none)")
+			}
+			return
+		}
+		gid := int64(trueBaselineGID)
+		if err := cleanupClient.SetRoleConfig("operator", &gid); err != nil {
+			t.Logf("WARNING: cleanup failed to restore operator GID to %d: %v", trueBaselineGID, err)
+		} else {
+			t.Logf("Cleanup: restored operator GID to %d", trueBaselineGID)
+		}
+	})
+
+	tfresource.Test(t, tfresource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy: func(s *terraform.State) error {
+			c, err := newAuthClientFromEnv()
+			if err != nil {
+				return fmt.Errorf("failed to create client for destroy check: %w", err)
+			}
+			roles, err := c.GetRoles()
+			if err != nil {
+				return fmt.Errorf("failed to read roles after destroy: %w", err)
+			}
+			actualGID, exists := roles["operator"]
+			if !exists {
+				return fmt.Errorf("operator role not found on device after destroy")
+			}
+			if int64(actualGID) != preExistingGID {
+				return fmt.Errorf("expected operator GID %d restored after destroy, got %d", preExistingGID, actualGID)
+			}
+			return nil
+		},
+		Steps: []tfresource.TestStep{
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local", "radius"]
+  remote_roles = [
+    {
+      rolename   = "operator"
+      remote_gid = 9060
+    },
+  ]
+}`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.#", "2"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.1", "radius"),
+					testAccCheckAuthOrderApplied([]string{"local", "radius"}),
+					testAccCheckRoleGIDApplied("operator", 9060),
+				),
+			},
+			// Destroy is automatic — CheckDestroy verifies the pre-existing
+			// operator GID (9050) was restored.
+		},
+	})
+}
+
 // Helper functions - removed unused helper functions
 
 // Integration Test Functions
@@ -1294,13 +1695,17 @@ func TestAccAuthResourceWithRoles(t *testing.T) {
 		t.Skip("Skipping: device has no 'operator' role to test with")
 	}
 	t.Cleanup(func() {
-		if originalOperatorGID == 0 {
-			t.Logf("Skipping operator GID restore: no remote-gid was configured before test")
-			return
-		}
 		restoreClient, err := newAuthClientFromEnv()
 		if err != nil {
 			t.Logf("WARNING: failed to create client for operator GID restore: %v", err)
+			return
+		}
+		if originalOperatorGID == 0 {
+			if err := restoreClient.ClearRoleRemoteGID("operator"); err != nil {
+				t.Logf("WARNING: failed to clear operator remote-gid: %v", err)
+			} else {
+				t.Log("Cleanup: cleared operator remote-gid (baseline had none)")
+			}
 			return
 		}
 		gid := int64(originalOperatorGID)
