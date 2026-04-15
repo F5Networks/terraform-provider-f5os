@@ -198,7 +198,12 @@ func TestAccTenantImageCreateUnitTC4Resource(t *testing.T) {
 			{
 				ResourceName:      "f5os_tenant_image.test",
 				ImportState:       true,
-				ImportStateVerify: false,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"local_path", "remote_host", "remote_path", "remote_user",
+					"remote_password", "remote_port", "protocol", "insecure",
+					"upload_from_path", "timeout",
+				},
 			},
 		},
 	})
@@ -1233,6 +1238,426 @@ func TestUnitTenantImageOmitsOptionalFieldsWhenUnset(t *testing.T) {
 			},
 		},
 	})
+}
+
+// TestUnitTenantImageImportSetsImageName verifies that ImportState populates
+// both "id" and "image_name" in state, and that the subsequent Read fills in
+// "status". Before the fix, ImportState only set "id", causing Read to write
+// state with a null image_name — losing the Required attribute.
+func TestUnitTenantImageImportSetsImageName(t *testing.T) {
+	st := setupTenantImageMock(t, []string{
+		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+	})
+	_ = st
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create the resource so there is something to import
+			{
+				Config: testAccTenantImageCreateTC2ResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "image_name", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+				),
+			},
+			// Step 2: Import and verify that id, image_name, and status
+			// survive the round-trip. Transfer config attributes are
+			// legitimately lost (the API does not store them).
+			{
+				ResourceName:      "f5os_tenant_image.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"local_path", "remote_host", "remote_path", "remote_user",
+					"remote_password", "remote_port", "protocol", "insecure",
+					"upload_from_path", "timeout",
+				},
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageUpdatePreservesIdAndImageName verifies that after an
+// in-place Update (e.g. timeout change), the state still contains the correct
+// "id" and "image_name". Before the tenantImageResourceModeltoState fix,
+// the helper did not set data.Id, so the Id written to state during Update
+// depended solely on whatever the plan carried forward. This test confirms
+// the fix works by asserting both fields survive a two-step create→update.
+func TestUnitTenantImageUpdatePreservesIdAndImageName(t *testing.T) {
+	st := setupTenantImageMock(t, []string{
+		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+	})
+	_ = st
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create
+			{
+				Config: testAccTenantImageCreateTC2ResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "image_name", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "status", "replicated"),
+				),
+			},
+			// Step 2: Change timeout (in-place update) — id, image_name,
+			// and status must all survive the Update path.
+			{
+				Config: testAccTenantImageCreateTC2ModifyResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "image_name", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "status", "replicated"),
+				),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageStatusPopulatedAfterCreate verifies that the "status"
+// attribute is populated from the API response after Create. The
+// tenantImageResourceModeltoState helper is responsible for mapping the
+// API's "status" field into the Terraform state.
+func TestUnitTenantImageStatusPopulatedAfterCreate(t *testing.T) {
+	st := setupTenantImageMock(t, []string{
+		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+	})
+	_ = st
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageCreateTC2ResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "status", "replicated"),
+				),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageInsecureFlagInPayload verifies that when insecure=true
+// is set in the HCL config, the import payload includes "insecure": "true".
+// When insecure is false (the default), the field should be omitted from the
+// payload (empty string, omitempty).
+func TestUnitTenantImageInsecureFlagInPayload(t *testing.T) {
+	st := setupTenantImageMock(t, []string{
+		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+	})
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageInsecureTrueConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "insecure", "true"),
+					func(s *terraform.State) error {
+						if st.capturedBody == nil {
+							return fmt.Errorf("import endpoint was never called")
+						}
+						if v, ok := st.capturedBody["insecure"]; !ok || v != "true" {
+							return fmt.Errorf("expected insecure=\"true\" in request body, got %v", v)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageInsecureDefaultOmitted verifies that when insecure is
+// not set (defaults to false), the "insecure" field is omitted from the
+// import payload (empty string triggers omitempty).
+func TestUnitTenantImageInsecureDefaultOmitted(t *testing.T) {
+	st := setupTenantImageMock(t, []string{
+		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+	})
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageCreateTC2ResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "insecure", "false"),
+					func(s *terraform.State) error {
+						if st.capturedBody == nil {
+							return fmt.Errorf("import endpoint was never called")
+						}
+						// When insecure is false, importImage sets Insecure=""
+						// which omitempty strips from JSON. So the key should
+						// either be absent or be an empty string.
+						if v, ok := st.capturedBody["insecure"]; ok && v != "" {
+							return fmt.Errorf("expected insecure to be absent or empty in request body, got %v", v)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageReadAfterImportHasCorrectState verifies the full
+// import → read round-trip: after ImportState, the subsequent Read must
+// populate id, image_name, and status correctly. This exercises both
+// the ImportState fix (setting image_name) and the
+// tenantImageResourceModeltoState fix (setting Id).
+func TestUnitTenantImageReadAfterImportHasCorrectState(t *testing.T) {
+	st := setupTenantImageMock(t, []string{
+		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+	})
+	_ = st
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create so there is state to import against
+			{
+				Config: testAccTenantImageCreateTC2ResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+				),
+			},
+			// Step 2: Import and verify the full state round-trip
+			{
+				ResourceName:      "f5os_tenant_image.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"local_path", "remote_host", "remote_path", "remote_user",
+					"remote_password", "remote_port", "protocol", "insecure",
+					"upload_from_path", "timeout",
+				},
+				// After import + read, verify all computed fields
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "image_name", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "status", "replicated"),
+				),
+			},
+		},
+	})
+}
+
+// testAccTenantImageInsecureTrueConfig exercises the insecure=true flag
+// to verify it appears in the import API payload.
+const testAccTenantImageInsecureTrueConfig = `
+resource "f5os_tenant_image" "test" {
+  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  remote_path = "v17.1.0.1/daily/current/VM"
+  local_path  = "images"
+  insecure    = true
+  timeout     = 360
+}
+`
+
+// ---------------------------------------------------------------------------
+// Acceptance tests for uncommitted fixes (ImportState + tenantImageResourceModeltoState)
+// ---------------------------------------------------------------------------
+
+// testAccGetExistingImageName returns the name of a tenant image that is known
+// to exist on the DUT. It queries the device directly and returns the first
+// image found. Tests that need an existing image should call this rather than
+// hardcoding image names, because different DUTs have different images.
+func testAccGetExistingImageName(t *testing.T) string {
+	t.Helper()
+	client, err := newTenantImageClientFromEnv()
+	if err != nil {
+		t.Skipf("Cannot create client to discover images: %v", err)
+	}
+	resp, err := client.GetTenantImagesInfo()
+	if err != nil {
+		t.Skipf("Cannot list images on device: %v", err)
+	}
+	if len(resp.Images) == 0 {
+		t.Skip("No tenant images on device — cannot run this acceptance test")
+	}
+	return resp.Images[0].Name
+}
+
+// testAccCheckTenantImageStatusOnDevice queries the device directly and
+// verifies that the named image has the expected status.
+func testAccCheckTenantImageStatusOnDevice(imageName, expectedStatus string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTenantImageClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+		resp, err := client.GetImage(imageName)
+		if err != nil {
+			return fmt.Errorf("GetImage(%q) failed: %w", imageName, err)
+		}
+		if resp == nil || len(resp.TenantImages) == 0 {
+			return fmt.Errorf("image %q not found on device", imageName)
+		}
+		actual := resp.TenantImages[0].Status
+		if actual != expectedStatus {
+			return fmt.Errorf("image %q status: expected %q on device, got %q", imageName, expectedStatus, actual)
+		}
+		return nil
+	}
+}
+
+// TestAccTenantImageImportStateSetsImageName verifies the ImportState fix:
+// after terraform import, both "id" and "image_name" must be populated in
+// state, and the subsequent Read must fill in "status". Before the fix,
+// ImportState only set "id", causing image_name to be null after import.
+//
+// This test adopts an existing in-use image on the device (no actual import
+// transfer is triggered). CheckDestroy tolerates in-use images.
+func TestAccTenantImageImportStateSetsImageName(t *testing.T) {
+	imageName := testAccGetExistingImageName(t)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantImageDestroy,
+		Steps: []resource.TestStep{
+			// Step 1: Create — adopts the pre-existing image.
+			{
+				Config: testAccTenantImageImportFixConfig(imageName, 360),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.import_fix_test", "id", imageName),
+					resource.TestCheckResourceAttr("f5os_tenant_image.import_fix_test", "image_name", imageName),
+					resource.TestCheckResourceAttrSet("f5os_tenant_image.import_fix_test", "status"),
+					testAccCheckTenantImageExistsOnDevice(imageName),
+				),
+			},
+			// Step 2: Import and verify the full round-trip.
+			// Before the fix, ImportStateVerify would fail because
+			// image_name was null after import (only id was set).
+			{
+				ResourceName:      "f5os_tenant_image.import_fix_test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"local_path", "remote_host", "remote_path", "remote_user",
+					"remote_password", "remote_port", "protocol", "insecure",
+					"upload_from_path", "timeout",
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// After import + read, both id and image_name must be
+					// populated and status must come from the device API.
+					resource.TestCheckResourceAttr("f5os_tenant_image.import_fix_test", "id", imageName),
+					resource.TestCheckResourceAttr("f5os_tenant_image.import_fix_test", "image_name", imageName),
+					resource.TestCheckResourceAttrSet("f5os_tenant_image.import_fix_test", "status"),
+					testAccCheckTenantImageExistsOnDevice(imageName),
+				),
+			},
+		},
+	})
+}
+
+// TestAccTenantImageUpdatePreservesState verifies the tenantImageResourceModeltoState fix:
+// after an in-place Update (timeout change), "id", "image_name", and "status"
+// must all survive. Before the fix, tenantImageResourceModeltoState did not set
+// data.Id, so Update could leave Id inconsistent.
+//
+// This test also verifies the status field via direct API query to ensure the
+// Terraform state matches the actual device state.
+func TestAccTenantImageUpdatePreservesState(t *testing.T) {
+	imageName := testAccGetExistingImageName(t)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantImageDestroy,
+		Steps: []resource.TestStep{
+			// Step 1: Create with timeout=360. Image already exists so
+			// Create skips import and reads back the state.
+			{
+				Config: testAccTenantImageImportFixConfig(imageName, 360),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.import_fix_test", "id", imageName),
+					resource.TestCheckResourceAttr("f5os_tenant_image.import_fix_test", "image_name", imageName),
+					resource.TestCheckResourceAttr("f5os_tenant_image.import_fix_test", "timeout", "360"),
+					resource.TestCheckResourceAttrSet("f5os_tenant_image.import_fix_test", "status"),
+					testAccCheckTenantImageExistsOnDevice(imageName),
+				),
+			},
+			// Step 2: Change timeout to 600 — must be an in-place update
+			// (no destroy+recreate). All fields must survive.
+			{
+				Config: testAccTenantImageImportFixConfig(imageName, 600),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.import_fix_test", "id", imageName),
+					resource.TestCheckResourceAttr("f5os_tenant_image.import_fix_test", "image_name", imageName),
+					resource.TestCheckResourceAttr("f5os_tenant_image.import_fix_test", "timeout", "600"),
+					resource.TestCheckResourceAttrSet("f5os_tenant_image.import_fix_test", "status"),
+					testAccCheckTenantImageExistsOnDevice(imageName),
+				),
+			},
+		},
+	})
+}
+
+// TestAccTenantImageStatusFromDevice verifies that the "status" field in
+// Terraform state matches the actual image status reported by the device API.
+// This exercises tenantImageResourceModeltoState's mapping of the status field
+// and confirms it with a direct API check.
+func TestAccTenantImageStatusFromDevice(t *testing.T) {
+	imageName := testAccGetExistingImageName(t)
+
+	// Pre-query the device to get the expected status.
+	client, err := newTenantImageClientFromEnv()
+	if err != nil {
+		t.Skipf("Cannot create client: %v", err)
+	}
+	resp, err := client.GetImage(imageName)
+	if err != nil || resp == nil || len(resp.TenantImages) == 0 {
+		t.Skipf("Cannot query image %q: %v", imageName, err)
+	}
+	expectedStatus := resp.TenantImages[0].Status
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantImageDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageImportFixConfig(imageName, 360),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.import_fix_test", "id", imageName),
+					resource.TestCheckResourceAttr("f5os_tenant_image.import_fix_test", "image_name", imageName),
+					// Verify Terraform state's status matches the device
+					resource.TestCheckResourceAttr("f5os_tenant_image.import_fix_test", "status", expectedStatus),
+					// Also verify via direct API call
+					testAccCheckTenantImageStatusOnDevice(imageName, expectedStatus),
+				),
+			},
+		},
+	})
+}
+
+// testAccTenantImageImportFixConfig generates HCL for the import/update fix
+// acceptance tests. It uses a minimal config that adopts an existing image
+// on the device without triggering an actual import transfer.
+func testAccTenantImageImportFixConfig(imageName string, timeout int) string {
+	return fmt.Sprintf(`
+resource "f5os_tenant_image" "import_fix_test" {
+  image_name  = %q
+  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  remote_path = "v17.1.0.1/daily/current/VM"
+  local_path  = "images/tenant"
+  timeout     = %d
+}
+`, imageName, timeout)
 }
 
 // ---------------------------------------------------------------------------
