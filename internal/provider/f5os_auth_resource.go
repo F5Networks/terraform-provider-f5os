@@ -23,10 +23,20 @@ import (
 // device's pre-existing auth_order so Delete can restore it.
 const privateKeyOriginalAuthOrder = "original_auth_order"
 
+// privateKeyOriginalRoleGIDs is the private state key used to store the
+// device's pre-existing role GIDs so Delete can restore them.
+const privateKeyOriginalRoleGIDs = "original_role_gids"
+
 // privateStateSetter is satisfied by resp.Private on CreateResponse,
 // ReadResponse, and UpdateResponse.
 type privateStateSetter interface {
 	SetKey(ctx context.Context, key string, value []byte) diag.Diagnostics
+}
+
+// privateStateGetter is satisfied by req.Private on UpdateRequest and
+// DeleteRequest.
+type privateStateGetter interface {
+	GetKey(ctx context.Context, key string) ([]byte, diag.Diagnostics)
 }
 
 // Ensure interface satisfaction
@@ -154,6 +164,19 @@ func (r *AuthResource) Create(ctx context.Context, req resource.CreateRequest, r
 	if !plan.RemoteRoles.IsNull() && !plan.RemoteRoles.IsUnknown() {
 		var roles []authRemoteRoleModel
 		if diags := plan.RemoteRoles.ElementsAs(ctx, &roles, false); !diags.HasError() {
+			// Collect role names and snapshot their current GIDs on the
+			// device before overwriting, so Delete can restore them.
+			var roleNames []string
+			for _, rr := range roles {
+				if !rr.Rolename.IsNull() && !rr.Rolename.IsUnknown() {
+					roleNames = append(roleNames, rr.Rolename.ValueString())
+				}
+			}
+			resp.Diagnostics.Append(r.snapshotRoleGIDs(ctx, resp.Private, roleNames)...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+
 			for _, rr := range roles {
 				if rr.Rolename.IsNull() || rr.Rolename.IsUnknown() {
 					continue
@@ -218,6 +241,11 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	// During import, snapshot the device's current auth_order into private
 	// state so Delete can restore it. Create handles this for the normal
 	// lifecycle, but import bypasses Create entirely.
+	//
+	// Role GIDs are NOT snapshotted here because import alone doesn't
+	// modify any role GIDs. The first apply after import will call Update,
+	// which uses ensureRoleGIDsSnapshotted to capture any roles before
+	// modifying them.
 	if isImport {
 		existing, diags := req.Private.GetKey(ctx, privateKeyOriginalAuthOrder)
 		resp.Diagnostics.Append(diags...)
@@ -277,6 +305,14 @@ func (r *AuthResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	if !plan.RemoteRoles.IsNull() && !plan.RemoteRoles.IsUnknown() {
 		var roles []authRemoteRoleModel
 		resp.Diagnostics.Append(plan.RemoteRoles.ElementsAs(ctx, &roles, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		// If the user added new roles that weren't in the original
+		// Create snapshot, capture their device-side GIDs now before
+		// we overwrite them, so Delete can restore them later.
+		resp.Diagnostics.Append(r.ensureRoleGIDsSnapshotted(ctx, req.Private, resp.Private, roles)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
@@ -352,6 +388,43 @@ func (r *AuthResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		}
 	}
 
+	// Restore the original role GIDs that were saved during Create/Import,
+	// so destroy does not leave modified GIDs on the device.
+	origRoleData, diags := req.Private.GetKey(ctx, privateKeyOriginalRoleGIDs)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if origRoleData != nil {
+		var origGIDs map[string]int
+		if err := json.Unmarshal(origRoleData, &origGIDs); err != nil {
+			tflog.Warn(ctx, "failed to deserialize original role GIDs from private state, skipping role restoration",
+				map[string]any{"error": err.Error()})
+		} else {
+			for rolename, gid := range origGIDs {
+				if gid == 0 {
+					// The role had no remote-gid before Terraform managed it;
+					// delete the leaf to restore the unset state.
+					tflog.Debug(ctx, "Clearing role remote-gid", map[string]any{"rolename": rolename})
+					if err := r.client.ClearRoleRemoteGID(rolename); err != nil {
+						tflog.Warn(ctx, "failed clearing role remote-gid",
+							map[string]any{"rolename": rolename, "error": err.Error()})
+					}
+				} else {
+					gid64 := int64(gid)
+					tflog.Debug(ctx, "Restoring role config", map[string]any{"rolename": rolename, "gid": gid64})
+					if err := r.client.SetRoleConfig(rolename, &gid64); err != nil {
+						tflog.Warn(ctx, "failed restoring original role GID",
+							map[string]any{"rolename": rolename, "gid": gid64, "error": err.Error()})
+					}
+				}
+			}
+		}
+	} else {
+		tflog.Warn(ctx, "No original role GIDs in private state, skipping role restoration")
+	}
+
 	resp.State.RemoveResource(ctx)
 }
 
@@ -415,6 +488,103 @@ func (r *AuthResource) snapshotAuthOrder(ctx context.Context, private privateSta
 	diags.Append(private.SetKey(ctx, privateKeyOriginalAuthOrder, data)...)
 	if !diags.HasError() {
 		tflog.Debug(ctx, "Saved original auth order to private state", map[string]any{"original": methods})
+	}
+	return diags
+}
+
+// snapshotRoleGIDs reads the current role GIDs from the device for the
+// specified roles and saves them to private state so Delete can restore
+// them later.
+func (r *AuthResource) snapshotRoleGIDs(ctx context.Context, private privateStateSetter, roleNames []string) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if len(roleNames) == 0 {
+		return diags
+	}
+
+	allRoles, err := r.listRoles(ctx)
+	if err != nil {
+		diags.AddError("Failed to read original role GIDs from device", err.Error())
+		return diags
+	}
+
+	// Build a map of only the roles the user declared, with their
+	// current GIDs on the device. Roles that don't exist yet get
+	// GID 0 (the device default / unset state).
+	snapshot := make(map[string]int, len(roleNames))
+	for _, name := range roleNames {
+		snapshot[name] = allRoles[name] // 0 if not present
+	}
+
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		diags.AddError("Failed to serialize original role GIDs", err.Error())
+		return diags
+	}
+	diags.Append(private.SetKey(ctx, privateKeyOriginalRoleGIDs, data)...)
+	if !diags.HasError() {
+		tflog.Debug(ctx, "Saved original role GIDs to private state", map[string]any{"original": snapshot})
+	}
+	return diags
+}
+
+// ensureRoleGIDsSnapshotted reads the existing role GID snapshot from
+// private state and checks whether any of the planned roles are missing
+// from it. For any new roles (added to the config after initial Create),
+// it reads their current device-side GIDs and merges them into the
+// snapshot so Delete can restore them.
+func (r *AuthResource) ensureRoleGIDsSnapshotted(ctx context.Context, privateReader privateStateGetter, privateWriter privateStateSetter, roles []authRemoteRoleModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+
+	// Read the existing snapshot.
+	existingData, d := privateReader.GetKey(ctx, privateKeyOriginalRoleGIDs)
+	diags.Append(d...)
+	if diags.HasError() {
+		return diags
+	}
+
+	existing := make(map[string]int)
+	if existingData != nil {
+		if err := json.Unmarshal(existingData, &existing); err != nil {
+			diags.AddError("Failed to deserialize existing role GID snapshot", err.Error())
+			return diags
+		}
+	}
+
+	// Find role names in the plan that are not yet in the snapshot.
+	var newNames []string
+	for _, rr := range roles {
+		if rr.Rolename.IsNull() || rr.Rolename.IsUnknown() {
+			continue
+		}
+		name := rr.Rolename.ValueString()
+		if _, ok := existing[name]; !ok {
+			newNames = append(newNames, name)
+		}
+	}
+
+	if len(newNames) == 0 {
+		return diags
+	}
+
+	// Read the current device GIDs for the new roles.
+	allRoles, err := r.listRoles(ctx)
+	if err != nil {
+		diags.AddError("Failed to read role GIDs from device for snapshot update", err.Error())
+		return diags
+	}
+	for _, name := range newNames {
+		existing[name] = allRoles[name] // 0 if not present on device
+	}
+
+	// Write the merged snapshot back.
+	data, err := json.Marshal(existing)
+	if err != nil {
+		diags.AddError("Failed to serialize updated role GID snapshot", err.Error())
+		return diags
+	}
+	diags.Append(privateWriter.SetKey(ctx, privateKeyOriginalRoleGIDs, data)...)
+	if !diags.HasError() {
+		tflog.Debug(ctx, "Merged new role GIDs into snapshot", map[string]any{"new_roles": newNames, "snapshot": existing})
 	}
 	return diags
 }

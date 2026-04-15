@@ -816,11 +816,12 @@ func (c *F5os) GetSnmpMib() ([]byte, error) {
 
 // Auth/AAA related constants and methods
 const (
-	uriAAA           = "/openconfig-system:system/aaa/authentication"
-	uriAAAConfig     = "/openconfig-system:system/aaa/authentication/config"
-	uriAAAAuthMethod = "/openconfig-system:system/aaa/authentication/config/authentication-method"
-	uriAAARoles      = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles"
-	uriAAARoleConfig = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config"
+	uriAAA              = "/openconfig-system:system/aaa/authentication"
+	uriAAAConfig        = "/openconfig-system:system/aaa/authentication/config"
+	uriAAAAuthMethod    = "/openconfig-system:system/aaa/authentication/config/authentication-method"
+	uriAAARoles         = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles"
+	uriAAARoleConfig    = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config"
+	uriAAARoleRemoteGID = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config/f5-system-aaa:remote-gid"
 )
 
 type authOrderPayload struct {
@@ -937,6 +938,17 @@ func (c *F5os) SetRoleConfig(rolename string, gid *int64) error {
 	_, err = c.PatchRequest(uri, body)
 	if err != nil {
 		return fmt.Errorf("PATCH role config failed: %w", err)
+	}
+	return nil
+}
+
+// ClearRoleRemoteGID deletes the remote-gid leaf for a role, returning it
+// to the device default (unset / "-").
+func (c *F5os) ClearRoleRemoteGID(rolename string) error {
+	uri := fmt.Sprintf(uriAAARoleRemoteGID, rolename)
+	err := c.DeleteRequest(uri)
+	if err != nil {
+		return fmt.Errorf("DELETE role remote-gid failed: %w", err)
 	}
 	return nil
 }
