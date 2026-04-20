@@ -359,11 +359,14 @@ func (r *TenantImageResource) Delete(ctx context.Context, req resource.DeleteReq
 }
 
 func (r *TenantImageResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	// The import ID is the image name, which maps to both "id" and "image_name"
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("image_name"), req.ID)...)
 }
 
 func (r *TenantImageResource) tenantImageResourceModeltoState(ctx context.Context, respData *f5ossdk.F5RespTenantImagesStatus, data *TenantImageResourceModel) {
 	tflog.Info(ctx, fmt.Sprintf("respData :%+v", respData))
 	data.ImageName = types.StringValue(respData.TenantImages[0].Name)
 	data.Status = types.StringValue(respData.TenantImages[0].Status)
+	data.Id = types.StringValue(respData.TenantImages[0].Name)
 }
