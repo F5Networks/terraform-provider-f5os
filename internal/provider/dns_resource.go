@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -180,25 +179,11 @@ func (r *DNSResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 	tflog.Info(ctx, "Reading DNS configuration from F5OS")
 
 	// Fetch DNS config from F5OS API
-	rawResp, err := r.client.GetRequest("/openconfig-system:system/dns")
+	config, err := r.client.ReadDNSConfig()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"DNS Read Error",
 			fmt.Sprintf("Failed to fetch DNS configuration: %s", err),
-		)
-		return
-	}
-
-	tflog.Debug(ctx, "Received DNS configuration", map[string]interface{}{
-		"response": string(rawResp),
-	})
-
-	// Parse the response
-	var config f5os.DNSConfigPayload
-	if err := json.Unmarshal(rawResp, &config); err != nil {
-		resp.Diagnostics.AddError(
-			"DNS Parse Error",
-			fmt.Sprintf("Failed to parse DNS configuration: %s\nRaw response: %s", err, string(rawResp)),
 		)
 		return
 	}
@@ -219,23 +204,23 @@ func (r *DNSResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 	domains = append(domains, config.DNS.Config.Search...)
 
 	// Set Terraform types
-	_, diags := types.ListValueFrom(ctx, types.StringType, servers)
+	serversTF, diags := types.ListValueFrom(ctx, types.StringType, servers)
 	resp.Diagnostics.Append(diags...)
 
-	_, diags = types.ListValueFrom(ctx, types.StringType, domains)
+	domainsTF, diags := types.ListValueFrom(ctx, types.StringType, domains)
 	resp.Diagnostics.Append(diags...)
 
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Update state
-	// state.DNSServers = serversTF
-	// state.DNSDomains = domainsTF
+	// Update state from device
+	state.DNSServers = serversTF
+	state.DNSDomains = domainsTF
 
-	// Compute resource ID based on current configuration
-	// resourceID := computeResourceID(servers, domains)
-	// state.Id = types.StringValue(resourceID)
+	// Recompute resource ID based on current device configuration
+	resourceID := computeResourceID(servers, domains)
+	state.Id = types.StringValue(resourceID)
 
 	tflog.Debug(ctx, "Setting DNS state", map[string]interface{}{
 		"servers": servers,
