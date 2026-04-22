@@ -4,13 +4,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
+
+func withFastPolling(t *testing.T) {
+	origInterval := primaryKeyPollInterval
+	origTimeout := primaryKeyMigrationTimeout
+
+	primaryKeyPollInterval = 10 * time.Millisecond
+	primaryKeyMigrationTimeout = 100 * time.Millisecond
+
+	t.Cleanup(func() {
+		primaryKeyPollInterval = origInterval
+		primaryKeyMigrationTimeout = origTimeout
+	})
+}
 
 // primaryKeyResponse is the correct API response format after the JSON tag fix.
 // The nested fields use bare keys ("state", "hash", "status"), not namespace-prefixed ones.
@@ -166,6 +181,7 @@ func TestAccPrimaryKeyCreateAlwaysSetsOnDevice(t *testing.T) {
 // TestUnitPrimaryKeyResource is the existing Create unit test, updated to use
 // the correct JSON format that matches the fixed struct tags.
 func TestUnitPrimaryKeyResource(t *testing.T) {
+	withFastPolling(t)
 	setupPrimaryKeyMock(t, primaryKeyResponseCorrect, nil)
 	defer teardown()
 
@@ -196,6 +212,7 @@ func TestUnitPrimaryKeyResource(t *testing.T) {
 // API response with correct bare-key tags, and that the Terraform state reflects
 // both values rather than nulls.
 func TestUnitPrimaryKeyDeserializationFix(t *testing.T) {
+	withFastPolling(t)
 	setupPrimaryKeyMock(t, primaryKeyResponseCorrect, nil)
 	defer teardown()
 
@@ -216,12 +233,14 @@ func TestUnitPrimaryKeyDeserializationFix(t *testing.T) {
 	})
 }
 
-// TestUnitPrimaryKeyOldTagsProduceEmpty documents the broken pre-fix behavior.
-// When the GET response uses namespace-prefixed nested keys
-// ("f5-primary-key:state", "f5-primary-key:hash", "f5-primary-key:status"),
-// json.Unmarshal ignores them entirely, leaving hash and status as empty —
-// exactly the bug that was reported.
+// TestUnitPrimaryKeyOldTagsProduceEmpty documents the compounded effect of the
+// broken pre-fix response format (namespace-prefixed nested keys) combined with
+// the async migration wait. With the old format, json.Unmarshal silently ignores
+// "f5-primary-key:state" / "f5-primary-key:hash" / "f5-primary-key:status",
+// leaving status as "" forever. waitForPrimaryKeyMigration never sees "COMPLETE"
+// and times out — Create fails rather than silently writing empty state.
 func TestUnitPrimaryKeyOldTagsProduceEmpty(t *testing.T) {
+	withFastPolling(t)
 	setupPrimaryKeyMock(t, primaryKeyResponseOldFormat, nil)
 	defer teardown()
 
@@ -231,12 +250,9 @@ func TestUnitPrimaryKeyOldTagsProduceEmpty(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config: testAccPrimaryKeyResourceConfig,
-				Check: resource.ComposeAggregateTestCheckFunc(
-					// With the old (broken) API response format, hash and status
-					// cannot be populated — both must be absent from state.
-					resource.TestCheckNoResourceAttr("f5os_primarykey.default", "hash"),
-					resource.TestCheckNoResourceAttr("f5os_primarykey.default", "status"),
-				),
+				// With the old response format status is never "COMPLETE", so
+				// waitForPrimaryKeyMigration times out and Create returns an error.
+				ExpectError: regexp.MustCompile(`primary key migration did not complete`),
 			},
 		},
 	})
@@ -249,6 +265,7 @@ func TestUnitPrimaryKeyOldTagsProduceEmpty(t *testing.T) {
 //
 //	Update (force_update=true, SetPrimaryKey called a second time).
 func TestUnitPrimaryKeyForceUpdateChange(t *testing.T) {
+	withFastPolling(t)
 	var setCount int32
 	setupPrimaryKeyMock(t, primaryKeyResponseCorrect, &setCount)
 	defer teardown()
@@ -292,6 +309,7 @@ func TestUnitPrimaryKeyForceUpdateChange(t *testing.T) {
 // silently failing to apply new passphrase/salt on key rotation (after a
 // RequiresReplace destroy+recreate cycle).
 func TestUnitPrimaryKeyCreateAlwaysSets(t *testing.T) {
+	withFastPolling(t)
 	var setCount int32
 	setupPrimaryKeyMock(t, primaryKeyResponseCorrect, &setCount)
 	defer teardown()
@@ -323,6 +341,7 @@ func TestUnitPrimaryKeyCreateAlwaysSets(t *testing.T) {
 // SetPrimaryKey when force_update=false, and only refreshes state from the
 // device. This is the correct home for the force_update guard.
 func TestUnitPrimaryKeyUpdateSkipsSetWhenNoForce(t *testing.T) {
+	withFastPolling(t)
 	var setCount int32
 	setupPrimaryKeyMock(t, primaryKeyResponseCorrect, &setCount)
 	defer teardown()
@@ -356,6 +375,134 @@ func TestUnitPrimaryKeyUpdateSkipsSetWhenNoForce(t *testing.T) {
 						return nil
 					},
 				),
+			},
+		},
+	})
+}
+
+// TestUnitPrimaryKeyAsyncMigration verifies that Create waits for the async primary key
+// migration to complete before returning. The device returns IN_PROGRESS immediately,
+// but the migration takes several seconds to complete. The test simulates this by having
+// the mock server return IN_PROGRESS for first few calls, then COMPLETE.
+func TestUnitPrimaryKeyAsyncMigration(t *testing.T) {
+	withFastPolling(t)
+	testAccPreUnitCheck(t)
+
+	var callCount int32
+
+	// GET primary-key state - return IN_PROGRESS on first 2 calls, then COMPLETE
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("unexpected HTTP method on primary-key endpoint: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		count := atomic.AddInt32(&callCount, 1)
+		w.WriteHeader(http.StatusOK)
+		if count <= 2 {
+			// First two GETs (polls during wait) return IN_PROGRESS
+			_, _ = w.Write([]byte(`{
+				"f5-primary-key:primary-key": {
+					"state": {
+						"hash":   "",
+						"status": "IN_PROGRESS"
+					}
+				}
+			}`))
+		} else {
+			// Subsequent GETs return COMPLETE with hash
+			_, _ = w.Write([]byte(`{
+				"f5-primary-key:primary-key": {
+					"state": {
+						"hash":   "migrated-hash-value",
+						"status": "COMPLETE"
+					}
+				}
+			}`))
+		}
+	})
+
+	// POST SetPrimaryKey
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key/f5-primary-key:set", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("unexpected HTTP method on set endpoint: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccPrimaryKeyResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "id", "primary-key"),
+					// After migration completes, state should have the final hash
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "hash", "migrated-hash-value"),
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "status", "COMPLETE"),
+					// Verify polling happened: callCount should be > 2 (SetPrimaryKey returns immediately,
+					// then polling calls GetPrimaryKey multiple times)
+					func(s *terraform.State) error {
+						if atomic.LoadInt32(&callCount) <= 2 {
+							return fmt.Errorf("expected multiple polling calls, got only %d", callCount)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitPrimaryKeyMigrationTimeout verifies that if the migration never completes,
+// Create fails with a timeout error. This test sets up the mock to always return
+// IN_PROGRESS to simulate a stuck migration.
+func TestUnitPrimaryKeyMigrationTimeout(t *testing.T) {
+	withFastPolling(t)
+	testAccPreUnitCheck(t)
+
+	// GET primary-key state - always return IN_PROGRESS (migration never completes)
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"f5-primary-key:primary-key": {
+				"state": {
+					"hash":   "",
+					"status": "IN_PROGRESS"
+				}
+			}
+		}`))
+	})
+
+	// POST SetPrimaryKey
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key/f5-primary-key:set", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccPrimaryKeyResourceConfig,
+				ExpectError: regexp.MustCompile(`primary key migration did not complete`),
 			},
 		},
 	})

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"time"
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -104,6 +105,51 @@ func (r *PrimaryKeyResource) Configure(ctx context.Context, req resource.Configu
 	r.teemData = teemData
 }
 
+// primaryKeyPollInterval is the delay between status-check attempts.
+// Overridden in tests to avoid real wall-clock waits.
+var primaryKeyPollInterval = 2 * time.Second
+
+// primaryKeyMigrationTimeout is the maximum time to wait for COMPLETE status.
+// Overridden in tests to keep suite fast.
+var primaryKeyMigrationTimeout = 60 * time.Second
+
+// waitForPrimaryKeyMigration polls GetPrimaryKey until status is COMPLETE or
+// primaryKeyMigrationTimeout elapses. It checks immediately on the first
+// iteration so fast devices don't incur an unnecessary initial delay.
+func (r *PrimaryKeyResource) waitForPrimaryKeyMigration(ctx context.Context) error {
+	maxPolls := int(primaryKeyMigrationTimeout / primaryKeyPollInterval)
+	if maxPolls < 1 {
+		maxPolls = 1
+	}
+
+	tflog.Info(ctx, "Waiting for primary key migration to complete")
+
+	for poll := 0; poll < maxPolls; poll++ {
+		keyData, err := r.client.GetPrimaryKey()
+		if err != nil {
+			tflog.Warn(ctx, fmt.Sprintf("Error polling primary key status: %s", err))
+		} else {
+			status := keyData.PrimaryKey.State.Status
+			tflog.Debug(ctx, fmt.Sprintf("Primary key migration status: %s", status))
+			if status == "COMPLETE" {
+				tflog.Info(ctx, "Primary key migration completed successfully")
+				return nil
+			}
+		}
+
+		// Sleep before the next poll (skip sleep on the last iteration)
+		if poll < maxPolls-1 {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("context cancelled while waiting for primary key migration")
+			case <-time.After(primaryKeyPollInterval):
+			}
+		}
+	}
+
+	return fmt.Errorf("primary key migration did not complete within %s", primaryKeyMigrationTimeout)
+}
+
 func (r *PrimaryKeyResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var data *PrimaryKeyResourceModel
 
@@ -125,6 +171,12 @@ func (r *PrimaryKeyResource) Create(ctx context.Context, req resource.CreateRequ
 	_, err := r.client.SetPrimaryKey(primaryKeyReq)
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to create PrimaryKey: %s", err))
+		return
+	}
+
+	// Wait for async migration to complete before reading state
+	if err := r.waitForPrimaryKeyMigration(ctx); err != nil {
+		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Primary key migration failed: %s", err))
 		return
 	}
 
