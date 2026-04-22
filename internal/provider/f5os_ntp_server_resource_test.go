@@ -100,8 +100,12 @@ func testAccCheckNTPServerOnDevice(server string, expectKeyID int64, expectPrefe
 		if ntp.Address != server {
 			return fmt.Errorf("expected NTP server address %q, got %q", server, ntp.Address)
 		}
-		if ntp.KeyID != expectKeyID {
-			return fmt.Errorf("expected key_id %d, got %d", expectKeyID, ntp.KeyID)
+		var gotKeyID int64
+		if ntp.KeyID != nil {
+			gotKeyID = *ntp.KeyID
+		}
+		if gotKeyID != expectKeyID {
+			return fmt.Errorf("expected key_id %d, got %d", expectKeyID, gotKeyID)
 		}
 		if ntp.Prefer != expectPrefer {
 			return fmt.Errorf("expected prefer=%v, got %v", expectPrefer, ntp.Prefer)
@@ -590,6 +594,226 @@ func TestUnitNTPGlobalConfigNotPatchedWhenOmitted(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Unit test: key_id=0 is serialized in POST body (not dropped by omitempty)
+//
+// Before the *int64 fix, omitempty treated int64(0) as empty and silently
+// dropped "f5-openconfig-system-ntp:key-id" from the JSON payload.  This
+// test would FAIL with the old code because the POST body would lack key-id.
+// ---------------------------------------------------------------------------
+
+const testUnitNTPServerKeyIDZeroConfig = `
+resource "f5os_ntp_server" "zero" {
+  server             = "10.20.30.41"
+  key_id             = 0
+  prefer             = true
+  iburst             = true
+  ntp_service        = true
+  ntp_authentication = true
+}
+`
+
+func TestUnitNTPServerKeyIDZeroSerialized(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	var postBodyKeyID *float64 // float64 because json.Unmarshal decodes numbers as float64
+
+	// Mock: POST to create NTP server — inspect the body for key-id
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			defer func() { _ = r.Body.Close() }()
+			body, _ := io.ReadAll(r.Body)
+
+			// Decode the POST payload to check for key-id
+			var payload struct {
+				Server []struct {
+					Config struct {
+						KeyID *float64 `json:"f5-openconfig-system-ntp:key-id"`
+					} `json:"config"`
+				} `json:"server"`
+			}
+			if err := json.Unmarshal(body, &payload); err == nil && len(payload.Server) > 0 {
+				postBodyKeyID = payload.Server[0].Config.KeyID
+			}
+
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	// Mock: GET/DELETE for specific NTP server — return key-id: 0
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.41", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"openconfig-system:server": [{
+					"address": "10.20.30.41",
+					"config": {
+						"address": "10.20.30.41",
+						"f5-openconfig-system-ntp:key-id": 0,
+						"prefer": true,
+						"iburst": true
+					}
+				}]
+			}`))
+		case "DELETE":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	// Mock: GET/PATCH for global NTP config
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			w.WriteHeader(http.StatusNoContent)
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"openconfig-system:config": {
+					"enabled": true,
+					"enable-ntp-auth": true
+				}
+			}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testUnitNTPServerKeyIDZeroConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// Terraform state must record key_id as "0", not empty
+					resource.TestCheckResourceAttr("f5os_ntp_server.zero", "key_id", "0"),
+					// The POST body must have included key-id: 0
+					func(_ *terraform.State) error {
+						if postBodyKeyID == nil {
+							return fmt.Errorf("POST body did not contain 'f5-openconfig-system-ntp:key-id'; omitempty dropped key_id=0")
+						}
+						if *postBodyKeyID != 0 {
+							return fmt.Errorf("expected key-id=0 in POST body, got %v", *postBodyKeyID)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: key_id omitted from config results in no key-id field in payload
+//
+// When the user does NOT set key_id at all, the provider should omit the
+// field from the JSON payload entirely (omitempty with nil *int64).
+// Also verifies the read path handles a GET response that lacks key-id
+// (nil-pointer safety).
+// ---------------------------------------------------------------------------
+
+const testUnitNTPServerKeyIDOmittedConfig = `
+resource "f5os_ntp_server" "nokey" {
+  server             = "10.20.30.42"
+  prefer             = true
+  iburst             = true
+  ntp_service        = true
+  ntp_authentication = true
+}
+`
+
+func TestUnitNTPServerKeyIDOmittedNotSerialized(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	var keyIDPresent bool
+
+	// Mock: POST to create NTP server — check that key-id is absent
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			defer func() { _ = r.Body.Close() }()
+			body, _ := io.ReadAll(r.Body)
+
+			// Use a raw map to detect the presence of the key-id field
+			var payload map[string]interface{}
+			if err := json.Unmarshal(body, &payload); err == nil {
+				if servers, ok := payload["server"].([]interface{}); ok && len(servers) > 0 {
+					if srv, ok := servers[0].(map[string]interface{}); ok {
+						if cfg, ok := srv["config"].(map[string]interface{}); ok {
+							_, keyIDPresent = cfg["f5-openconfig-system-ntp:key-id"]
+						}
+					}
+				}
+			}
+
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	// Mock: GET/PATCH/DELETE for specific NTP server — return response WITHOUT key-id
+	// to also exercise the nil-pointer dereference safety in GetNTPServer
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.42", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"openconfig-system:server": [{
+					"address": "10.20.30.42",
+					"config": {
+						"address": "10.20.30.42",
+						"prefer": true,
+						"iburst": true
+					}
+				}]
+			}`))
+		case "PATCH":
+			w.WriteHeader(http.StatusNoContent)
+		case "DELETE":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	// Mock: GET/PATCH for global NTP config
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			w.WriteHeader(http.StatusNoContent)
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"openconfig-system:config": {
+					"enabled": true,
+					"enable-ntp-auth": true
+				}
+			}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testUnitNTPServerKeyIDOmittedConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.nokey", "server", "10.20.30.42"),
+					// The POST body must NOT have included key-id
+					func(_ *terraform.State) error {
+						if keyIDPresent {
+							return fmt.Errorf("POST body contained 'f5-openconfig-system-ntp:key-id' even though key_id was not set in the config; expected the field to be omitted")
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Acceptance test (real device)
 // ---------------------------------------------------------------------------
 
@@ -678,6 +902,64 @@ func TestAccNTPGlobalConfigPatched(t *testing.T) {
 				),
 			},
 			// Step 4: Destroy is automatic — CheckDestroy verifies NTP server cleanup
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance test: key_id omitted — verifies the *int64 nil path
+//
+// The key-id field is a YANG leafref that requires a pre-configured NTP
+// authentication key to exist on the device.  Because our test device has no
+// NTP authentication keys, we cannot send key_id=0 or any other value (the
+// device returns "illegal reference").  The key_id=0 serialisation fix is
+// fully covered by TestUnitNTPServerKeyIDZeroSerialized.
+//
+// This acceptance test verifies the *other* half of the *int64 fix: when the
+// user omits key_id, the pointer stays nil and omitempty correctly omits the
+// field from the JSON payload, so the device accepts the request.
+//
+// Uses 10.255.255.3 to avoid colliding with other NTP acceptance tests.
+// ---------------------------------------------------------------------------
+
+const testAccNTPKeyIDOmittedCreate = `
+resource "f5os_ntp_server" "keyid" {
+  server             = "10.255.255.3"
+  prefer             = true
+  iburst             = true
+  ntp_service        = true
+  ntp_authentication = true
+}
+`
+
+func TestAccNTPServerKeyIDOmitted(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckNTPServerDestroy,
+		Steps: []resource.TestStep{
+			// Step 1: Create without key_id — exercises the *int64 nil path.
+			// Before the fix, CreateNTPServerPayload always called
+			// plan.KeyID.ValueInt64() which returned 0, and the old
+			// int64 field would either be omitted (omitempty) or sent
+			// as 0 depending on the code path.  With *int64, when
+			// key_id is not in the config the pointer stays nil and
+			// omitempty correctly omits the field.
+			{
+				Config: testAccNTPKeyIDOmittedCreate,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.keyid", "server", "10.255.255.3"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.keyid", "prefer", "true"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.keyid", "iburst", "true"),
+					// Direct device API verification — key_id defaults to 0
+					testAccCheckNTPServerOnDevice("10.255.255.3", 0, true, true),
+				),
+			},
+			// Step 2: Destroy is automatic — CheckDestroy verifies cleanup.
+			// Note: Update steps are intentionally omitted. The NTP server
+			// PATCH (Update) has a pre-existing bug where the POST-style
+			// payload doesn't correctly update prefer/iburst on the device.
+			// That bug is orthogonal to the *int64 fix under test.
 		},
 	})
 }

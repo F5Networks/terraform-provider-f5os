@@ -168,7 +168,11 @@ func (r *NTPServerResource) Read(ctx context.Context, req resource.ReadRequest, 
 
 	state.ID = types.StringValue(state.Server.ValueString())
 	state.Server = types.StringValue(ntp.Address)
-	state.KeyID = types.Int64Value(ntp.KeyID)
+	if ntp.KeyID != nil {
+		state.KeyID = types.Int64Value(*ntp.KeyID)
+	} else {
+		state.KeyID = types.Int64Null()
+	}
 	state.Prefer = types.BoolValue(ntp.Prefer)
 	state.IBurst = types.BoolValue(ntp.IBurst)
 	state.NTPService = types.BoolValue(ntpService)
