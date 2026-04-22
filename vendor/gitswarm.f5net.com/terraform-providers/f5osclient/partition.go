@@ -521,7 +521,7 @@ const (
 
 type ntpServerConfig struct {
 	Address string `json:"address"`
-	KeyID   int64  `json:"f5-openconfig-system-ntp:key-id,omitempty"`
+	KeyID   *int64 `json:"f5-openconfig-system-ntp:key-id,omitempty"`
 	Prefer  bool   `json:"prefer,omitempty"`
 	Iburst  bool   `json:"iburst,omitempty"`
 }
@@ -553,6 +553,18 @@ func (c *F5os) CreateNTPServer(server string, payload []byte) error {
 }
 
 func (c *F5os) CreateNTPServerPayload(server string, plan NTPServerModel) ([]byte, error) {
+	cfg := ntpServerConfig{
+		Address: server,
+		Prefer:  plan.Prefer.ValueBool(),
+		Iburst:  plan.IBurst.ValueBool(),
+	}
+	// Only include key-id when explicitly set (not null/unknown) so that
+	// omitempty correctly omits the field when the user did not configure it,
+	// while still sending key_id=0 when the user explicitly sets it to zero.
+	if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() {
+		v := plan.KeyID.ValueInt64()
+		cfg.KeyID = &v
+	}
 	payload := ntpServerPayload{
 		Server: []struct {
 			Address string          `json:"address"`
@@ -560,12 +572,7 @@ func (c *F5os) CreateNTPServerPayload(server string, plan NTPServerModel) ([]byt
 		}{
 			{
 				Address: server,
-				Config: ntpServerConfig{
-					Address: server,
-					KeyID:   plan.KeyID.ValueInt64(),
-					Prefer:  plan.Prefer.ValueBool(),
-					Iburst:  plan.IBurst.ValueBool(),
-				},
+				Config:  cfg,
 			},
 		},
 	}

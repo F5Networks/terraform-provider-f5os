@@ -631,7 +631,7 @@ type ntpServerEntry struct {
 
 type ntpServerReadConfig struct {
 	Address string `json:"address"`
-	KeyID   int64  `json:"f5-openconfig-system-ntp:key-id,omitempty"`
+	KeyID   *int64 `json:"f5-openconfig-system-ntp:key-id,omitempty"`
 	Prefer  bool   `json:"prefer,omitempty"`
 	IBurst  bool   `json:"iburst,omitempty"`
 }
@@ -656,9 +656,11 @@ type ntpGlobalConfigFields struct {
 
 // NTPServerStruct is the flattened Go representation returned by
 // GetNTPServer + GetNTPGlobalConfig for the provider Read method.
+// KeyID is a pointer so callers can distinguish "device returned 0"
+// from "device did not return key_id at all".
 type NTPServerStruct struct {
 	Address           string
-	KeyID             int64
+	KeyID             *int64
 	Prefer            bool
 	IBurst            bool
 	NTPService        bool
