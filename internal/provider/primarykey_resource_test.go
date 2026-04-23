@@ -17,13 +17,16 @@ import (
 func withFastPolling(t *testing.T) {
 	origInterval := primaryKeyPollInterval
 	origTimeout := primaryKeyMigrationTimeout
+	origDelay := primaryKeyInitialReadDelay
 
 	primaryKeyPollInterval = 10 * time.Millisecond
 	primaryKeyMigrationTimeout = 100 * time.Millisecond
+	primaryKeyInitialReadDelay = 0
 
 	t.Cleanup(func() {
 		primaryKeyPollInterval = origInterval
 		primaryKeyMigrationTimeout = origTimeout
+		primaryKeyInitialReadDelay = origDelay
 	})
 }
 

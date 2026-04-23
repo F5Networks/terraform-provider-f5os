@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -757,12 +758,20 @@ func setupUserMock(t *testing.T, initialRoles map[string][]string) *userMockStat
 		for role := range st.roleMembers {
 			allRoles[role] = true
 		}
+		sortedRoles := make([]string, 0, len(allRoles))
 		for role := range allRoles {
+			sortedRoles = append(sortedRoles, role)
+		}
+		sort.Strings(sortedRoles)
+		for _, role := range sortedRoles {
 			entry := roleEntry{RoleName: role}
 			if members, ok := st.roleMembers[role]; ok {
+				sortedMembers := make([]string, 0, len(members))
 				for u := range members {
-					entry.Config.Users = append(entry.Config.Users, u)
+					sortedMembers = append(sortedMembers, u)
 				}
+				sort.Strings(sortedMembers)
+				entry.Config.Users = sortedMembers
 			}
 			resp.Roles.Role = append(resp.Roles.Role, entry)
 		}
