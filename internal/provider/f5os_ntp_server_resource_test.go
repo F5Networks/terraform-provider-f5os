@@ -954,6 +954,7 @@ func TestAccNTPServerKeyIDOmitted(t *testing.T) {
 					// Direct device API verification — key_id defaults to 0
 					testAccCheckNTPServerOnDevice("10.255.255.3", 0, true, true),
 				),
+
 			},
 			// Step 2: Destroy is automatic — CheckDestroy verifies cleanup.
 			// Note: Update steps are intentionally omitted. The NTP server
