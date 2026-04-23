@@ -2,8 +2,9 @@ package provider
 
 import (
 	"context"
-	"time"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -113,9 +114,12 @@ var primaryKeyPollInterval = 2 * time.Second
 // Overridden in tests to keep suite fast.
 var primaryKeyMigrationTimeout = 60 * time.Second
 
+// primaryKeyInitialReadDelay gives the device time to settle after SetPrimaryKey
+// before the polling loop begins. Overridden in tests to avoid wall-clock sleeps.
+var primaryKeyInitialReadDelay = 5 * time.Second
+
 // waitForPrimaryKeyMigration polls GetPrimaryKey until status is COMPLETE or
-// primaryKeyMigrationTimeout elapses. It checks immediately on the first
-// iteration so fast devices don't incur an unnecessary initial delay.
+// primaryKeyMigrationTimeout elapses.
 func (r *PrimaryKeyResource) waitForPrimaryKeyMigration(ctx context.Context) error {
 	maxPolls := int(primaryKeyMigrationTimeout / primaryKeyPollInterval)
 	if maxPolls < 1 {
@@ -124,14 +128,24 @@ func (r *PrimaryKeyResource) waitForPrimaryKeyMigration(ctx context.Context) err
 
 	tflog.Info(ctx, "Waiting for primary key migration to complete")
 
+	if primaryKeyInitialReadDelay > 0 {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while waiting for primary key migration")
+		case <-time.After(primaryKeyInitialReadDelay):
+		}
+	}
+
 	for poll := 0; poll < maxPolls; poll++ {
 		keyData, err := r.client.GetPrimaryKey()
 		if err != nil {
 			tflog.Warn(ctx, fmt.Sprintf("Error polling primary key status: %s", err))
+		} else if keyData == nil {
+			tflog.Warn(ctx, "Error polling primary key status: empty response from device")
 		} else {
 			status := keyData.PrimaryKey.State.Status
 			tflog.Debug(ctx, fmt.Sprintf("Primary key migration status: %s", status))
-			if status == "COMPLETE" {
+			if strings.Contains(status, "COMPLETE") {
 				tflog.Info(ctx, "Primary key migration completed successfully")
 				return nil
 			}
@@ -186,6 +200,10 @@ func (r *PrimaryKeyResource) Create(ctx context.Context, req resource.CreateRequ
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to fetch state after setting PrimaryKey: %s", err))
 		return
 	}
+	if keyData == nil {
+		resp.Diagnostics.AddError("F5OS Client Error", "Failed to fetch state after setting PrimaryKey: empty response from device")
+		return
+	}
 
 	r.primaryKeyResourceModelToState(keyData, data)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -206,6 +224,10 @@ func (r *PrimaryKeyResource) Read(ctx context.Context, req resource.ReadRequest,
 	keyData, err := r.client.GetPrimaryKey()
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to fetch Primary Key configuration: %s", err))
+		return
+	}
+	if keyData == nil {
+		resp.Diagnostics.AddError("F5OS Client Error", "Failed to fetch Primary Key configuration: empty response from device")
 		return
 	}
 
@@ -240,6 +262,11 @@ func (r *PrimaryKeyResource) Update(ctx context.Context, req resource.UpdateRequ
 			resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to update Primary Key: %s", err))
 			return
 		}
+
+		if err := r.waitForPrimaryKeyMigration(ctx); err != nil {
+			resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Primary key migration failed: %s", err))
+			return
+		}
 	} else {
 		tflog.Info(ctx, "[UPDATE] force_update=false — skipping SetPrimaryKey, refreshing state only")
 	}
@@ -248,6 +275,10 @@ func (r *PrimaryKeyResource) Update(ctx context.Context, req resource.UpdateRequ
 	keyData, err := r.client.GetPrimaryKey()
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to retrieve Primary Key after update: %s", err))
+		return
+	}
+	if keyData == nil {
+		resp.Diagnostics.AddError("F5OS Client Error", "Failed to retrieve Primary Key after update: empty response from device")
 		return
 	}
 
