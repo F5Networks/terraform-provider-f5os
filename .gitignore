@@ -36,6 +36,8 @@ cover.out
 *.goback
 .agents
 reports/
+coverage_report.txt
+AGENTS.md
 
 website/vendor
 

@@ -89,7 +89,22 @@ unit-tests:
   stage: unittest
   script:
     - make test
+    - go tool cover -func=cover.out > coverage_report.txt
+    - tail -1 coverage_report.txt
+    - |
+      COVERAGE=$(go tool cover -func=cover.out | tail -1 | awk '{print $NF}' | tr -d '%')
+      echo "coverage: ${COVERAGE}%"
+      if awk "BEGIN {exit !(${COVERAGE} < 39)}"; then
+        echo "FAIL: coverage ${COVERAGE}% is below minimum threshold of 39%"
+        exit 1
+      fi
   coverage: '/coverage: \d+\.\d+/'
+  artifacts:
+    when: always
+    paths:
+      - cover.out
+      - coverage_report.txt
+    expire_in: 30 days
 
 goreleaser:
   stage: release

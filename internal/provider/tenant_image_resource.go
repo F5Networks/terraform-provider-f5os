@@ -200,7 +200,7 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 		resp.Diagnostics.AddWarning("Client Warning", fmt.Sprintf("Unable to check if image already exists, will attempt import: %s", getErr))
 	}
 
-	if resp1Byte == nil || len(resp1Byte.TenantImages) == 0 {
+	if getErr != nil || resp1Byte == nil || len(resp1Byte.TenantImages) == 0 {
 		if data.UploadFromPath.IsNull() {
 			respByte, err := r.importImage(ctx, data)
 			if err != nil {
