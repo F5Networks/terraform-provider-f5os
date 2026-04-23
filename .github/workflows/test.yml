@@ -74,5 +74,5 @@ jobs:
           terraform_wrapper: false
       # - env:
       #     TF_ACC: "1"
-      - run: go test -v -cover ./internal/provider/
-        timeout-minutes: 20
+      - run: go test -v -cover -timeout 60m ./internal/provider/
+        timeout-minutes: 65

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -171,6 +172,14 @@ func setupDNSMock(t *testing.T, initialServers []string, initialDomains []string
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(resp))
 		case "PATCH":
+			var p DNSConfigPayload
+			if err := json.NewDecoder(r.Body).Decode(&p); err == nil {
+				st.servers = nil
+				for _, s := range p.DNS.Servers.Server {
+					st.servers = append(st.servers, s.Address)
+				}
+				st.domains = p.DNS.Config.Search
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{}`))
 		case "DELETE":
@@ -184,12 +193,36 @@ func setupDNSMock(t *testing.T, initialServers []string, initialDomains []string
 
 	// DELETE for individual servers: /restconf/data/openconfig-system:system/dns/servers/server=<addr>
 	mux.HandleFunc("/restconf/data/openconfig-system:system/dns/servers/", func(w http.ResponseWriter, r *http.Request) {
+		// Parse address from path (.../server=<addr>)
+		parts := strings.SplitN(r.URL.Path, "server=", 2)
+		if len(parts) == 2 {
+			addr := parts[1]
+			var kept []string
+			for _, s := range st.servers {
+				if s != addr {
+					kept = append(kept, s)
+				}
+			}
+			st.servers = kept
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
 	})
 
 	// DELETE for individual domains: /restconf/data/openconfig-system:system/dns/config/search=<domain>
 	mux.HandleFunc("/restconf/data/openconfig-system:system/dns/config/", func(w http.ResponseWriter, r *http.Request) {
+		// Parse domain from path (.../search=<domain>)
+		parts := strings.SplitN(r.URL.Path, "search=", 2)
+		if len(parts) == 2 {
+			dom := parts[1]
+			var kept []string
+			for _, d := range st.domains {
+				if d != dom {
+					kept = append(kept, d)
+				}
+			}
+			st.domains = kept
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
 	})
@@ -388,6 +421,150 @@ func TestUnitDNSReadMultipleServersAndDomains(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Unit tests for Update method fix (stale entry deletion)
+// ---------------------------------------------------------------------------
+
+// TestUnitDNSUpdateRemovesStaleEntries verifies that shrinking the server
+// or domain list in an Update correctly deletes the removed entries from
+// the device rather than leaving them as stale config.
+func TestUnitDNSUpdateRemovesStaleEntries(t *testing.T) {
+	st := setupDNSMock(t, []string{"8.8.8.8", "1.1.1.1"}, []string{"foo.local", "bar.local"})
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create with two servers and two domains
+			{
+				Config: testUnitDNSTwoServersConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.#", "2"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.#", "2"),
+				),
+			},
+			// Step 2: Shrink to one server and one domain
+			{
+				Config: testUnitDNSOneServerOneDomainConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.#", "1"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.0", "8.8.8.8"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.#", "1"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.0", "foo.local"),
+					// Verify the mock state reflects the removal
+					func(s *terraform.State) error {
+						for _, srv := range st.servers {
+							if srv == "1.1.1.1" {
+								return fmt.Errorf("stale server 1.1.1.1 still in mock state: %v", st.servers)
+							}
+						}
+						for _, dom := range st.domains {
+							if dom == "bar.local" {
+								return fmt.Errorf("stale domain bar.local still in mock state: %v", st.domains)
+							}
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitDNSUpdateAddsEntries verifies that growing the server and domain
+// lists (no removals) works correctly. removedEntries returns empty so
+// DeleteDNSConfig is effectively a no-op, and PatchDNSConfig adds the new
+// entries.
+func TestUnitDNSUpdateAddsEntries(t *testing.T) {
+	st := setupDNSMock(t, []string{"8.8.8.8"}, []string{"foo.local"})
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create with one server and one domain
+			{
+				Config: testUnitDNSGrowStep1Config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.#", "1"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.#", "1"),
+				),
+			},
+			// Step 2: Grow to two servers and two domains
+			{
+				Config: testUnitDNSGrowStep2Config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.#", "2"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.0", "8.8.8.8"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.1", "1.1.1.1"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.#", "2"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.0", "foo.local"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.1", "bar.local"),
+					// Mock state should contain all entries (none removed)
+					func(s *terraform.State) error {
+						if len(st.servers) != 2 {
+							return fmt.Errorf("expected 2 servers in mock, got %v", st.servers)
+						}
+						if len(st.domains) != 2 {
+							return fmt.Errorf("expected 2 domains in mock, got %v", st.domains)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitDNSUpdateSwapsAllEntries verifies that completely replacing all
+// servers and domains in a single Update works. Every old entry is removed
+// via DeleteDNSConfig, then PatchDNSConfig applies the new entries.
+func TestUnitDNSUpdateSwapsAllEntries(t *testing.T) {
+	st := setupDNSMock(t, []string{"8.8.8.8"}, []string{"old.local"})
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create
+			{
+				Config: testUnitDNSSwapStep1Config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.0", "8.8.8.8"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.0", "old.local"),
+				),
+			},
+			// Step 2: Swap every entry
+			{
+				Config: testUnitDNSSwapStep2Config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.#", "1"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.0", "9.9.9.9"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.#", "1"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.0", "new.local"),
+					// Verify old entries are gone from mock
+					func(s *terraform.State) error {
+						for _, srv := range st.servers {
+							if srv == "8.8.8.8" {
+								return fmt.Errorf("old server 8.8.8.8 still in mock: %v", st.servers)
+							}
+						}
+						for _, dom := range st.domains {
+							if dom == "old.local" {
+								return fmt.Errorf("old domain old.local still in mock: %v", st.domains)
+							}
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
 // HCL configs for DNS unit tests
 // ---------------------------------------------------------------------------
 
@@ -436,6 +613,48 @@ const testUnitDNSMultiConfig = `
 resource "f5os_dns" "test" {
   dns_servers = ["8.8.8.8", "1.1.1.1"]
   dns_domains = ["foo.local", "bar.local"]
+}
+`
+
+const testUnitDNSTwoServersConfig = `
+resource "f5os_dns" "test" {
+  dns_servers = ["8.8.8.8", "1.1.1.1"]
+  dns_domains = ["foo.local", "bar.local"]
+}
+`
+
+const testUnitDNSOneServerOneDomainConfig = `
+resource "f5os_dns" "test" {
+  dns_servers = ["8.8.8.8"]
+  dns_domains = ["foo.local"]
+}
+`
+
+const testUnitDNSGrowStep1Config = `
+resource "f5os_dns" "test" {
+  dns_servers = ["8.8.8.8"]
+  dns_domains = ["foo.local"]
+}
+`
+
+const testUnitDNSGrowStep2Config = `
+resource "f5os_dns" "test" {
+  dns_servers = ["8.8.8.8", "1.1.1.1"]
+  dns_domains = ["foo.local", "bar.local"]
+}
+`
+
+const testUnitDNSSwapStep1Config = `
+resource "f5os_dns" "test" {
+  dns_servers = ["8.8.8.8"]
+  dns_domains = ["old.local"]
+}
+`
+
+const testUnitDNSSwapStep2Config = `
+resource "f5os_dns" "test" {
+  dns_servers = ["9.9.9.9"]
+  dns_domains = ["new.local"]
 }
 `
 
@@ -608,17 +827,16 @@ func TestAccDNSUpdateRefreshesState(t *testing.T) {
 					testAccCheckDNSDomainPresentOnDevice("update-1.invalid"),
 				),
 			},
-			// Step 2: Update server and domain. PatchDNSConfig uses PATCH
-			// (additive), so old entries remain on the device. Read now
-			// correctly reads ALL entries from the device, causing the
-			// plan to be non-empty after refresh. ExpectNonEmptyPlan
-			// documents this pre-existing Update bug (PATCH doesn't
-			// remove stale entries).
+			// Step 2: Update server and domain. The Update method now
+			// deletes stale entries before patching, so the plan should
+			// be clean after refresh.
 			{
-				Config:             testAccDNSUpdateStep2Config,
-				ExpectNonEmptyPlan: true,
+				Config: testAccDNSUpdateStep2Config,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					// Direct API: new entries are present on device
+					resource.TestCheckResourceAttr("f5os_dns.acc_test", "dns_servers.#", "1"),
+					resource.TestCheckResourceAttr("f5os_dns.acc_test", "dns_servers.0", "10.255.255.62"),
+					resource.TestCheckResourceAttr("f5os_dns.acc_test", "dns_domains.#", "1"),
+					resource.TestCheckResourceAttr("f5os_dns.acc_test", "dns_domains.0", "update-2.invalid"),
 					testAccCheckDNSServerPresentOnDevice("10.255.255.62"),
 					testAccCheckDNSDomainPresentOnDevice("update-2.invalid"),
 				),

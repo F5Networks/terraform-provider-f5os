@@ -234,27 +234,44 @@ func (r *DNSResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 
 // Update updates the resource and sets the updated Terraform state
 func (r *DNSResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan DNSResourceModel
+	var plan, prior DNSResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	tflog.Info(ctx, "Updating DNS configuration")
 
-	// Extract DNS Servers and Domains
+	// Extract planned (new) values
 	dnsServers, diags := extractStringList(ctx, plan.DNSServers)
 	resp.Diagnostics.Append(diags...)
 
 	dnsDomains, diags := extractStringList(ctx, plan.DNSDomains)
 	resp.Diagnostics.Append(diags...)
 
+	// Extract prior (old) values
+	oldServers, diags := extractStringList(ctx, prior.DNSServers)
+	resp.Diagnostics.Append(diags...)
+
+	oldDomains, diags := extractStringList(ctx, prior.DNSDomains)
+	resp.Diagnostics.Append(diags...)
+
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Call PATCH operation via client SDK
+	// Delete servers and domains that were removed from the config
+	removed := removedEntries(oldServers, dnsServers)
+	removedDoms := removedEntries(oldDomains, dnsDomains)
+	if err := r.client.DeleteDNSConfig(removed, removedDoms); err != nil {
+		resp.Diagnostics.AddError("DNS Update Error",
+			fmt.Sprintf("Failed to remove stale DNS entries: %s", err))
+		return
+	}
+
+	// Patch remaining / newly added entries
 	if err := r.client.PatchDNSConfig(dnsServers, dnsDomains); err != nil {
 		resp.Diagnostics.AddError(
 			"DNS Update Error",
@@ -274,6 +291,21 @@ func (r *DNSResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	})
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+// removedEntries returns elements present in old but absent from new.
+func removedEntries(old, new []string) []string {
+	set := make(map[string]struct{}, len(new))
+	for _, v := range new {
+		set[v] = struct{}{}
+	}
+	var removed []string
+	for _, v := range old {
+		if _, ok := set[v]; !ok {
+			removed = append(removed, v)
+		}
+	}
+	return removed
 }
 
 // Delete deletes the resource and removes the Terraform state
