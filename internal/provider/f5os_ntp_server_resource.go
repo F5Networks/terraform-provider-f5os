@@ -274,12 +274,3 @@ type NTPServerModel struct {
 	NTPService        types.Bool   `tfsdk:"ntp_service"`
 	NTPAuthentication types.Bool   `tfsdk:"ntp_authentication"`
 }
-
-// type NTPServerModel struct {
-// 	Server            string `tfsdk:"server"`
-// 	KeyID             int    `tfsdk:"key_id"`
-// 	Prefer            bool   `tfsdk:"prefer"`
-// 	IBurst            bool   `tfsdk:"iburst"`
-// 	NTPService        bool   `tfsdk:"ntp_service"`
-// 	NTPAuthentication bool   `tfsdk:"ntp_authentication"`
-// }
