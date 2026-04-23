@@ -133,6 +133,9 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 			"remote_path": schema.StringAttribute{
 				MarkdownDescription: "The path to the tenant image on the remote server.",
 				Optional:            true,
+				Validators: []validator.String{
+					stringvalidator.ConflictsWith(path.MatchRoot("upload_from_path")),
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},

@@ -1890,6 +1890,27 @@ resource "f5os_tenant_image" "existing_test" {
 `, imageName)
 }
 
+// TestUnitTenantImageRemotePathConflictsWithUploadFromPath verifies that
+// the remote_path attribute has a ConflictsWith validator for
+// upload_from_path. Setting both must produce a validation error.
+func TestUnitTenantImageRemotePathConflictsWithUploadFromPath(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+resource "f5os_tenant_image" "conflict_test" {
+  image_name       = "test.qcow2.zip.bundle"
+  remote_path      = "v17/VM"
+  upload_from_path = "/tmp/test.qcow2.zip.bundle"
+}
+`,
+				ExpectError: regexp.MustCompile(`(?i)conflict`),
+			},
+		},
+	})
+}
+
 // testAccTenantImageRequiresReplaceConfig changes remote_path relative to
 // testAccTenantImageCreateTC2ResourceConfig, which should trigger
 // RequiresReplace (destroy + recreate).
