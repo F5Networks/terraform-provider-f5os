@@ -132,8 +132,9 @@ resource "f5os_dns" "test" {
 
 // dnsMockState holds mutable mock-server state shared across handlers.
 type dnsMockState struct {
-	servers []string
-	domains []string
+	servers     []string
+	domains     []string
+	deleteCount int
 }
 
 // setupDNSMock registers all the standard mock handlers needed for DNS
@@ -183,6 +184,7 @@ func setupDNSMock(t *testing.T, initialServers []string, initialDomains []string
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{}`))
 		case "DELETE":
+			st.deleteCount++
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{}`))
 		default:
@@ -205,6 +207,7 @@ func setupDNSMock(t *testing.T, initialServers []string, initialDomains []string
 			}
 			st.servers = kept
 		}
+		st.deleteCount++
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
 	})
@@ -223,6 +226,7 @@ func setupDNSMock(t *testing.T, initialServers []string, initialDomains []string
 			}
 			st.domains = kept
 		}
+		st.deleteCount++
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
 	})
@@ -659,6 +663,49 @@ resource "f5os_dns" "test" {
 `
 
 // ---------------------------------------------------------------------------
+// Unit test for Delete no-op behavior
+// ---------------------------------------------------------------------------
+
+// TestUnitDNSDeletePreservesDeviceConfig verifies that Delete removes the
+// resource from Terraform state without making any DELETE API calls to the
+// device. DNS is a singleton system setting — removing managed entries
+// would break name resolution and could make the device unreachable.
+func TestUnitDNSDeletePreservesDeviceConfig(t *testing.T) {
+	st := setupDNSMock(t, []string{"8.8.8.8"}, []string{"internal.domain"})
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testUnitDNSOneServer,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.#", "1"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.0", "8.8.8.8"),
+				),
+			},
+			{
+				Destroy: true,
+				Config:  testUnitDNSOneServer,
+				Check: func(s *terraform.State) error {
+					if st.deleteCount > 0 {
+						return fmt.Errorf("expected no DELETE calls to device, got %d", st.deleteCount)
+					}
+					if len(st.servers) != 1 || st.servers[0] != "8.8.8.8" {
+						return fmt.Errorf("expected device servers to be preserved as [8.8.8.8], got %v", st.servers)
+					}
+					if len(st.domains) != 1 || st.domains[0] != "internal.domain" {
+						return fmt.Errorf("expected device domains to be preserved as [internal.domain], got %v", st.domains)
+					}
+					return nil
+				},
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Acceptance test helpers
 // ---------------------------------------------------------------------------
 
@@ -735,27 +782,17 @@ func testAccCheckDNSDomainPresentOnDevice(domain string) resource.TestCheckFunc 
 	}
 }
 
-// testAccCheckDNSDestroy verifies that test-specific DNS entries have been
-// removed from the device. Only checks for test IPs (10.255.255.x) and
-// test domains (.invalid) to avoid interfering with real DNS config.
+// testAccCheckDNSDestroy verifies that the resource was removed from state.
+// Delete is a no-op on the device (DNS config is preserved), so we only
+// confirm the device is still reachable and DNS config still exists.
 func testAccCheckDNSDestroy(s *terraform.State) error {
 	client, err := newDNSClientFromEnv()
 	if err != nil {
-		return nil // cannot connect — treat as destroyed
+		return nil // cannot connect — nothing to verify
 	}
-	config, err := client.ReadDNSConfig()
+	_, err = client.ReadDNSConfig()
 	if err != nil {
-		return nil // read failed — treat as destroyed
-	}
-	for _, srv := range config.DNS.Servers.Server {
-		if strings.HasPrefix(srv.Address, "10.255.255.") {
-			return fmt.Errorf("test DNS server %q still present on device after destroy", srv.Address)
-		}
-	}
-	for _, dom := range config.DNS.Config.Search {
-		if strings.HasSuffix(dom, ".invalid") {
-			return fmt.Errorf("test DNS domain %q still present on device after destroy", dom)
-		}
+		return fmt.Errorf("device DNS config should still exist after destroy (no-op), but ReadDNSConfig failed: %s", err)
 	}
 	return nil
 }
