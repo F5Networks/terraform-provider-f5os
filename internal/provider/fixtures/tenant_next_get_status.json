@@ -1,0 +1,31 @@
+{
+    "f5-tenants:state": {
+        "name": "testtenant-next",
+        "unit-key-hash": "abc123hash==",
+        "type": "BIG-IP-Next",
+        "image": "BIG-IP-Next-20.0.1-2.123.17",
+        "nodes": [
+            1
+        ],
+        "mgmt-ip": "10.10.10.40",
+        "prefix-length": 24,
+        "dag-ipv6-prefix-length": 128,
+        "gateway": "10.10.10.1",
+        "vlans": [1],
+        "cryptos": "enabled",
+        "vcpu-cores-per-node": 4,
+        "memory": "16384",
+        "storage": {
+            "size": 30
+        },
+        "running-state": "configured",
+        "mac-data": {
+            "base-mac": "f4:15:63:fb:a0:2b",
+            "mac-pool-size": 1
+        },
+        "appliance-mode": {
+            "enabled": false
+        },
+        "status": "Configured"
+    }
+}

@@ -94,6 +94,7 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 			"deployment_file": schema.StringAttribute{
 				MarkdownDescription: "Deployment file used for BIG-IP-Next .\nRequired for if `type` is `BIG-IP-Next`.",
 				Optional:            true,
+				Computed:            true,
 			},
 			"type": schema.StringAttribute{
 				MarkdownDescription: "Name of the tenant image to be used.\nRequired for create operations",
@@ -431,6 +432,11 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	}
 	data.Cryptos = types.StringValue(respData.F5TenantsTenant[0].State.Cryptos)
 	data.Type = types.StringValue(respData.F5TenantsTenant[0].State.Type)
+	if respData.F5TenantsTenant[0].Config.DeploymentFile != "" {
+		data.DeploymentFile = types.StringValue(respData.F5TenantsTenant[0].Config.DeploymentFile)
+	} else if data.DeploymentFile.IsUnknown() {
+		data.DeploymentFile = types.StringNull()
+	}
 }
 
 func (r *TenantResource) getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.F5ReqTenants {
