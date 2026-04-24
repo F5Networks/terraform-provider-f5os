@@ -48,7 +48,8 @@ func (r *DNSResource) Metadata(_ context.Context, req resource.MetadataRequest, 
 func (r *DNSResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Resource used to configure DNS settings (servers and domains) on F5OS systems (VELOS or rSeries).\n\n" +
-			"~> **NOTE:** The `f5os_dns` resource updates DNS servers and search domains on the F5OS platforms using Open API",
+			"~> **NOTE:** The `f5os_dns` resource updates DNS servers and search domains on the F5OS platforms using Open API.\n\n" +
+			"~> **IMPORTANT:** Running `terraform destroy` will remove this resource from Terraform state but will **not** delete the DNS configuration from the device. DNS is a critical system service and removing it could make the device unreachable.",
 		Attributes: map[string]schema.Attribute{
 			"dns_servers": schema.ListAttribute{
 				ElementType:         types.StringType,
@@ -308,51 +309,15 @@ func removedEntries(old, new []string) []string {
 	return removed
 }
 
-// Delete deletes the resource and removes the Terraform state
+// Delete removes the DNS resource from Terraform state without modifying the
+// device. DNS is a singleton system setting — removing the managed entries
+// would break name resolution and could make the device unreachable.
 func (r *DNSResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var state DNSResourceModel
+	tflog.Info(ctx, "Removing DNS resource from Terraform state (device configuration is preserved)")
 
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	tflog.Info(ctx, "Deleting DNS configuration")
-
-	// Extract DNS servers and domains
-	dnsServers, diags := extractStringList(ctx, state.DNSServers)
-	resp.Diagnostics.Append(diags...)
-
-	dnsDomains, diags := extractStringList(ctx, state.DNSDomains)
-	resp.Diagnostics.Append(diags...)
-
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	// Delete DNS servers individually
-	for _, server := range dnsServers {
-		if err := r.client.DeleteDNSServer(server); err != nil {
-			resp.Diagnostics.AddWarning(
-				"DNS Server Deletion Warning",
-				fmt.Sprintf("Failed to delete DNS server [%s]: %s", server, err),
-			)
-		}
-	}
-
-	// Delete DNS search domains individually
-	for _, domain := range dnsDomains {
-		if err := r.client.DeleteSearchDomain(domain); err != nil {
-			resp.Diagnostics.AddWarning(
-				"DNS Domain Deletion Warning",
-				fmt.Sprintf("Failed to delete DNS domain [%s]: %s", domain, err),
-			)
-		}
-	}
-
-	tflog.Debug(ctx, "DNS configuration deleted", map[string]interface{}{
-		"servers": dnsServers,
-		"domains": dnsDomains,
-		"id":      state.Id.ValueString(),
-	})
+	resp.Diagnostics.AddWarning(
+		"DNS Configuration Preserved",
+		"The DNS resource has been removed from Terraform state, but the DNS configuration on the device has been left intact. "+
+			"To modify DNS settings, re-import the resource or create a new f5os_dns resource.",
+	)
 }
