@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5os "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
@@ -55,6 +56,28 @@ type authRemoteRoleModel struct {
 	LDAPGroup types.String `tfsdk:"ldap_group"`
 }
 
+// passwordPolicyModel represents the password policy settings in Terraform state.
+type passwordPolicyModel struct {
+	MinLength           types.Int64 `tfsdk:"min_length"`
+	RequiredNumeric     types.Int64 `tfsdk:"required_numeric"`
+	RequiredUppercase   types.Int64 `tfsdk:"required_uppercase"`
+	RequiredLowercase   types.Int64 `tfsdk:"required_lowercase"`
+	RequiredSpecial     types.Int64 `tfsdk:"required_special"`
+	RequiredDifferences types.Int64 `tfsdk:"required_differences"`
+	RejectUsername      types.Bool  `tfsdk:"reject_username"`
+	ApplyToRoot         types.Bool  `tfsdk:"apply_to_root"`
+	Retries             types.Int64 `tfsdk:"retries"`
+	MaxLoginFailures    types.Int64 `tfsdk:"max_login_failures"`
+	UnlockTime          types.Int64 `tfsdk:"unlock_time"`
+	RootLockout         types.Bool  `tfsdk:"root_lockout"`
+	RootUnlockTime      types.Int64 `tfsdk:"root_unlock_time"`
+	MaxAge              types.Int64 `tfsdk:"max_age"`
+	// v1.7+ only fields
+	MaxLetterRepeat   types.Int64 `tfsdk:"max_letter_repeat"`
+	MaxSequenceRepeat types.Int64 `tfsdk:"max_sequence_repeat"`
+	MaxClassRepeat    types.Int64 `tfsdk:"max_class_repeat"`
+}
+
 type AuthResourceModel struct {
 	ID             types.String `tfsdk:"id"`
 	AuthOrder      types.List   `tfsdk:"auth_order"`
@@ -83,20 +106,78 @@ func (r *AuthResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 				Validators:          []validator.List{listAuthOrderValidator{}},
 			},
 			"password_policy": schema.SingleNestedAttribute{
-				MarkdownDescription: "Password policy settings (note: device enforces final policy).",
+				MarkdownDescription: "Password policy settings. Only fields you specify are managed; unspecified fields are left at device defaults.",
 				Optional:            true,
 				Attributes: map[string]schema.Attribute{
-					"min_length":        schema.Int64Attribute{Optional: true},
-					"max_length":        schema.Int64Attribute{Optional: true},
-					"history":           schema.Int64Attribute{Optional: true},
-					"max_age_days":      schema.Int64Attribute{Optional: true},
-					"min_classes":       schema.Int64Attribute{Optional: true},
-					"require_upper":     schema.BoolAttribute{Optional: true},
-					"require_lower":     schema.BoolAttribute{Optional: true},
-					"require_digit":     schema.BoolAttribute{Optional: true},
-					"require_special":   schema.BoolAttribute{Optional: true},
-					"allow_username":    schema.BoolAttribute{Optional: true},
-					"allow_consecutive": schema.BoolAttribute{Optional: true},
+					"min_length": schema.Int64Attribute{
+						MarkdownDescription: "Minimum password length.",
+						Optional:            true,
+					},
+					"required_numeric": schema.Int64Attribute{
+						MarkdownDescription: "Required numeric digit count.",
+						Optional:            true,
+					},
+					"required_uppercase": schema.Int64Attribute{
+						MarkdownDescription: "Required uppercase character count.",
+						Optional:            true,
+					},
+					"required_lowercase": schema.Int64Attribute{
+						MarkdownDescription: "Required lowercase character count.",
+						Optional:            true,
+					},
+					"required_special": schema.Int64Attribute{
+						MarkdownDescription: "Required special character count.",
+						Optional:            true,
+					},
+					"required_differences": schema.Int64Attribute{
+						MarkdownDescription: "Characters that must differ from previous password.",
+						Optional:            true,
+					},
+					"reject_username": schema.BoolAttribute{
+						MarkdownDescription: "Reject passwords containing the username.",
+						Optional:            true,
+					},
+					"apply_to_root": schema.BoolAttribute{
+						MarkdownDescription: "Apply password restrictions to root accounts.",
+						Optional:            true,
+					},
+					"retries": schema.Int64Attribute{
+						MarkdownDescription: "Password entry retries before failure.",
+						Optional:            true,
+					},
+					"max_login_failures": schema.Int64Attribute{
+						MarkdownDescription: "Failed login attempts before lockout.",
+						Optional:            true,
+					},
+					"unlock_time": schema.Int64Attribute{
+						MarkdownDescription: "Account unlock time in seconds (0 = manual).",
+						Optional:            true,
+					},
+					"root_lockout": schema.BoolAttribute{
+						MarkdownDescription: "Enable lockout of root accounts.",
+						Optional:            true,
+					},
+					"root_unlock_time": schema.Int64Attribute{
+						MarkdownDescription: "Root account unlock time in seconds.",
+						Optional:            true,
+					},
+					"max_age": schema.Int64Attribute{
+						MarkdownDescription: "Password max age in days (0 = never expires).",
+						Optional:            true,
+					},
+					// v1.7+ only fields
+					"max_letter_repeat": schema.Int64Attribute{
+						MarkdownDescription: "Max repeating lowercase letters allowed. Only supported on F5OS >= v1.7.",
+						Optional:            true,
+					},
+					"max_sequence_repeat": schema.Int64Attribute{
+						MarkdownDescription: "Max repeating letters/digits allowed. Only supported on F5OS >= v1.7.",
+						Optional:            true,
+					},
+					"max_class_repeat": schema.Int64Attribute{
+						MarkdownDescription: "Max repeating chars of any class allowed. Only supported on F5OS >= v1.7.",
+						Optional:            true,
+					},
 				},
 			},
 			"remote_roles": schema.SetNestedAttribute{
@@ -200,9 +281,25 @@ func (r *AuthResource) Create(ctx context.Context, req resource.CreateRequest, r
 		}
 	}
 
-	// Handle password policy (placeholder for future implementation)
+	// Handle password policy if provided
 	if !plan.PasswordPolicy.IsNull() && !plan.PasswordPolicy.IsUnknown() {
-		tflog.Warn(ctx, "Password policy configuration is not yet implemented")
+		var ppModel passwordPolicyModel
+		resp.Diagnostics.Append(plan.PasswordPolicy.As(ctx, &ppModel, basetypes.ObjectAsOptions{})...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		// Version guard for v1.7+ fields
+		resp.Diagnostics.Append(r.validateV17Fields(ctx, &ppModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		// Write the password policy to the device
+		resp.Diagnostics.Append(r.writePasswordPolicy(ctx, &ppModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
 	}
 
 	plan.ID = types.StringValue("f5os-auth")
@@ -221,7 +318,6 @@ func (r *AuthResource) Create(ctx context.Context, req resource.CreateRequest, r
 			return
 		}
 	}
-
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -272,6 +368,14 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	if !state.RemoteRoles.IsNull() || isImport {
 		if err := r.readRoleConfig(ctx, &state); err != nil {
 			resp.Diagnostics.AddError("Failed to read role config from device", err.Error())
+			return
+		}
+	}
+
+	// Read password_policy from device when managed or during import.
+	if !state.PasswordPolicy.IsNull() || isImport {
+		resp.Diagnostics.Append(r.readPasswordPolicy(ctx, &state, isImport)...)
+		if resp.Diagnostics.HasError() {
 			return
 		}
 	}
@@ -329,6 +433,27 @@ func (r *AuthResource) Update(ctx context.Context, req resource.UpdateRequest, r
 				resp.Diagnostics.AddError(fmt.Sprintf("Failed to update role %s", rolename), err.Error())
 				return
 			}
+		}
+	}
+
+	// Update password policy if specified
+	if !plan.PasswordPolicy.IsNull() && !plan.PasswordPolicy.IsUnknown() {
+		var ppModel passwordPolicyModel
+		resp.Diagnostics.Append(plan.PasswordPolicy.As(ctx, &ppModel, basetypes.ObjectAsOptions{})...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		// Version guard for v1.7+ fields
+		resp.Diagnostics.Append(r.validateV17Fields(ctx, &ppModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		// Write the password policy to the device
+		resp.Diagnostics.Append(r.writePasswordPolicy(ctx, &ppModel)...)
+		if resp.Diagnostics.HasError() {
+			return
 		}
 	}
 
@@ -424,6 +549,9 @@ func (r *AuthResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	} else {
 		tflog.Warn(ctx, "No original role GIDs in private state, skipping role restoration")
 	}
+
+	// Password policy is left as-is on destroy (no-op). The device always has
+	// a password policy; reverting to weaker defaults would be a security risk.
 
 	resp.State.RemoveResource(ctx)
 }
@@ -727,4 +855,344 @@ func (v listAuthOrderValidator) ValidateList(ctx context.Context, req validator.
 		}
 		seen[m] = true
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Password Policy helpers
+// ---------------------------------------------------------------------------
+
+// passwordPolicyAttrTypes returns the attr.Type map for the password_policy
+// SingleNestedAttribute. Used when constructing types.ObjectValue.
+func passwordPolicyAttrTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"min_length":           types.Int64Type,
+		"required_numeric":     types.Int64Type,
+		"required_uppercase":   types.Int64Type,
+		"required_lowercase":   types.Int64Type,
+		"required_special":     types.Int64Type,
+		"required_differences": types.Int64Type,
+		"reject_username":      types.BoolType,
+		"apply_to_root":        types.BoolType,
+		"retries":              types.Int64Type,
+		"max_login_failures":   types.Int64Type,
+		"unlock_time":          types.Int64Type,
+		"root_lockout":         types.BoolType,
+		"root_unlock_time":     types.Int64Type,
+		"max_age":              types.Int64Type,
+		"max_letter_repeat":    types.Int64Type,
+		"max_sequence_repeat":  types.Int64Type,
+		"max_class_repeat":     types.Int64Type,
+	}
+}
+
+// validateV17Fields checks whether the user configured v1.7+ fields on a
+// device that doesn't support them. Returns diagnostics with errors if so.
+func (r *AuthResource) validateV17Fields(ctx context.Context, pp *passwordPolicyModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if platformVersionAtLeast(r.client.PlatformVersion, "v1.7") {
+		return diags
+	}
+	if !pp.MaxLetterRepeat.IsNull() && !pp.MaxLetterRepeat.IsUnknown() {
+		diags.AddError("Unsupported attribute",
+			"max_letter_repeat is not supported on F5OS versions below v1.7")
+	}
+	if !pp.MaxSequenceRepeat.IsNull() && !pp.MaxSequenceRepeat.IsUnknown() {
+		diags.AddError("Unsupported attribute",
+			"max_sequence_repeat is not supported on F5OS versions below v1.7")
+	}
+	if !pp.MaxClassRepeat.IsNull() && !pp.MaxClassRepeat.IsUnknown() {
+		diags.AddError("Unsupported attribute",
+			"max_class_repeat is not supported on F5OS versions below v1.7")
+	}
+	return diags
+}
+
+// readPasswordPolicy reads password policy from the device and refreshes
+// the PasswordPolicy field in the model.
+//
+// When isImport is true, all fields are populated from the device (since
+// there is no prior state). Otherwise, only fields already present in state
+// are refreshed — this avoids adding fields the user didn't declare.
+func (r *AuthResource) readPasswordPolicy(ctx context.Context, state *AuthResourceModel, isImport bool) diag.Diagnostics {
+	var diags diag.Diagnostics
+	policy, err := r.client.GetPasswordPolicy()
+	if err != nil {
+		diags.AddError("Failed to read password policy from device", err.Error())
+		return diags
+	}
+
+	if isImport {
+		// Import: populate all fields from device
+		model := passwordPolicyConfigToModel(policy, r.client.PlatformVersion)
+		obj, d := types.ObjectValueFrom(ctx, passwordPolicyAttrTypes(), model)
+		diags.Append(d...)
+		if !diags.HasError() {
+			state.PasswordPolicy = obj
+		}
+		return diags
+	}
+
+	// Normal read: only refresh fields already in state
+	var current passwordPolicyModel
+	diags.Append(state.PasswordPolicy.As(ctx, &current, basetypes.ObjectAsOptions{})...)
+	if diags.HasError() {
+		return diags
+	}
+
+	if !current.MinLength.IsNull() && policy.MinLength != nil {
+		current.MinLength = types.Int64Value(*policy.MinLength)
+	}
+	if !current.RequiredNumeric.IsNull() && policy.RequiredNumeric != nil {
+		current.RequiredNumeric = types.Int64Value(*policy.RequiredNumeric)
+	}
+	if !current.RequiredUppercase.IsNull() && policy.RequiredUppercase != nil {
+		current.RequiredUppercase = types.Int64Value(*policy.RequiredUppercase)
+	}
+	if !current.RequiredLowercase.IsNull() && policy.RequiredLowercase != nil {
+		current.RequiredLowercase = types.Int64Value(*policy.RequiredLowercase)
+	}
+	if !current.RequiredSpecial.IsNull() && policy.RequiredSpecial != nil {
+		current.RequiredSpecial = types.Int64Value(*policy.RequiredSpecial)
+	}
+	if !current.RequiredDifferences.IsNull() && policy.RequiredDifferences != nil {
+		current.RequiredDifferences = types.Int64Value(*policy.RequiredDifferences)
+	}
+	if !current.RejectUsername.IsNull() && policy.RejectUsername != nil {
+		current.RejectUsername = types.BoolValue(*policy.RejectUsername)
+	}
+	if !current.ApplyToRoot.IsNull() && policy.ApplyToRoot != nil {
+		current.ApplyToRoot = types.BoolValue(*policy.ApplyToRoot)
+	}
+	if !current.Retries.IsNull() && policy.Retries != nil {
+		current.Retries = types.Int64Value(*policy.Retries)
+	}
+	if !current.MaxLoginFailures.IsNull() && policy.MaxLoginFailures != nil {
+		current.MaxLoginFailures = types.Int64Value(*policy.MaxLoginFailures)
+	}
+	if !current.UnlockTime.IsNull() && policy.UnlockTime != nil {
+		current.UnlockTime = types.Int64Value(*policy.UnlockTime)
+	}
+	if !current.RootLockout.IsNull() && policy.RootLockout != nil {
+		current.RootLockout = types.BoolValue(*policy.RootLockout)
+	}
+	if !current.RootUnlockTime.IsNull() && policy.RootUnlockTime != nil {
+		current.RootUnlockTime = types.Int64Value(*policy.RootUnlockTime)
+	}
+	if !current.MaxAge.IsNull() && policy.MaxAge != nil {
+		current.MaxAge = types.Int64Value(*policy.MaxAge)
+	}
+	if !current.MaxLetterRepeat.IsNull() && policy.MaxLetterRepeat != nil {
+		current.MaxLetterRepeat = types.Int64Value(*policy.MaxLetterRepeat)
+	}
+	if !current.MaxSequenceRepeat.IsNull() && policy.MaxSequenceRepeat != nil {
+		current.MaxSequenceRepeat = types.Int64Value(*policy.MaxSequenceRepeat)
+	}
+	if !current.MaxClassRepeat.IsNull() && policy.MaxClassRepeat != nil {
+		current.MaxClassRepeat = types.Int64Value(*policy.MaxClassRepeat)
+	}
+
+	obj, d := types.ObjectValueFrom(ctx, passwordPolicyAttrTypes(), current)
+	diags.Append(d...)
+	if !diags.HasError() {
+		state.PasswordPolicy = obj
+	}
+	return diags
+}
+
+// writePasswordPolicy converts the Terraform model to an API config struct
+// and sends it to the device via PATCH.
+func (r *AuthResource) writePasswordPolicy(ctx context.Context, pp *passwordPolicyModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	config := passwordPolicyModelToConfig(pp, r.client.PlatformVersion)
+	tflog.Debug(ctx, "Writing password policy to device")
+	if err := r.client.SetPasswordPolicy(config); err != nil {
+		diags.AddError("Failed to set password policy", err.Error())
+	}
+	return diags
+}
+
+// passwordPolicyModelToConfig converts a Terraform passwordPolicyModel to
+// an f5osclient PasswordPolicyConfig struct. Only non-null fields are set.
+// The deviceVersion parameter controls which version-specific fields are included.
+func passwordPolicyModelToConfig(pp *passwordPolicyModel, deviceVersion string) *f5os.PasswordPolicyConfig {
+	config := &f5os.PasswordPolicyConfig{}
+
+	if !pp.MinLength.IsNull() && !pp.MinLength.IsUnknown() {
+		v := pp.MinLength.ValueInt64()
+		config.MinLength = &v
+	}
+	if !pp.RequiredNumeric.IsNull() && !pp.RequiredNumeric.IsUnknown() {
+		v := pp.RequiredNumeric.ValueInt64()
+		config.RequiredNumeric = &v
+	}
+	if !pp.RequiredUppercase.IsNull() && !pp.RequiredUppercase.IsUnknown() {
+		v := pp.RequiredUppercase.ValueInt64()
+		config.RequiredUppercase = &v
+	}
+	if !pp.RequiredLowercase.IsNull() && !pp.RequiredLowercase.IsUnknown() {
+		v := pp.RequiredLowercase.ValueInt64()
+		config.RequiredLowercase = &v
+	}
+	if !pp.RequiredSpecial.IsNull() && !pp.RequiredSpecial.IsUnknown() {
+		v := pp.RequiredSpecial.ValueInt64()
+		config.RequiredSpecial = &v
+	}
+	if !pp.RequiredDifferences.IsNull() && !pp.RequiredDifferences.IsUnknown() {
+		v := pp.RequiredDifferences.ValueInt64()
+		config.RequiredDifferences = &v
+	}
+	if !pp.RejectUsername.IsNull() && !pp.RejectUsername.IsUnknown() {
+		v := pp.RejectUsername.ValueBool()
+		config.RejectUsername = &v
+	}
+	if !pp.ApplyToRoot.IsNull() && !pp.ApplyToRoot.IsUnknown() {
+		v := pp.ApplyToRoot.ValueBool()
+		config.ApplyToRoot = &v
+	}
+	if !pp.Retries.IsNull() && !pp.Retries.IsUnknown() {
+		v := pp.Retries.ValueInt64()
+		config.Retries = &v
+	}
+	if !pp.MaxLoginFailures.IsNull() && !pp.MaxLoginFailures.IsUnknown() {
+		v := pp.MaxLoginFailures.ValueInt64()
+		config.MaxLoginFailures = &v
+	}
+	if !pp.UnlockTime.IsNull() && !pp.UnlockTime.IsUnknown() {
+		v := pp.UnlockTime.ValueInt64()
+		config.UnlockTime = &v
+	}
+	if !pp.RootLockout.IsNull() && !pp.RootLockout.IsUnknown() {
+		v := pp.RootLockout.ValueBool()
+		config.RootLockout = &v
+	}
+	if !pp.RootUnlockTime.IsNull() && !pp.RootUnlockTime.IsUnknown() {
+		v := pp.RootUnlockTime.ValueInt64()
+		config.RootUnlockTime = &v
+	}
+	if !pp.MaxAge.IsNull() && !pp.MaxAge.IsUnknown() {
+		v := pp.MaxAge.ValueInt64()
+		config.MaxAge = &v
+	}
+
+	// v1.7+ fields — only include if device supports them
+	if platformVersionAtLeast(deviceVersion, "v1.7") {
+		if !pp.MaxLetterRepeat.IsNull() && !pp.MaxLetterRepeat.IsUnknown() {
+			v := pp.MaxLetterRepeat.ValueInt64()
+			config.MaxLetterRepeat = &v
+		}
+		if !pp.MaxSequenceRepeat.IsNull() && !pp.MaxSequenceRepeat.IsUnknown() {
+			v := pp.MaxSequenceRepeat.ValueInt64()
+			config.MaxSequenceRepeat = &v
+		}
+		if !pp.MaxClassRepeat.IsNull() && !pp.MaxClassRepeat.IsUnknown() {
+			v := pp.MaxClassRepeat.ValueInt64()
+			config.MaxClassRepeat = &v
+		}
+	}
+
+	return config
+}
+
+// passwordPolicyConfigToModel converts an f5osclient PasswordPolicyConfig
+// to a Terraform passwordPolicyModel for populating state.
+// The deviceVersion parameter controls which version-specific fields are populated.
+func passwordPolicyConfigToModel(config *f5os.PasswordPolicyConfig, deviceVersion string) passwordPolicyModel {
+	model := passwordPolicyModel{}
+
+	if config.MinLength != nil {
+		model.MinLength = types.Int64Value(*config.MinLength)
+	} else {
+		model.MinLength = types.Int64Null()
+	}
+	if config.RequiredNumeric != nil {
+		model.RequiredNumeric = types.Int64Value(*config.RequiredNumeric)
+	} else {
+		model.RequiredNumeric = types.Int64Null()
+	}
+	if config.RequiredUppercase != nil {
+		model.RequiredUppercase = types.Int64Value(*config.RequiredUppercase)
+	} else {
+		model.RequiredUppercase = types.Int64Null()
+	}
+	if config.RequiredLowercase != nil {
+		model.RequiredLowercase = types.Int64Value(*config.RequiredLowercase)
+	} else {
+		model.RequiredLowercase = types.Int64Null()
+	}
+	if config.RequiredSpecial != nil {
+		model.RequiredSpecial = types.Int64Value(*config.RequiredSpecial)
+	} else {
+		model.RequiredSpecial = types.Int64Null()
+	}
+	if config.RequiredDifferences != nil {
+		model.RequiredDifferences = types.Int64Value(*config.RequiredDifferences)
+	} else {
+		model.RequiredDifferences = types.Int64Null()
+	}
+	if config.RejectUsername != nil {
+		model.RejectUsername = types.BoolValue(*config.RejectUsername)
+	} else {
+		model.RejectUsername = types.BoolNull()
+	}
+	if config.ApplyToRoot != nil {
+		model.ApplyToRoot = types.BoolValue(*config.ApplyToRoot)
+	} else {
+		model.ApplyToRoot = types.BoolNull()
+	}
+	if config.Retries != nil {
+		model.Retries = types.Int64Value(*config.Retries)
+	} else {
+		model.Retries = types.Int64Null()
+	}
+	if config.MaxLoginFailures != nil {
+		model.MaxLoginFailures = types.Int64Value(*config.MaxLoginFailures)
+	} else {
+		model.MaxLoginFailures = types.Int64Null()
+	}
+	if config.UnlockTime != nil {
+		model.UnlockTime = types.Int64Value(*config.UnlockTime)
+	} else {
+		model.UnlockTime = types.Int64Null()
+	}
+	if config.RootLockout != nil {
+		model.RootLockout = types.BoolValue(*config.RootLockout)
+	} else {
+		model.RootLockout = types.BoolNull()
+	}
+	if config.RootUnlockTime != nil {
+		model.RootUnlockTime = types.Int64Value(*config.RootUnlockTime)
+	} else {
+		model.RootUnlockTime = types.Int64Null()
+	}
+	if config.MaxAge != nil {
+		model.MaxAge = types.Int64Value(*config.MaxAge)
+	} else {
+		model.MaxAge = types.Int64Null()
+	}
+
+	// v1.7+ fields — only populate if device supports them
+	if platformVersionAtLeast(deviceVersion, "v1.7") {
+		if config.MaxLetterRepeat != nil {
+			model.MaxLetterRepeat = types.Int64Value(*config.MaxLetterRepeat)
+		} else {
+			model.MaxLetterRepeat = types.Int64Null()
+		}
+		if config.MaxSequenceRepeat != nil {
+			model.MaxSequenceRepeat = types.Int64Value(*config.MaxSequenceRepeat)
+		} else {
+			model.MaxSequenceRepeat = types.Int64Null()
+		}
+		if config.MaxClassRepeat != nil {
+			model.MaxClassRepeat = types.Int64Value(*config.MaxClassRepeat)
+		} else {
+			model.MaxClassRepeat = types.Int64Null()
+		}
+	} else {
+		// Pre-v1.7: these fields don't exist on the device
+		model.MaxLetterRepeat = types.Int64Null()
+		model.MaxSequenceRepeat = types.Int64Null()
+		model.MaxClassRepeat = types.Int64Null()
+	}
+
+	return model
 }

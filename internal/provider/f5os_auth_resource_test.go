@@ -86,18 +86,27 @@ func TestAuthResourceUnit_Models(t *testing.T) {
 	model.AuthOrder = authOrderList
 	assert.False(t, model.AuthOrder.IsNull(), "AuthOrder should not be null")
 
-	// Test PasswordPolicy field
+	// Test PasswordPolicy field with new schema attributes
 	passwordPolicyAttrs := map[string]attr.Value{
-		"min_length": types.Int64Value(8),
-		"max_length": types.Int64Value(32),
+		"min_length":           types.Int64Value(8),
+		"required_numeric":     types.Int64Value(1),
+		"required_uppercase":   types.Int64Value(1),
+		"required_lowercase":   types.Int64Value(1),
+		"required_special":     types.Int64Value(1),
+		"required_differences": types.Int64Value(5),
+		"reject_username":      types.BoolValue(true),
+		"apply_to_root":        types.BoolValue(false),
+		"retries":              types.Int64Value(3),
+		"max_login_failures":   types.Int64Value(5),
+		"unlock_time":          types.Int64Value(300),
+		"root_lockout":         types.BoolValue(true),
+		"root_unlock_time":     types.Int64Value(600),
+		"max_age":              types.Int64Value(90),
+		"max_letter_repeat":    types.Int64Null(),
+		"max_sequence_repeat":  types.Int64Null(),
+		"max_class_repeat":     types.Int64Null(),
 	}
-	passwordPolicyType := types.ObjectType{
-		AttrTypes: map[string]attr.Type{
-			"min_length": types.Int64Type,
-			"max_length": types.Int64Type,
-		},
-	}
-	passwordPolicyObj, _ := types.ObjectValue(passwordPolicyType.AttrTypes, passwordPolicyAttrs)
+	passwordPolicyObj, _ := types.ObjectValue(passwordPolicyAttrTypes(), passwordPolicyAttrs)
 	model.PasswordPolicy = passwordPolicyObj
 	assert.False(t, model.PasswordPolicy.IsNull(), "PasswordPolicy should not be null")
 }
@@ -1817,3 +1826,709 @@ resource "f5os_auth" "test" {
   ]
 }
 `
+
+// ---------------------------------------------------------------------------
+// Password Policy Unit Tests
+// ---------------------------------------------------------------------------
+
+func TestAuthResourceUnit_PasswordPolicyModel(t *testing.T) {
+	// Test that the passwordPolicyModel struct can hold all 17 fields
+	model := passwordPolicyModel{
+		MinLength:           types.Int64Value(8),
+		RequiredNumeric:     types.Int64Value(1),
+		RequiredUppercase:   types.Int64Value(1),
+		RequiredLowercase:   types.Int64Value(1),
+		RequiredSpecial:     types.Int64Value(1),
+		RequiredDifferences: types.Int64Value(5),
+		RejectUsername:      types.BoolValue(true),
+		ApplyToRoot:         types.BoolValue(false),
+		Retries:             types.Int64Value(3),
+		MaxLoginFailures:    types.Int64Value(5),
+		UnlockTime:          types.Int64Value(300),
+		RootLockout:         types.BoolValue(true),
+		RootUnlockTime:      types.Int64Value(600),
+		MaxAge:              types.Int64Value(90),
+		// v1.7+ fields
+		MaxLetterRepeat:   types.Int64Value(3),
+		MaxSequenceRepeat: types.Int64Value(2),
+		MaxClassRepeat:    types.Int64Value(4),
+	}
+
+	assert.Equal(t, int64(8), model.MinLength.ValueInt64())
+	assert.Equal(t, int64(1), model.RequiredNumeric.ValueInt64())
+	assert.Equal(t, int64(1), model.RequiredUppercase.ValueInt64())
+	assert.Equal(t, int64(1), model.RequiredLowercase.ValueInt64())
+	assert.Equal(t, int64(1), model.RequiredSpecial.ValueInt64())
+	assert.Equal(t, int64(5), model.RequiredDifferences.ValueInt64())
+	assert.True(t, model.RejectUsername.ValueBool())
+	assert.False(t, model.ApplyToRoot.ValueBool())
+	assert.Equal(t, int64(3), model.Retries.ValueInt64())
+	assert.Equal(t, int64(5), model.MaxLoginFailures.ValueInt64())
+	assert.Equal(t, int64(300), model.UnlockTime.ValueInt64())
+	assert.True(t, model.RootLockout.ValueBool())
+	assert.Equal(t, int64(600), model.RootUnlockTime.ValueInt64())
+	assert.Equal(t, int64(90), model.MaxAge.ValueInt64())
+	assert.Equal(t, int64(3), model.MaxLetterRepeat.ValueInt64())
+	assert.Equal(t, int64(2), model.MaxSequenceRepeat.ValueInt64())
+	assert.Equal(t, int64(4), model.MaxClassRepeat.ValueInt64())
+}
+
+func TestPasswordPolicyModelToConfig(t *testing.T) {
+	model := &passwordPolicyModel{
+		MinLength:           types.Int64Value(10),
+		RequiredNumeric:     types.Int64Value(2),
+		RequiredUppercase:   types.Int64Value(1),
+		RequiredLowercase:   types.Int64Value(1),
+		RequiredSpecial:     types.Int64Value(1),
+		RequiredDifferences: types.Int64Value(6),
+		RejectUsername:      types.BoolValue(true),
+		ApplyToRoot:         types.BoolValue(false),
+		Retries:             types.Int64Value(5),
+		MaxLoginFailures:    types.Int64Value(10),
+		UnlockTime:          types.Int64Value(600),
+		RootLockout:         types.BoolValue(true),
+		RootUnlockTime:      types.Int64Value(900),
+		MaxAge:              types.Int64Value(180),
+		MaxLetterRepeat:     types.Int64Value(3),
+		MaxSequenceRepeat:   types.Int64Value(2),
+		MaxClassRepeat:      types.Int64Value(4),
+	}
+
+	// Test v1.7+ (includes v1.7+ fields)
+	configV17 := passwordPolicyModelToConfig(model, "1.7.0")
+	assert.NotNil(t, configV17)
+	assert.Equal(t, int64(10), *configV17.MinLength)
+	assert.Equal(t, int64(2), *configV17.RequiredNumeric)
+	assert.Equal(t, int64(1), *configV17.RequiredUppercase)
+	assert.Equal(t, int64(1), *configV17.RequiredLowercase)
+	assert.Equal(t, int64(1), *configV17.RequiredSpecial)
+	assert.Equal(t, int64(6), *configV17.RequiredDifferences)
+	assert.True(t, *configV17.RejectUsername)
+	assert.False(t, *configV17.ApplyToRoot)
+	assert.Equal(t, int64(5), *configV17.Retries)
+	assert.Equal(t, int64(10), *configV17.MaxLoginFailures)
+	assert.Equal(t, int64(600), *configV17.UnlockTime)
+	assert.True(t, *configV17.RootLockout)
+	assert.Equal(t, int64(900), *configV17.RootUnlockTime)
+	assert.Equal(t, int64(180), *configV17.MaxAge)
+	assert.Equal(t, int64(3), *configV17.MaxLetterRepeat)
+	assert.Equal(t, int64(2), *configV17.MaxSequenceRepeat)
+	assert.Equal(t, int64(4), *configV17.MaxClassRepeat)
+
+	// Test base case (omits v1.7+ fields)
+	config := passwordPolicyModelToConfig(model, "1.5.0")
+	assert.NotNil(t, config)
+	assert.Equal(t, int64(10), *config.MinLength)
+	assert.Nil(t, config.MaxLetterRepeat, "v1.7+ fields should be nil on base config")
+	assert.Nil(t, config.MaxSequenceRepeat, "v1.7+ fields should be nil on base config")
+	assert.Nil(t, config.MaxClassRepeat, "v1.7+ fields should be nil on base config")
+}
+
+func TestPasswordPolicyConfigToModel(t *testing.T) {
+	// Setup API config struct
+	minLen := int64(8)
+	reqNum := int64(1)
+	reqUpper := int64(1)
+	reqLower := int64(1)
+	reqSpecial := int64(1)
+	reqDiff := int64(5)
+	rejectUser := true
+	applyRoot := false
+	retries := int64(3)
+	maxFail := int64(5)
+	unlockTime := int64(300)
+	rootLockout := true
+	rootUnlock := int64(600)
+	maxAge := int64(90)
+	maxLetterRep := int64(3)
+	maxSeqRep := int64(2)
+	maxClassRep := int64(4)
+
+	config := &f5os.PasswordPolicyConfig{
+		MinLength:           &minLen,
+		RequiredNumeric:     &reqNum,
+		RequiredUppercase:   &reqUpper,
+		RequiredLowercase:   &reqLower,
+		RequiredSpecial:     &reqSpecial,
+		RequiredDifferences: &reqDiff,
+		RejectUsername:      &rejectUser,
+		ApplyToRoot:         &applyRoot,
+		Retries:             &retries,
+		MaxLoginFailures:    &maxFail,
+		UnlockTime:          &unlockTime,
+		RootLockout:         &rootLockout,
+		RootUnlockTime:      &rootUnlock,
+		MaxAge:              &maxAge,
+		MaxLetterRepeat:     &maxLetterRep,
+		MaxSequenceRepeat:   &maxSeqRep,
+		MaxClassRepeat:      &maxClassRep,
+	}
+
+	// Test v1.7+
+	modelV17 := passwordPolicyConfigToModel(config, "1.7.0")
+	assert.Equal(t, int64(8), modelV17.MinLength.ValueInt64())
+	assert.Equal(t, int64(1), modelV17.RequiredNumeric.ValueInt64())
+	assert.Equal(t, int64(1), modelV17.RequiredUppercase.ValueInt64())
+	assert.Equal(t, int64(1), modelV17.RequiredLowercase.ValueInt64())
+	assert.Equal(t, int64(1), modelV17.RequiredSpecial.ValueInt64())
+	assert.Equal(t, int64(5), modelV17.RequiredDifferences.ValueInt64())
+	assert.True(t, modelV17.RejectUsername.ValueBool())
+	assert.False(t, modelV17.ApplyToRoot.ValueBool())
+	assert.Equal(t, int64(3), modelV17.Retries.ValueInt64())
+	assert.Equal(t, int64(5), modelV17.MaxLoginFailures.ValueInt64())
+	assert.Equal(t, int64(300), modelV17.UnlockTime.ValueInt64())
+	assert.True(t, modelV17.RootLockout.ValueBool())
+	assert.Equal(t, int64(600), modelV17.RootUnlockTime.ValueInt64())
+	assert.Equal(t, int64(90), modelV17.MaxAge.ValueInt64())
+	assert.Equal(t, int64(3), modelV17.MaxLetterRepeat.ValueInt64())
+	assert.Equal(t, int64(2), modelV17.MaxSequenceRepeat.ValueInt64())
+	assert.Equal(t, int64(4), modelV17.MaxClassRepeat.ValueInt64())
+
+	// Test base case (v1.7+ fields should be null)
+	model := passwordPolicyConfigToModel(config, "1.5.0")
+	assert.Equal(t, int64(8), model.MinLength.ValueInt64())
+	assert.True(t, model.MaxLetterRepeat.IsNull(), "v1.7+ fields should be null on base config")
+	assert.True(t, model.MaxSequenceRepeat.IsNull(), "v1.7+ fields should be null on base config")
+	assert.True(t, model.MaxClassRepeat.IsNull(), "v1.7+ fields should be null on base config")
+}
+
+func TestPasswordPolicyAttrTypes(t *testing.T) {
+	attrTypes := passwordPolicyAttrTypes()
+	// Should have exactly 17 fields
+	assert.Equal(t, 17, len(attrTypes), "passwordPolicyAttrTypes should return 17 attribute types")
+
+	// Check all expected keys exist
+	expectedKeys := []string{
+		"min_length", "required_numeric", "required_uppercase", "required_lowercase",
+		"required_special", "required_differences", "reject_username", "apply_to_root",
+		"retries", "max_login_failures", "unlock_time", "root_lockout",
+		"root_unlock_time", "max_age", "max_letter_repeat", "max_sequence_repeat",
+		"max_class_repeat",
+	}
+	for _, key := range expectedKeys {
+		_, exists := attrTypes[key]
+		assert.True(t, exists, "attribute type %q should exist", key)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Password Policy Mocked HTTP Tests
+// ---------------------------------------------------------------------------
+
+// setupMockServerWithPasswordPolicy creates a mock server that handles
+// password policy endpoints in addition to auth_order and roles.
+func setupMockServerWithPasswordPolicy() *httptest.Server {
+	currentPolicy := map[string]interface{}{
+		"min-length":           6,
+		"required-numeric":     0,
+		"required-uppercase":   0,
+		"required-lowercase":   0,
+		"required-special":     0,
+		"required-differences": 8,
+		"reject-username":      false,
+		"apply-to-root":        true,
+		"retries":              3,
+		"max-login-failures":   10,
+		"unlock-time":          60,
+		"root-lockout":         true,
+		"root-unlock-time":     60,
+		"max-age":              0,
+	}
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/aaa/f5-openconfig-aaa-password-policy:password-policy/config"):
+			switch r.Method {
+			case "GET":
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				resp := map[string]interface{}{
+					"f5-openconfig-aaa-password-policy:config": currentPolicy,
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+			case "PATCH":
+				var payload map[string]map[string]interface{}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if config, ok := payload["f5-openconfig-aaa-password-policy:config"]; ok {
+					for k, v := range config {
+						currentPolicy[k] = v
+					}
+				}
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+		case strings.HasSuffix(r.URL.Path, "/aaa/authentication/config"):
+			switch r.Method {
+			case "GET":
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = fmt.Fprint(w, `{
+					"openconfig-system:config": {
+						"authentication-method": ["openconfig-aaa-types:LOCAL", "openconfig-aaa-types:RADIUS_ALL"]
+					}
+				}`)
+			case "PUT", "PATCH":
+				w.WriteHeader(http.StatusNoContent)
+			case "DELETE":
+				w.WriteHeader(http.StatusNoContent)
+			}
+		case strings.HasSuffix(r.URL.Path, "/aaa/authentication/f5-system-aaa:roles"):
+			switch r.Method {
+			case "GET":
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = fmt.Fprint(w, `{
+					"f5-system-aaa:roles": {
+						"role": [
+							{"rolename": "admin", "config": {"rolename": "admin", "gid": 9000, "remote-gid": "-"}},
+							{"rolename": "operator", "config": {"rolename": "operator", "gid": 9001, "remote-gid": 9001}}
+						]
+					}
+				}`)
+			case "PUT", "PATCH":
+				w.WriteHeader(http.StatusNoContent)
+			case "DELETE":
+				w.WriteHeader(http.StatusNoContent)
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func TestAuthResourceMocked_PasswordPolicyClientMethods(t *testing.T) {
+	server := setupMockServerWithPasswordPolicy()
+	defer server.Close()
+
+	config := &f5os.F5osConfig{
+		Host:             server.URL,
+		User:             "test",
+		Password:         "test",
+		DisableSSLVerify: true,
+	}
+
+	client, err := f5os.NewSession(config)
+	assert.NoError(t, err, "Client initialization should not fail")
+	assert.NotNil(t, client, "Client should not be nil")
+
+	// Test GetPasswordPolicy method
+	t.Run("GetPasswordPolicy", func(t *testing.T) {
+		result, err := client.GetPasswordPolicy()
+		assert.NoError(t, err, "GetPasswordPolicy should not return error")
+		assert.NotNil(t, result, "GetPasswordPolicy should return result")
+		assert.NotNil(t, result.MinLength, "MinLength should be set")
+		assert.Equal(t, int64(6), *result.MinLength, "MinLength should be 6")
+	})
+
+	// Test SetPasswordPolicy method
+	t.Run("SetPasswordPolicy", func(t *testing.T) {
+		minLen := int64(10)
+		reqNum := int64(2)
+		newPolicy := &f5os.PasswordPolicyConfig{
+			MinLength:       &minLen,
+			RequiredNumeric: &reqNum,
+		}
+		err := client.SetPasswordPolicy(newPolicy)
+		assert.NoError(t, err, "SetPasswordPolicy should not return error")
+
+		// Verify the change took effect
+		result, err := client.GetPasswordPolicy()
+		assert.NoError(t, err, "GetPasswordPolicy after set should not fail")
+		assert.Equal(t, int64(10), *result.MinLength, "MinLength should be updated to 10")
+	})
+}
+
+// mockedPasswordPolicyTestParams holds the version-specific parts of a
+// mocked password policy lifecycle test.
+type mockedPasswordPolicyTestParams struct {
+	fixture string                     // path to the full /aaa fixture
+	version string                     // platform version ("" for default/pre-v1.7)
+	config  string                     // HCL config for the test step
+	checks  []tfresource.TestCheckFunc // Terraform state checks
+}
+
+// runMockedPasswordPolicyTest sets up a mock server with the given fixture
+// and version, then runs a Create/Read/Delete lifecycle test.
+func runMockedPasswordPolicyTest(t *testing.T, params mockedPasswordPolicyTestParams) {
+	t.Helper()
+
+	// Load initial policy from fixture
+	var fixture map[string]interface{}
+	if err := json.Unmarshal(loadFixtureBytes(params.fixture), &fixture); err != nil {
+		t.Fatalf("failed to load fixture %s: %v", params.fixture, err)
+	}
+	aaa := fixture["openconfig-system:aaa"].(map[string]interface{})
+	pp := aaa["f5-openconfig-aaa-password-policy:password-policy"].(map[string]interface{})
+	originalPolicy := pp["config"].(map[string]interface{})
+	currentPolicy := make(map[string]interface{})
+	for k, v := range originalPolicy {
+		currentPolicy[k] = v
+	}
+
+	testAccPreUnitCheck(t)
+
+	if params.version != "" {
+		setupMockPlatformVersion(mux, params.version)
+	}
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString(params.fixture))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"openconfig-system:config":{"authentication-method":["openconfig-aaa-types:LOCAL"]}}`)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config/authentication-method", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-openconfig-aaa-password-policy:password-policy/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/yang-data+json")
+			w.WriteHeader(http.StatusOK)
+			resp := map[string]interface{}{
+				"f5-openconfig-aaa-password-policy:config": currentPolicy,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case "PATCH":
+			var payload map[string]map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if config, ok := payload["f5-openconfig-aaa-password-policy:config"]; ok {
+				for k, v := range config {
+					currentPolicy[k] = v
+				}
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			{
+				Config: params.config,
+				Check:  tfresource.ComposeAggregateTestCheckFunc(params.checks...),
+			},
+		},
+	})
+}
+
+func TestAuthResourceMocked_PasswordPolicyCreateReadDelete(t *testing.T) {
+	runMockedPasswordPolicyTest(t, mockedPasswordPolicyTestParams{
+		fixture: "./fixtures/f5os_auth.json",
+		config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  password_policy = {
+    min_length         = 10
+    required_numeric   = 2
+    required_uppercase = 1
+    required_lowercase = 1
+    required_special   = 1
+    reject_username    = true
+    max_login_failures = 10
+    unlock_time        = 300
+  }
+}
+`,
+		checks: []tfresource.TestCheckFunc{
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.min_length", "10"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.required_numeric", "2"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.required_uppercase", "1"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.required_lowercase", "1"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.required_special", "1"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.reject_username", "true"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.max_login_failures", "10"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.unlock_time", "300"),
+		},
+	})
+}
+
+func TestAuthResourceMocked_PasswordPolicyV17CreateReadDelete(t *testing.T) {
+	runMockedPasswordPolicyTest(t, mockedPasswordPolicyTestParams{
+		fixture: "./fixtures/f5os_auth_v17.json",
+		version: "1.7.0",
+		config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  password_policy = {
+    min_length          = 10
+    max_letter_repeat   = 4
+    max_sequence_repeat = 3
+    max_class_repeat    = 2
+  }
+}
+`,
+		checks: []tfresource.TestCheckFunc{
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.min_length", "10"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.max_letter_repeat", "4"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.max_sequence_repeat", "3"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.max_class_repeat", "2"),
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Password Policy Acceptance Tests
+// ---------------------------------------------------------------------------
+
+// newPasswordPolicyClientFromEnv creates a fresh f5osclient from environment variables.
+// Used by password policy tests to verify device state independently.
+func newPasswordPolicyClientFromEnv() (*f5os.F5os, error) {
+	return newAuthClientFromEnv() // Reuse existing helper
+}
+
+// testAccCheckPasswordPolicyApplied queries the device directly to verify
+// password policy fields match expected values.
+func testAccCheckPasswordPolicyApplied(expected *f5os.PasswordPolicyConfig) tfresource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newPasswordPolicyClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create f5os client: %w", err)
+		}
+		policy, err := client.GetPasswordPolicy()
+		if err != nil {
+			return fmt.Errorf("failed to read password policy from device: %w", err)
+		}
+		// Check min-length (always present)
+		if expected.MinLength != nil {
+			if policy.MinLength == nil || *policy.MinLength != *expected.MinLength {
+				actual := "<nil>"
+				if policy.MinLength != nil {
+					actual = fmt.Sprintf("%d", *policy.MinLength)
+				}
+				return fmt.Errorf("min-length mismatch: expected %d, got %s", *expected.MinLength, actual)
+			}
+		}
+		// Check v1.7+ fields when expected
+		if expected.MaxLetterRepeat != nil {
+			if policy.MaxLetterRepeat == nil || *policy.MaxLetterRepeat != *expected.MaxLetterRepeat {
+				actual := "<nil>"
+				if policy.MaxLetterRepeat != nil {
+					actual = fmt.Sprintf("%d", *policy.MaxLetterRepeat)
+				}
+				return fmt.Errorf("max-letter-repeat mismatch: expected %d, got %s", *expected.MaxLetterRepeat, actual)
+			}
+		}
+		if expected.MaxSequenceRepeat != nil {
+			if policy.MaxSequenceRepeat == nil || *policy.MaxSequenceRepeat != *expected.MaxSequenceRepeat {
+				actual := "<nil>"
+				if policy.MaxSequenceRepeat != nil {
+					actual = fmt.Sprintf("%d", *policy.MaxSequenceRepeat)
+				}
+				return fmt.Errorf("max-sequence-repeat mismatch: expected %d, got %s", *expected.MaxSequenceRepeat, actual)
+			}
+		}
+		if expected.MaxClassRepeat != nil {
+			if policy.MaxClassRepeat == nil || *policy.MaxClassRepeat != *expected.MaxClassRepeat {
+				actual := "<nil>"
+				if policy.MaxClassRepeat != nil {
+					actual = fmt.Sprintf("%d", *policy.MaxClassRepeat)
+				}
+				return fmt.Errorf("max-class-repeat mismatch: expected %d, got %s", *expected.MaxClassRepeat, actual)
+			}
+		}
+		return nil
+	}
+}
+
+// TestAccAuthResourcePasswordPolicy tests the full lifecycle of password_policy:
+// Create, Import, Update, Destroy with restore.
+//
+// Automatically adapts to the device version:
+//   - Pre-v1.7: tests the 14 core fields only
+//   - v1.7+: also tests max_letter_repeat, max_sequence_repeat, max_class_repeat
+//
+// Safety:
+//   - Uses reasonable password policy values that won't lock users out
+//   - Restores original password policy on destroy
+//   - Uses t.Cleanup to restore baseline even if test fails
+func TestAccAuthResourcePasswordPolicy(t *testing.T) {
+	client, err := newPasswordPolicyClientFromEnv()
+	if err != nil {
+		t.Skipf("Cannot create f5os client: %v", err)
+	}
+
+	deviceVersion := client.PlatformVersion
+	t.Logf("Device version: %s", deviceVersion)
+
+	// Capture the true device baseline before we touch anything
+	trueBaseline, err := client.GetPasswordPolicy()
+	if err != nil {
+		t.Fatalf("Failed to read true device baseline password policy: %v", err)
+	}
+	t.Logf("True device baseline min_length: %v", *trueBaseline.MinLength)
+
+	// Cleanup: restore the true baseline regardless of test outcome
+	t.Cleanup(func() {
+		cleanupClient, err := newPasswordPolicyClientFromEnv()
+		if err != nil {
+			t.Logf("WARNING: cleanup failed to create client: %v", err)
+			return
+		}
+		if err := cleanupClient.SetPasswordPolicy(trueBaseline); err != nil {
+			t.Logf("WARNING: cleanup failed to restore password policy: %v", err)
+		} else {
+			t.Logf("Cleanup: restored password policy to baseline (min_length=%v)", *trueBaseline.MinLength)
+		}
+	})
+
+	// Build version-appropriate configs and checks
+	createConfig, createChecks, createExpected := testAccPasswordPolicyCreateParams(deviceVersion)
+	updateConfig, updateChecks, updateExpected := testAccPasswordPolicyUpdateParams(deviceVersion)
+
+	tfresource.Test(t, tfresource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			// Step 1: Create with password_policy
+			{
+				Config: createConfig,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					append(createChecks, testAccCheckPasswordPolicyApplied(createExpected))...,
+				),
+			},
+			// Step 2: Import state
+			{
+				ResourceName:      "f5os_auth.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"remote_roles",    // import reads all device roles, not just user-declared
+					"password_policy", // import reads all device fields, not just user-declared
+				},
+			},
+			// Step 3: Update password_policy
+			{
+				Config: updateConfig,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					append(updateChecks, testAccCheckPasswordPolicyApplied(updateExpected))...,
+				),
+			},
+			// Step 4: Destroy is automatic — cleanup restores baseline
+		},
+	})
+}
+
+// testAccPasswordPolicyCreateParams returns the HCL config, Terraform state
+// checks, and expected API values for the Create step, adapted for the device version.
+func testAccPasswordPolicyCreateParams(deviceVersion string) (string, []tfresource.TestCheckFunc, *f5os.PasswordPolicyConfig) {
+	minLen := int64(10)
+	expected := &f5os.PasswordPolicyConfig{MinLength: &minLen}
+
+	checks := []tfresource.TestCheckFunc{
+		tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+		tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.1", "radius"),
+		tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.min_length", "10"),
+		tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.required_numeric", "2"),
+		tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.reject_username", "true"),
+	}
+
+	config := `
+resource "f5os_auth" "test" {
+  auth_order = ["local", "radius"]
+
+  password_policy = {
+    min_length         = 10
+    required_numeric   = 2
+    required_uppercase = 1
+    required_lowercase = 1
+    required_special   = 1
+    reject_username    = true
+    max_login_failures = 10
+    unlock_time        = 300`
+
+	// v1.7+ added max-letter-repeat, max-sequence-repeat, max-class-repeat
+	if platformVersionAtLeast(deviceVersion, "v1.7") {
+		config += `
+    max_letter_repeat   = 4
+    max_sequence_repeat = 3
+    max_class_repeat    = 2`
+
+		checks = append(checks,
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.max_letter_repeat", "4"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.max_sequence_repeat", "3"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.max_class_repeat", "2"),
+		)
+		letterRep, seqRep, classRep := int64(4), int64(3), int64(2)
+		expected.MaxLetterRepeat = &letterRep
+		expected.MaxSequenceRepeat = &seqRep
+		expected.MaxClassRepeat = &classRep
+	}
+
+	config += `
+  }
+}
+`
+	return config, checks, expected
+}
+
+// testAccPasswordPolicyUpdateParams returns the HCL config, Terraform state
+// checks, and expected API values for the Update step, adapted for the device version.
+func testAccPasswordPolicyUpdateParams(deviceVersion string) (string, []tfresource.TestCheckFunc, *f5os.PasswordPolicyConfig) {
+	minLen := int64(12)
+	expected := &f5os.PasswordPolicyConfig{MinLength: &minLen}
+
+	checks := []tfresource.TestCheckFunc{
+		tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.min_length", "12"),
+		tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.required_numeric", "3"),
+		tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.max_login_failures", "5"),
+	}
+
+	config := `
+resource "f5os_auth" "test" {
+  auth_order = ["local", "radius"]
+
+  password_policy = {
+    min_length         = 12
+    required_numeric   = 3
+    required_uppercase = 2
+    required_lowercase = 2
+    required_special   = 1
+    reject_username    = true
+    max_login_failures = 5
+    unlock_time        = 600`
+
+	// v1.7+ added max-letter-repeat, max-sequence-repeat, max-class-repeat
+	if platformVersionAtLeast(deviceVersion, "v1.7") {
+		config += `
+    max_letter_repeat   = 5
+    max_sequence_repeat = 4
+    max_class_repeat    = 3`
+
+		checks = append(checks,
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.max_letter_repeat", "5"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.max_sequence_repeat", "4"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.max_class_repeat", "3"),
+		)
+		letterRep, seqRep, classRep := int64(5), int64(4), int64(3)
+		expected.MaxLetterRepeat = &letterRep
+		expected.MaxSequenceRepeat = &seqRep
+		expected.MaxClassRepeat = &classRep
+	}
+
+	config += `
+  }
+}
+`
+	return config, checks, expected
+}
