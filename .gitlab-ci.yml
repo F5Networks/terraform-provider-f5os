@@ -94,8 +94,8 @@ unit-tests:
     - |
       COVERAGE=$(go tool cover -func=cover.out | tail -1 | awk '{print $NF}' | tr -d '%')
       echo "coverage: ${COVERAGE}%"
-      if awk "BEGIN {exit !(${COVERAGE} < 39)}"; then
-        echo "FAIL: coverage ${COVERAGE}% is below minimum threshold of 39%"
+      if awk "BEGIN {exit !(${COVERAGE} < 46)}"; then
+        echo "FAIL: coverage ${COVERAGE}% is below minimum threshold of 46%"
         exit 1
       fi
   coverage: '/coverage: \d+\.\d+/'
