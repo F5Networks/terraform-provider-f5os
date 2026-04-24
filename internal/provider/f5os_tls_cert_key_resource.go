@@ -11,7 +11,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
-	"golang.org/x/mod/semver"
 )
 
 var _ resource.Resource = &PartitionCertKeyResource{}
@@ -147,8 +146,7 @@ func (r *PartitionCertKeyResource) Create(ctx context.Context, req resource.Crea
 		return
 	}
 
-	version := "v" + r.client.PlatformVersion
-	if semver.Compare(semver.MajorMinor(version), "v1.8") >= 0 {
+	if platformVersionAtLeast(r.client.PlatformVersion, "v1.8") {
 		if data.SubjectAlternativeName.IsNull() || data.SubjectAlternativeName.IsUnknown() {
 			resp.Diagnostics.AddError("subject_alternative_name is required for platform version v1.8 and above", "")
 			return
@@ -192,9 +190,7 @@ func (r *PartitionCertKeyResource) Update(ctx context.Context, req resource.Upda
 		return
 	}
 
-	version := r.client.PlatformVersion
-
-	if semver.Compare(semver.MajorMinor(version), "v1.8") >= 0 {
+	if platformVersionAtLeast(r.client.PlatformVersion, "v1.8") {
 		if data.SubjectAlternativeName.IsNull() || data.SubjectAlternativeName.IsUnknown() {
 			resp.Diagnostics.AddError("subject_alternative_name is required for platform version v1.8 and above", "")
 			return

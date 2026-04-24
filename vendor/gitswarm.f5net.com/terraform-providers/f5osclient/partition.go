@@ -823,12 +823,13 @@ func (c *F5os) GetSnmpMib() ([]byte, error) {
 
 // Auth/AAA related constants and methods
 const (
-	uriAAA              = "/openconfig-system:system/aaa/authentication"
-	uriAAAConfig        = "/openconfig-system:system/aaa/authentication/config"
-	uriAAAAuthMethod    = "/openconfig-system:system/aaa/authentication/config/authentication-method"
-	uriAAARoles         = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles"
-	uriAAARoleConfig    = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config"
-	uriAAARoleRemoteGID = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config/f5-system-aaa:remote-gid"
+	uriAAA               = "/openconfig-system:system/aaa/authentication"
+	uriAAAConfig         = "/openconfig-system:system/aaa/authentication/config"
+	uriAAAAuthMethod     = "/openconfig-system:system/aaa/authentication/config/authentication-method"
+	uriAAARoles          = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles"
+	uriAAARoleConfig     = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config"
+	uriAAARoleRemoteGID  = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config/f5-system-aaa:remote-gid"
+	uriAAAPasswordPolicy = "/openconfig-system:system/aaa/f5-openconfig-aaa-password-policy:password-policy/config"
 )
 
 type authOrderPayload struct {
@@ -1012,4 +1013,68 @@ func (c *F5os) GetRoles() (map[string]int, error) {
 		}
 	}
 	return result, nil
+}
+
+// PasswordPolicyConfig represents the password policy settings.
+// Pointer fields allow distinguishing "not set" from zero values.
+type PasswordPolicyConfig struct {
+	MinLength           *int64 `json:"min-length,omitempty"`
+	RequiredNumeric     *int64 `json:"required-numeric,omitempty"`
+	RequiredUppercase   *int64 `json:"required-uppercase,omitempty"`
+	RequiredLowercase   *int64 `json:"required-lowercase,omitempty"`
+	RequiredSpecial     *int64 `json:"required-special,omitempty"`
+	RequiredDifferences *int64 `json:"required-differences,omitempty"`
+	RejectUsername      *bool  `json:"reject-username,omitempty"`
+	ApplyToRoot         *bool  `json:"apply-to-root,omitempty"`
+	Retries             *int64 `json:"retries,omitempty"`
+	MaxLoginFailures    *int64 `json:"max-login-failures,omitempty"`
+	UnlockTime          *int64 `json:"unlock-time,omitempty"`
+	RootLockout         *bool  `json:"root-lockout,omitempty"`
+	RootUnlockTime      *int64 `json:"root-unlock-time,omitempty"`
+	MaxAge              *int64 `json:"max-age,omitempty"`
+	// v1.7+ only fields
+	MaxLetterRepeat   *int64 `json:"max-letter-repeat,omitempty"`
+	MaxSequenceRepeat *int64 `json:"max-sequence-repeat,omitempty"`
+	MaxClassRepeat    *int64 `json:"max-class-repeat,omitempty"`
+}
+
+// passwordPolicyResponse is the API response wrapper for password policy.
+type passwordPolicyResponse struct {
+	Config PasswordPolicyConfig `json:"f5-openconfig-aaa-password-policy:config"`
+}
+
+// passwordPolicyPayload is the API request wrapper for password policy.
+type passwordPolicyPayload struct {
+	Config PasswordPolicyConfig `json:"f5-openconfig-aaa-password-policy:config"`
+}
+
+// GetPasswordPolicy reads the current password policy config from the device.
+func (c *F5os) GetPasswordPolicy() (*PasswordPolicyConfig, error) {
+	resp, err := c.GetRequest(uriAAAPasswordPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("GET password policy failed: %w", err)
+	}
+
+	var parsed passwordPolicyResponse
+	if err := json.Unmarshal(resp, &parsed); err != nil {
+		return nil, fmt.Errorf("invalid JSON for password policy: %w", err)
+	}
+
+	return &parsed.Config, nil
+}
+
+// SetPasswordPolicy updates password policy config on the device using PATCH.
+// Only fields with non-nil values are sent.
+func (c *F5os) SetPasswordPolicy(config *PasswordPolicyConfig) error {
+	payload := passwordPolicyPayload{Config: *config}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal password policy payload: %w", err)
+	}
+
+	_, err = c.PatchRequest(uriAAAPasswordPolicy, body)
+	if err != nil {
+		return fmt.Errorf("PATCH password policy failed: %w", err)
+	}
+	return nil
 }

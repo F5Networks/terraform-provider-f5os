@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -83,4 +84,27 @@ func loadFixtureBytes(path string) []byte {
 // loadFixtureString returns the entire contents of the given file as a string
 func loadFixtureString(path string) string {
 	return string(loadFixtureBytes(path))
+}
+
+// setupMockPlatformVersion registers handlers on the shared mux that make
+// NewSession detect an rSeries platform running the specified F5OS version.
+// Call this after testAccPreUnitCheck(t) and before registering test-specific
+// handlers. Any mocked test that needs version-gated behavior (e.g., v1.7+
+// password policy fields, v1.8+ TLS SAN) should use this helper.
+func setupMockPlatformVersion(m *http.ServeMux, version string) {
+	// Handler 1: Return an rSeries platform component list so
+	// setPlatformType() detects "rSeries Platform" and calls setPlatformVersion().
+	m.HandleFunc("/restconf/data/openconfig-platform:components/component", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_components_rseries.json"))
+	})
+
+	// Handler 2: Return the specified version so setPlatformVersion() sets
+	// client.PlatformVersion to the value we want.
+	m.HandleFunc("/restconf/data/openconfig-system:system/f5-system-image:image/state/install", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-system-image:install":{"install-os-version":"%s","install-status":"success"}}`, version)
+	})
 }
