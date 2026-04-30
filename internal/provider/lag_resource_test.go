@@ -79,7 +79,7 @@ func TestAccLagInterfaceCreateTC2Resource(t *testing.T) {
 	})
 }
 
-func TestAccLagInterfaceCreateUnitTC3Resource(t *testing.T) {
+func TestUnitLagInterfaceCreateTC3Resource(t *testing.T) {
 	// Define our mocked connection object
 	testAccPreUnitCheck(t)
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +139,7 @@ func TestAccLagInterfaceCreateUnitTC3Resource(t *testing.T) {
 	})
 }
 
-func TestAccLagInterfaceCreateUnitTC4Resource(t *testing.T) {
+func TestUnitLagInterfaceCreateTC4Resource(t *testing.T) {
 	// Define our mocked connection object
 	testAccPreUnitCheck(t)
 	count := 0

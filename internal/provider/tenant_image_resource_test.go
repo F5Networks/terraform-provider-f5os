@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -16,16 +17,129 @@ import (
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
+// ---------------------------------------------------------------------------
+// Acceptance test constants
+// ---------------------------------------------------------------------------
+
+const (
+	// testAccDNSServer is the DNS server required to resolve hostnames from the DUT.
+	testAccDNSServer = "192.168.72.180"
+
+	// testAccImageName is the standard test image name used across acceptance tests.
+	testAccImageName = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+
+	// testAccImageRemoteHost is the image server accessible from the DUT.
+	testAccImageRemoteHost = "10.238.1.148"
+
+	// testAccImageRemotePath is the path on the image server where test images live.
+	testAccImageRemotePath = "v17.1.0.1/dist/release/VM"
+)
+
+// ---------------------------------------------------------------------------
+// Acceptance test setup helpers
+// ---------------------------------------------------------------------------
+
+// testAccEnsureDNSServer ensures the required DNS server is configured on the
+// DUT so that hostnames can be resolved. This is idempotent — it only adds
+// the server if it's not already present.
+func testAccEnsureDNSServer(t *testing.T) {
+	t.Helper()
+	if os.Getenv("TF_ACC") == "" {
+		return // Only run during acceptance tests
+	}
+
+	client, err := newTenantImageClientFromEnv()
+	if err != nil {
+		t.Logf("Warning: cannot create client to check DNS: %v", err)
+		return
+	}
+
+	// Read current DNS config
+	dnsConfig, err := client.ReadDNSConfig()
+	if err != nil {
+		// DNS config may not exist yet — that's OK, we'll create it
+		t.Logf("DNS config not present, will add DNS server %s", testAccDNSServer)
+	} else {
+		// Check if the DNS server is already present
+		for _, server := range dnsConfig.DNS.Servers.Server {
+			if server.Address == testAccDNSServer {
+				t.Logf("DNS server %s already configured", testAccDNSServer)
+				return
+			}
+		}
+	}
+
+	// Add the DNS server
+	t.Logf("Adding DNS server %s to DUT", testAccDNSServer)
+	err = client.PatchDNSConfig([]string{testAccDNSServer}, nil)
+	if err != nil {
+		t.Logf("Warning: failed to add DNS server %s: %v", testAccDNSServer, err)
+	}
+}
+
+// testAccEnsureTestImage ensures the standard test image exists on the DUT.
+// If the image is not present, it imports it from the image server.
+// This is idempotent — it only imports if the image doesn't exist.
+func testAccEnsureTestImage(t *testing.T) {
+	t.Helper()
+	if os.Getenv("TF_ACC") == "" {
+		return // Only run during acceptance tests
+	}
+
+	client, err := newTenantImageClientFromEnv()
+	if err != nil {
+		t.Fatalf("Cannot create client to check test image: %v", err)
+	}
+
+	// Check if the image already exists
+	resp, err := client.GetImage(testAccImageName)
+	if err == nil && resp != nil && len(resp.TenantImages) > 0 {
+		t.Logf("Test image %s already exists on device (status: %s)", testAccImageName, resp.TenantImages[0].Status)
+		return
+	}
+
+	// Image doesn't exist — import it
+	t.Logf("Importing test image %s from %s", testAccImageName, testAccImageRemoteHost)
+	insecureEmpty := "" // YANG empty leaf: present = insecure mode enabled
+	importConfig := &f5ossdk.F5ReqTenantImage{
+		RemoteHost: testAccImageRemoteHost,
+		RemoteFile: fmt.Sprintf("%s/%s", testAccImageRemotePath, testAccImageName),
+		LocalFile:  "images/tenant",
+		Insecure:   &insecureEmpty, // Certificates are not functional on DUTs
+	}
+
+	_, err = client.ImportImage(importConfig, 600) // 10 minute timeout for large images
+	if err != nil {
+		// Check if it's an "already exists" error (race condition with another test)
+		if strings.Contains(err.Error(), "already exists") {
+			t.Logf("Test image %s was imported by another process", testAccImageName)
+			return
+		}
+		t.Fatalf("Failed to import test image %s: %v", testAccImageName, err)
+	}
+	t.Logf("Successfully imported test image %s", testAccImageName)
+}
+
+// testAccPreCheckWithSetup combines testAccPreCheck with DNS and image setup.
+// Use this as the PreCheck for acceptance tests that need the test image.
+func testAccPreCheckWithSetup(t *testing.T) {
+	testAccPreCheck(t)
+	testAccEnsureDNSServer(t)
+	testAccEnsureTestImage(t)
+}
+
 func TestAccTenantImageCreateTC1Resource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckWithSetup(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantImageDestroy,
 		Steps: []resource.TestStep{
 			// Read testing
 			{
 				Config: testAccTenantImageCreateResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", testAccImageName),
+					testAccCheckTenantImageExistsOnDevice(testAccImageName),
 				),
 			},
 			// ImportState testing
@@ -45,14 +159,16 @@ func TestAccTenantImageCreateTC1Resource(t *testing.T) {
 
 func TestAccTenantImageCreateTC2Resource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckWithSetup(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantImageDestroy,
 		Steps: []resource.TestStep{
 			// Read testing
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", testAccImageName),
+					testAccCheckTenantImageExistsOnDevice(testAccImageName),
 				),
 			},
 			// ImportState testing
@@ -65,8 +181,9 @@ func TestAccTenantImageCreateTC2Resource(t *testing.T) {
 	})
 }
 
-func TestAccTenantImageCreateUnitTC3Resource(t *testing.T) {
+func TestUnitTenantImageCreateTC3Resource(t *testing.T) {
 	testAccPreUnitCheck(t)
+	defer teardown()
 	var count = 0
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "GET", r.Method, "Expected method 'GET', got %s", r.Method)
@@ -134,8 +251,9 @@ func TestAccTenantImageCreateUnitTC3Resource(t *testing.T) {
 	})
 }
 
-func TestAccTenantImageCreateUnitTC4Resource(t *testing.T) {
+func TestUnitTenantImageCreateTC4Resource(t *testing.T) {
 	testAccPreUnitCheck(t)
+	defer teardown()
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "GET", r.Method, "Expected method 'GET', got %s", r.Method)
 		w.Header().Set("Content-Type", "application/yang-data+json")
@@ -260,8 +378,8 @@ func TestUnitTenantImageRequiresReplaceOnRemotePathChange(t *testing.T) {
     "f5-utils-file-transfer:transfer-operation": [
         {
             "local-file-path": "images/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
-            "remote-host": "spkapexsrvc01.olympus.f5net.com",
-            "remote-file-path": "v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "remote-host": %q,
+            "remote-file-path": "v17.1.0.1/dist/release/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
             "operation": "Import file",
             "protocol": "HTTPS   ",
             "status": "         Completed",
@@ -269,7 +387,7 @@ func TestUnitTenantImageRequiresReplaceOnRemotePathChange(t *testing.T) {
         },
         {
             "local-file-path": "images/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
-            "remote-host": "spkapexsrvc01.olympus.f5net.com",
+            "remote-host": %q,
             "remote-file-path": "v17.1.0.1/daily/previous/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
             "operation": "Import file",
             "protocol": "HTTPS   ",
@@ -277,7 +395,7 @@ func TestUnitTenantImageRequiresReplaceOnRemotePathChange(t *testing.T) {
             "timestamp": "Mon Jun 26 16:10:22 2023"
         }
     ]
-}`)
+}`, testAccImageRemoteHost, testAccImageRemoteHost)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
 		deleteCount++
@@ -294,12 +412,12 @@ func TestUnitTenantImageRequiresReplaceOnRemotePathChange(t *testing.T) {
 		IsUnitTest:               true,
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
-			// Step 1: Create image from remote_path "v17.1.0.1/daily/current/VM"
+			// Step 1: Create image from the standard test remote_path
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_path", "v17.1.0.1/daily/current/VM"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_path", testAccImageRemotePath),
 				),
 			},
 			// Step 2: Change remote_path — RequiresReplace should trigger
@@ -504,10 +622,11 @@ func testAccCheckTenantImageDestroy(s *terraform.State) error {
 // not-in-use image name if the test fails due to post-test cleanup.
 func TestAccTenantImageRequiresReplace(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckWithSetup(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantImageDestroy,
 		Steps: []resource.TestStep{
-			// Step 1: Create — adopts the pre-existing in-use image.
+			// Step 1: Create — adopts the pre-existing image.
 			// GetImage finds it already present, so no import is triggered.
 			{
 				Config: testAccTenantImageReplaceConfig("v17.1.0.1/daily/current/VM"),
@@ -517,13 +636,15 @@ func TestAccTenantImageRequiresReplace(t *testing.T) {
 					testAccCheckTenantImageExistsOnDevice("BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
 				),
 			},
-			// Step 2: Change remote_path — RequiresReplace triggers a
-			// destroy+recreate plan. The destroy fails because the image is
-			// in-use. The expected error confirms a delete was attempted,
-			// which proves RequiresReplace correctly generated a replace plan.
+			// Step 2: Change remote_path — RequiresReplace must generate a
+			// non-empty plan (destroy+recreate). PlanOnly verifies the plan
+			// is non-empty without applying, avoiding post-test destroy
+			// issues on shared DUTs. Unit tests separately verify the exact
+			// DestroyBeforeCreate action type.
 			{
-				Config:      testAccTenantImageReplaceConfig("v17.1.0.1/daily/release/VM"),
-				ExpectError: regexp.MustCompile(`Unable to Delete Imported Image`),
+				Config:             testAccTenantImageReplaceConfig("v17.1.0.1/daily/release/VM"),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
 			},
 		},
 	})
@@ -535,7 +656,7 @@ func TestAccTenantImageRequiresReplace(t *testing.T) {
 // will fail because the image is in-use, but CheckDestroy tolerates this.
 func TestAccTenantImageTimeoutNoReplace(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckWithSetup(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantImageDestroy,
 		Steps: []resource.TestStep{
@@ -573,10 +694,11 @@ func TestAccTenantImageTimeoutNoReplace(t *testing.T) {
 // executed a replace plan.
 func TestAccTenantImageRequiresReplaceOnProtocolChange(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckWithSetup(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantImageDestroy,
 		Steps: []resource.TestStep{
-			// Step 1: Create — adopts the existing in-use image (no protocol).
+			// Step 1: Create — adopts the existing image (no protocol).
 			{
 				Config: testAccTenantImageAccFieldConfig("", 0),
 				Check: resource.ComposeAggregateTestCheckFunc(
@@ -584,12 +706,12 @@ func TestAccTenantImageRequiresReplaceOnProtocolChange(t *testing.T) {
 					testAccCheckTenantImageExistsOnDevice("BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
 				),
 			},
-			// Step 2: Add protocol="scp" — RequiresReplace triggers destroy.
-			// Destroy fails because the image is in-use. The error confirms
-			// the replace plan was generated.
+			// Step 2: Add protocol="scp" — RequiresReplace must generate a
+			// non-empty plan. PlanOnly verifies without applying.
 			{
-				Config:      testAccTenantImageAccFieldConfig("scp", 0),
-				ExpectError: regexp.MustCompile(`Unable to Delete Imported Image`),
+				Config:             testAccTenantImageAccFieldConfig("scp", 0),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
 			},
 		},
 	})
@@ -603,10 +725,11 @@ func TestAccTenantImageRequiresReplaceOnProtocolChange(t *testing.T) {
 // Step 2 adds remote_port=2222 which triggers RequiresReplace.
 func TestAccTenantImageRequiresReplaceOnRemotePortChange(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckWithSetup(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantImageDestroy,
 		Steps: []resource.TestStep{
-			// Step 1: Create — adopts the existing in-use image (no port).
+			// Step 1: Create — adopts the existing image (no port).
 			{
 				Config: testAccTenantImageAccFieldConfig("", 0),
 				Check: resource.ComposeAggregateTestCheckFunc(
@@ -614,10 +737,12 @@ func TestAccTenantImageRequiresReplaceOnRemotePortChange(t *testing.T) {
 					testAccCheckTenantImageExistsOnDevice("BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
 				),
 			},
-			// Step 2: Add remote_port=2222 — RequiresReplace triggers destroy.
+			// Step 2: Add remote_port=2222 — RequiresReplace must generate a
+			// non-empty plan. PlanOnly verifies without applying.
 			{
-				Config:      testAccTenantImageAccFieldConfig("", 2222),
-				ExpectError: regexp.MustCompile(`Unable to Delete Imported Image`),
+				Config:             testAccTenantImageAccFieldConfig("", 2222),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
 			},
 		},
 	})
@@ -633,7 +758,7 @@ func TestAccTenantImageRequiresReplaceOnRemotePortChange(t *testing.T) {
 // TestUnitTenantImageImportPayloadIncludesAllFields.
 func TestAccTenantImageNewFieldsCreateAndVerify(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckWithSetup(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantImageDestroy,
 		Steps: []resource.TestStep{
@@ -659,30 +784,33 @@ func TestAccTenantImageNewFieldsCreateAndVerify(t *testing.T) {
 func testAccTenantImageReplaceConfig(remotePath string) string {
 	return fmt.Sprintf(`
 resource "f5os_tenant_image" "replace_test" {
-  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  image_name  = %q
+  remote_host = %q
   remote_path = %q
   local_path  = "images/tenant"
+  insecure    = true
   timeout     = 360
 }
-`, remotePath)
+`, testAccImageName, testAccImageRemoteHost, remotePath)
 }
 
 func testAccTenantImageAccTimeoutConfig(timeout int) string {
 	return fmt.Sprintf(`
 resource "f5os_tenant_image" "acc_test" {
-  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host = "spkapexsrvc01.olympus.f5net.com"
-  remote_path = "v17.1.0.1/daily/current/VM"
+  image_name  = %q
+  remote_host = %q
+  remote_path = %q
   local_path  = "images/tenant"
+  insecure    = true
   timeout     = %d
 }
-`, timeout)
+`, testAccImageName, testAccImageRemoteHost, testAccImageRemotePath, timeout)
 }
 
 // testAccTenantImageAccFieldConfig generates an HCL config for testing
 // RequiresReplace on protocol and remote_port. Pass empty string / 0
-// to omit each optional attribute.
+// to omit each optional attribute. Always includes insecure=true since
+// certificates are not functional on DUTs.
 func testAccTenantImageAccFieldConfig(protocol string, remotePort int) string {
 	var extra string
 	if protocol != "" {
@@ -693,31 +821,33 @@ func testAccTenantImageAccFieldConfig(protocol string, remotePort int) string {
 	}
 	return fmt.Sprintf(`
 resource "f5os_tenant_image" "field_test" {
-  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host = "spkapexsrvc01.olympus.f5net.com"
-  remote_path = "v17.1.0.1/daily/current/VM"
+  image_name  = %q
+  remote_host = %q
+  remote_path = %q
   local_path  = "images/tenant"
+  insecure    = true
   timeout     = 360
 %s}
-`, extra)
+`, testAccImageName, testAccImageRemoteHost, testAccImageRemotePath, extra)
 }
 
 // testAccTenantImageAccAllFieldsConfig exercises all four newly-wired
 // attributes (protocol, remote_user, remote_password, remote_port) against
 // a real device.
-const testAccTenantImageAccAllFieldsConfig = `
+var testAccTenantImageAccAllFieldsConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "all_fields_test" {
   image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host     = "spkapexsrvc01.olympus.f5net.com"
+  remote_host     = %q
   remote_path     = "v17.1.0.1/daily/current/VM"
   local_path      = "images/tenant"
   protocol        = "https"
   remote_user     = "imageuser"
   remote_password = "imagepass"
   remote_port     = 8443
+  insecure        = true
   timeout         = 360
 }
-`
+`, testAccImageRemoteHost)
 
 //func TestUnitTenantImageUpload(t *testing.T) {
 //	testAccPreUnitCheck(t)
@@ -806,35 +936,56 @@ resource "f5os_tenant_image" "all_fields_test" {
 //	})
 //}
 
-const testAccTenantImageCreateResourceConfig = `
+// testAccTenantImageCreateResourceConfig uses the working image server and insecure=true
+// since certificates are not functional on DUTs.
+var testAccTenantImageCreateResourceConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
-  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host = "spkapexsrvc01.olympus.f5net.com"
-  remote_path = "v17.1.0.1/daily/current/VM"
+  image_name  = %q
+  remote_host = %q
+  remote_path = %q
   local_path  = "images/tenant"
-  timeout = 360
+  insecure    = true
+  timeout     = 360
 }
-`
+`, testAccImageName, testAccImageRemoteHost, testAccImageRemotePath)
 
-const testAccTenantImageCreateTC2ResourceConfig = `
+// testAccTenantImageCreateTC2ResourceConfig uses local_path="images" (different
+// from TC1's "images/tenant") to exercise both valid local_path values.
+var testAccTenantImageCreateTC2ResourceConfig = fmt.Sprintf(`
+resource "f5os_tenant_image" "test" {
+  image_name  = %q
+  remote_host = %q
+  remote_path = %q
+  local_path  = "images"
+  insecure    = true
+  timeout     = 360
+}
+`, testAccImageName, testAccImageRemoteHost, testAccImageRemotePath)
+
+// testAccTenantImageCreateTC2ModifyResourceConfig - modified timeout for update test
+var testAccTenantImageCreateTC2ModifyResourceConfig = fmt.Sprintf(`
+resource "f5os_tenant_image" "test" {
+  image_name  = %q
+  remote_host = %q
+  remote_path = %q
+  local_path  = "images"
+  insecure    = true
+  timeout     = 380
+}
+`, testAccImageName, testAccImageRemoteHost, testAccImageRemotePath)
+
+// testAccTenantImageNoInsecureConfig is used by unit tests that verify the
+// default behavior when insecure is NOT set in the HCL config. This must NOT
+// include insecure=true (unlike the acceptance test configs which always set it).
+var testAccTenantImageNoInsecureConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
   image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  remote_host = %q
   remote_path = "v17.1.0.1/daily/current/VM"
   local_path  = "images"
-  timeout = 360
+  timeout     = 360
 }
-`
-
-const testAccTenantImageCreateTC2ModifyResourceConfig = `
-resource "f5os_tenant_image" "test" {
-  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host = "spkapexsrvc01.olympus.f5net.com"
-  remote_path = "v17.1.0.1/daily/current/VM"
-  local_path  = "images"
-  timeout = 380
-}
-`
+`, testAccImageRemoteHost)
 
 // TestUnitTenantImageImportPayloadIncludesAllFields verifies that when protocol,
 // remote_user, remote_password, and remote_port are set in the HCL config, all
@@ -931,10 +1082,10 @@ func TestUnitTenantImageImportPayloadIncludesAllFields(t *testing.T) {
 
 // testAccTenantImageAllFieldsConfig exercises all four previously-ignored
 // import attributes: protocol, remote_user, remote_password, remote_port.
-const testAccTenantImageAllFieldsConfig = `
+var testAccTenantImageAllFieldsConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
   image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host     = "spkapexsrvc01.olympus.f5net.com"
+  remote_host     = %q
   remote_path     = "v17.1.0.1/daily/current/VM"
   local_path      = "images"
   protocol        = "scp"
@@ -943,7 +1094,7 @@ resource "f5os_tenant_image" "test" {
   remote_port     = 2222
   timeout         = 360
 }
-`
+`, testAccImageRemoteHost)
 
 // ---------------------------------------------------------------------------
 // Shared mock-server setup for RequiresReplace / payload unit tests
@@ -1023,7 +1174,7 @@ func setupTenantImageMock(t *testing.T, transferPaths []string) *tenantImageMock
 	for _, p := range transferPaths {
 		entries = append(entries, transferEntry{
 			LocalFilePath:  "images/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
-			RemoteHost:     "spkapexsrvc01.olympus.f5net.com",
+			RemoteHost:     testAccImageRemoteHost,
 			RemoteFilePath: p,
 			Operation:      "Import file",
 			Protocol:       "HTTPS   ",
@@ -1180,7 +1331,7 @@ func TestUnitTenantImageRequiresReplaceOnRemoteHostChange(t *testing.T) {
 			{
 				Config: testAccTenantImageAllFieldsConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_host", "spkapexsrvc01.olympus.f5net.com"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_host", testAccImageRemoteHost),
 				),
 			},
 			{
@@ -1208,7 +1359,7 @@ func TestUnitTenantImageRequiresReplaceOnRemoteHostChange(t *testing.T) {
 // to the import API (omitempty).
 func TestUnitTenantImageOmitsOptionalFieldsWhenUnset(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
-		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+		fmt.Sprintf("%s/%s", testAccImageRemotePath, testAccImageName),
 	})
 	defer teardown()
 	resource.Test(t, resource.TestCase{
@@ -1246,7 +1397,7 @@ func TestUnitTenantImageOmitsOptionalFieldsWhenUnset(t *testing.T) {
 // state with a null image_name — losing the Required attribute.
 func TestUnitTenantImageImportSetsImageName(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
-		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+		fmt.Sprintf("%s/%s", testAccImageRemotePath, testAccImageName),
 	})
 	_ = st
 	defer teardown()
@@ -1287,7 +1438,7 @@ func TestUnitTenantImageImportSetsImageName(t *testing.T) {
 // the fix works by asserting both fields survive a two-step create→update.
 func TestUnitTenantImageUpdatePreservesIdAndImageName(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
-		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+		fmt.Sprintf("%s/%s", testAccImageRemotePath, testAccImageName),
 	})
 	_ = st
 	defer teardown()
@@ -1324,7 +1475,7 @@ func TestUnitTenantImageUpdatePreservesIdAndImageName(t *testing.T) {
 // API's "status" field into the Terraform state.
 func TestUnitTenantImageStatusPopulatedAfterCreate(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
-		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+		fmt.Sprintf("%s/%s", testAccImageRemotePath, testAccImageName),
 	})
 	_ = st
 	defer teardown()
@@ -1344,9 +1495,9 @@ func TestUnitTenantImageStatusPopulatedAfterCreate(t *testing.T) {
 }
 
 // TestUnitTenantImageInsecureFlagInPayload verifies that when insecure=true
-// is set in the HCL config, the import payload includes "insecure": "true".
-// When insecure is false (the default), the field should be omitted from the
-// payload (empty string, omitempty).
+// is set in the HCL config, the import payload includes the "insecure" key
+// (as a YANG empty leaf with value ""). When insecure is false (the default),
+// the field should be omitted from the payload entirely (nil *string, omitempty).
 func TestUnitTenantImageInsecureFlagInPayload(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
 		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
@@ -1365,8 +1516,10 @@ func TestUnitTenantImageInsecureFlagInPayload(t *testing.T) {
 						if st.capturedBody == nil {
 							return fmt.Errorf("import endpoint was never called")
 						}
-						if v, ok := st.capturedBody["insecure"]; !ok || v != "true" {
-							return fmt.Errorf("expected insecure=\"true\" in request body, got %v", v)
+						// The F5OS API models "insecure" as a YANG empty leaf.
+						// When present, the value is "" (empty string), not "true".
+						if _, ok := st.capturedBody["insecure"]; !ok {
+							return fmt.Errorf("expected insecure key present in request body, but it was absent")
 						}
 						return nil
 					},
@@ -1389,7 +1542,7 @@ func TestUnitTenantImageInsecureDefaultOmitted(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccTenantImageCreateTC2ResourceConfig,
+				Config: testAccTenantImageNoInsecureConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "insecure", "false"),
@@ -1397,11 +1550,11 @@ func TestUnitTenantImageInsecureDefaultOmitted(t *testing.T) {
 						if st.capturedBody == nil {
 							return fmt.Errorf("import endpoint was never called")
 						}
-						// When insecure is false, importImage sets Insecure=""
-						// which omitempty strips from JSON. So the key should
-						// either be absent or be an empty string.
-						if v, ok := st.capturedBody["insecure"]; ok && v != "" {
-							return fmt.Errorf("expected insecure to be absent or empty in request body, got %v", v)
+						// When insecure is false, importImage leaves Insecure
+						// as nil (*string), which omitempty strips from JSON.
+						// So the key should be absent entirely.
+						if v, ok := st.capturedBody["insecure"]; ok {
+							return fmt.Errorf("expected insecure key to be absent from request body, got %v", v)
 						}
 						return nil
 					},
@@ -1418,7 +1571,7 @@ func TestUnitTenantImageInsecureDefaultOmitted(t *testing.T) {
 // tenantImageResourceModeltoState fix (setting Id).
 func TestUnitTenantImageReadAfterImportHasCorrectState(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
-		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+		fmt.Sprintf("%s/%s", testAccImageRemotePath, testAccImageName),
 	})
 	_ = st
 	defer teardown()
@@ -1456,25 +1609,27 @@ func TestUnitTenantImageReadAfterImportHasCorrectState(t *testing.T) {
 
 // testAccTenantImageInsecureTrueConfig exercises the insecure=true flag
 // to verify it appears in the import API payload.
-const testAccTenantImageInsecureTrueConfig = `
+var testAccTenantImageInsecureTrueConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
   image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  remote_host = %q
   remote_path = "v17.1.0.1/daily/current/VM"
   local_path  = "images"
   insecure    = true
   timeout     = 360
 }
-`
+`, testAccImageRemoteHost)
 
 // ---------------------------------------------------------------------------
 // Acceptance tests for uncommitted fixes (ImportState + tenantImageResourceModeltoState)
 // ---------------------------------------------------------------------------
 
 // testAccGetExistingImageName returns the name of a tenant image that is known
-// to exist on the DUT. It queries the device directly and returns the first
-// image found. Tests that need an existing image should call this rather than
-// hardcoding image names, because different DUTs have different images.
+// to exist on the DUT. It queries the device directly and prefers a non-in-use
+// image so that post-test destroy can delete it. If all images are in-use, it
+// falls back to the first image found. Tests that need an existing image should
+// call this rather than hardcoding image names, because different DUTs have
+// different images.
 func testAccGetExistingImageName(t *testing.T) string {
 	t.Helper()
 	client, err := newTenantImageClientFromEnv()
@@ -1488,6 +1643,13 @@ func testAccGetExistingImageName(t *testing.T) string {
 	if len(resp.Images) == 0 {
 		t.Skip("No tenant images on device — cannot run this acceptance test")
 	}
+	// Prefer a non-in-use image so post-test destroy can delete it.
+	for _, img := range resp.Images {
+		if !img.InUse {
+			return img.Name
+		}
+	}
+	// All images are in-use — fall back to first (post-test destroy will fail).
 	return resp.Images[0].Name
 }
 
@@ -1522,6 +1684,10 @@ func testAccCheckTenantImageStatusOnDevice(imageName, expectedStatus string) res
 // This test adopts an existing in-use image on the device (no actual import
 // transfer is triggered). CheckDestroy tolerates in-use images.
 func TestAccTenantImageImportStateSetsImageName(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
+	}
+	testAccPreCheckWithSetup(t)
 	imageName := testAccGetExistingImageName(t)
 
 	resource.Test(t, resource.TestCase{
@@ -1572,6 +1738,10 @@ func TestAccTenantImageImportStateSetsImageName(t *testing.T) {
 // This test also verifies the status field via direct API query to ensure the
 // Terraform state matches the actual device state.
 func TestAccTenantImageUpdatePreservesState(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
+	}
+	testAccPreCheckWithSetup(t)
 	imageName := testAccGetExistingImageName(t)
 
 	resource.Test(t, resource.TestCase{
@@ -1612,6 +1782,10 @@ func TestAccTenantImageUpdatePreservesState(t *testing.T) {
 // This exercises tenantImageResourceModeltoState's mapping of the status field
 // and confirms it with a direct API check.
 func TestAccTenantImageStatusFromDevice(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
+	}
+	testAccPreCheckWithSetup(t)
 	imageName := testAccGetExistingImageName(t)
 
 	// Pre-query the device to get the expected status.
@@ -1652,22 +1826,23 @@ func testAccTenantImageImportFixConfig(imageName string, timeout int) string {
 	return fmt.Sprintf(`
 resource "f5os_tenant_image" "import_fix_test" {
   image_name  = %q
-  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  remote_host = %q
   remote_path = "v17.1.0.1/daily/current/VM"
   local_path  = "images/tenant"
+  insecure    = true
   timeout     = %d
 }
-`, imageName, timeout)
+`, imageName, testAccImageRemoteHost, timeout)
 }
 
 // ---------------------------------------------------------------------------
 // HCL configs for attribute-change RequiresReplace tests
 // ---------------------------------------------------------------------------
 
-const testAccTenantImageProtocolChangedConfig = `
+var testAccTenantImageProtocolChangedConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
   image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host     = "spkapexsrvc01.olympus.f5net.com"
+  remote_host     = %q
   remote_path     = "v17.1.0.1/daily/current/VM"
   local_path      = "images"
   protocol        = "https"
@@ -1676,12 +1851,12 @@ resource "f5os_tenant_image" "test" {
   remote_port     = 2222
   timeout         = 360
 }
-`
+`, testAccImageRemoteHost)
 
-const testAccTenantImageRemotePortChangedConfig = `
+var testAccTenantImageRemotePortChangedConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
   image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host     = "spkapexsrvc01.olympus.f5net.com"
+  remote_host     = %q
   remote_path     = "v17.1.0.1/daily/current/VM"
   local_path      = "images"
   protocol        = "scp"
@@ -1690,12 +1865,12 @@ resource "f5os_tenant_image" "test" {
   remote_port     = 3333
   timeout         = 360
 }
-`
+`, testAccImageRemoteHost)
 
-const testAccTenantImageRemoteUserChangedConfig = `
+var testAccTenantImageRemoteUserChangedConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
   image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host     = "spkapexsrvc01.olympus.f5net.com"
+  remote_host     = %q
   remote_path     = "v17.1.0.1/daily/current/VM"
   local_path      = "images"
   protocol        = "scp"
@@ -1704,7 +1879,7 @@ resource "f5os_tenant_image" "test" {
   remote_port     = 2222
   timeout         = 360
 }
-`
+`, testAccImageRemoteHost)
 
 const testAccTenantImageRemoteHostChangedConfig = `
 resource "f5os_tenant_image" "test" {
@@ -1833,6 +2008,10 @@ func TestUnitTenantImageGetImageErrorStillImports(t *testing.T) {
 // will fail with "is in use". This is expected on shared DUTs. The test
 // steps themselves (Create, Check, Import) still validate correctly.
 func TestAccTenantImageCreateExistingImageSkipsImport(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
+	}
+	testAccPreCheckWithSetup(t)
 	imageName := testAccGetExistingImageName(t)
 
 	// Pre-query the device to get the expected status for verification.
@@ -1882,12 +2061,13 @@ func testAccTenantImageExistingImageConfig(imageName string) string {
 	return fmt.Sprintf(`
 resource "f5os_tenant_image" "existing_test" {
   image_name  = %q
-  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  remote_host = %q
   remote_path = "v17.1.0.1/daily/current/VM"
   local_path  = "images/tenant"
+  insecure    = true
   timeout     = 360
 }
-`, imageName)
+`, imageName, testAccImageRemoteHost)
 }
 
 // TestUnitTenantImageRemotePathConflictsWithUploadFromPath verifies that
@@ -1914,15 +2094,16 @@ resource "f5os_tenant_image" "conflict_test" {
 // testAccTenantImageRequiresReplaceConfig changes remote_path relative to
 // testAccTenantImageCreateTC2ResourceConfig, which should trigger
 // RequiresReplace (destroy + recreate).
-const testAccTenantImageRequiresReplaceConfig = `
+var testAccTenantImageRequiresReplaceConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
   image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  remote_host = %q
   remote_path = "v17.1.0.1/daily/previous/VM"
   local_path  = "images"
-  timeout = 360
+  insecure    = true
+  timeout     = 360
 }
-`
+`, testAccImageRemoteHost)
 
 // ---------------------------------------------------------------------------
 // Acceptance tests for importWait changes (tenant.go)
@@ -1949,7 +2130,7 @@ resource "f5os_tenant_image" "test" {
 // error is not detected.
 func TestAccTenantImageImportWaitBadHost(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckWithSetup(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
@@ -1966,6 +2147,7 @@ resource "f5os_tenant_image" "bad_host_test" {
   remote_host = "10.255.255.1"
   remote_path = "v17/daily/current/VM"
   local_path  = "images/tenant"
+  insecure    = true
   timeout     = 60
 }
 `
@@ -1979,7 +2161,7 @@ resource "f5os_tenant_image" "bad_host_test" {
 // device's HTTPS client rejects the server certificate.
 func TestAccTenantImageImportWaitCertError(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckWithSetup(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
@@ -1990,16 +2172,16 @@ func TestAccTenantImageImportWaitCertError(t *testing.T) {
 	})
 }
 
-const testAccTenantImageCertErrorConfig = `
+var testAccTenantImageCertErrorConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "cert_error_test" {
-  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
-  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  image_name  = "BIGIP-cert-error-nonexistent.qcow2.zip.bundle"
+  remote_host = %q
   remote_path = "v17.1.0.1/daily/current/VM"
   local_path  = "images/tenant"
   insecure    = false
   timeout     = 90
 }
-`
+`, testAccImageRemoteHost)
 
 // TestAccTenantImageImportWaitSuccess verifies the happy path through the
 // provider's Create and Read lifecycle using a real device. It adopts an
@@ -2013,6 +2195,10 @@ resource "f5os_tenant_image" "cert_error_test" {
 // The test uses testAccGetExistingImageName to dynamically discover an image
 // on the device, so it works on any DUT without hardcoded image names.
 func TestAccTenantImageImportWaitSuccess(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
+	}
+	testAccPreCheckWithSetup(t)
 	imageName := testAccGetExistingImageName(t)
 
 	// Pre-query the device to get the expected status for verification.
@@ -2056,12 +2242,13 @@ func testAccTenantImageImportWaitSuccessConfig(imageName string) string {
 	return fmt.Sprintf(`
 resource "f5os_tenant_image" "import_success_test" {
   image_name  = %q
-  remote_host = "spkapexsrvc01.olympus.f5net.com"
+  remote_host = %q
   remote_path = "v17/dist/release/VM"
   local_path  = "images/tenant"
+  insecure    = true
   timeout     = 360
 }
-`, imageName)
+`, imageName, testAccImageRemoteHost)
 }
 
 // TestAccTenantImageTransferStatusShape queries the transfer-status
@@ -2079,7 +2266,7 @@ func TestAccTenantImageTransferStatusShape(t *testing.T) {
 	if os.Getenv("TF_ACC") == "" {
 		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
 	}
-	testAccPreCheck(t)
+	testAccPreCheckWithSetup(t)
 
 	client, err := newTenantImageClientFromEnv()
 	if err != nil {

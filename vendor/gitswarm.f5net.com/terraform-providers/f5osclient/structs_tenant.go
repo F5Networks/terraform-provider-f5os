@@ -44,14 +44,14 @@ type F5RespTenantImagesStatus struct {
 }
 
 type F5ReqTenantImage struct {
-	Insecure   string `json:"insecure,omitempty"`
-	LocalFile  string `json:"local-file,omitempty"`
-	RemoteFile string `json:"remote-file,omitempty"`
-	RemoteHost string `json:"remote-host,omitempty"`
-	Protocol   string `json:"protocol,omitempty"`
-	Username   string `json:"username,omitempty"`
-	Password   string `json:"password,omitempty"`
-	RemotePort int    `json:"remote-port,omitempty"`
+	Insecure   *string `json:"insecure,omitempty"`
+	LocalFile  string  `json:"local-file,omitempty"`
+	RemoteFile string  `json:"remote-file,omitempty"`
+	RemoteHost string  `json:"remote-host,omitempty"`
+	Protocol   string  `json:"protocol,omitempty"`
+	Username   string  `json:"username,omitempty"`
+	Password   string  `json:"password,omitempty"`
+	RemotePort int     `json:"remote-port,omitempty"`
 }
 type F5ReqTenant struct {
 	Name           string `json:"name,omitempty"`
