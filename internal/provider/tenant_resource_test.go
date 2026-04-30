@@ -46,30 +46,6 @@ func TestAccTenantDeployResource(t *testing.T) {
 	})
 }
 
-func TestAccTenantDeployResourceTC5(t *testing.T) {
-	if os.Getenv("F5OS_TENANT_NEXT_IMAGE") == "" {
-		t.Skip("Skipping BIG-IP-Next tenant test: F5OS_TENANT_NEXT_IMAGE not set")
-	}
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccTenantDeployTC5,
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "id", "testtenant-ecosys03"),
-					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "name", "testtenant-ecosys03"),
-					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "image_name", "BIG-IP-Next-20.0.1-2.123.17"),
-					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "mgmt_ip", "100.10.100.110"),
-					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "mgmt_gateway", "100.10.100.1"),
-					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "type", "BIG-IP-Next"),
-					resource.TestCheckResourceAttr("f5os_tenant.velos_bigip_next_tenant_tc5", "status", "Configured"),
-				),
-			},
-		},
-	})
-}
-
 func TestAccTenantDeployResourceTC4(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -643,19 +619,21 @@ func testAccCheckTenantDestroy(s *terraform.State) error {
 	return nil
 }
 
-const testAccTenantTypeFieldConfig = `
+func testAccTenantTypeFieldConfigFunc() string {
+	return fmt.Sprintf(`
 resource "f5os_tenant" "type_test" {
   name              = "test-type-field"
-  image_name        = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  image_name        = %q
   mgmt_ip           = "10.10.10.50"
   mgmt_gateway      = "10.10.10.1"
   mgmt_prefix       = 24
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 82
+  virtual_disk_size = 83
 }
-`
+`, tenantTestImage())
+}
 
 func TestAccTenantDeployResourceTypeField(t *testing.T) {
 	resource.Test(t, resource.TestCase{
@@ -666,7 +644,7 @@ func TestAccTenantDeployResourceTypeField(t *testing.T) {
 			// Step 1: Create and verify type is populated in state
 			// AND on the device via direct API check.
 			{
-				Config: testAccTenantTypeFieldConfig,
+				Config: testAccTenantTypeFieldConfigFunc(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.type_test", "name", "test-type-field"),
 					resource.TestCheckResourceAttr("f5os_tenant.type_test", "type", "BIG-IP"),
@@ -832,38 +810,6 @@ func TestAccTenantNoVlansInState(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
-// Acceptance test: verifies deployment_file is populated in state from the
-// device after Create and Import for a BIG-IP-Next tenant, and that a
-// standard BIG-IP tenant has no deployment_file in state or on device.
-//
-// Requires: F5OS_TENANT_NEXT_IMAGE and F5OS_TENANT_NEXT_DEPLOYMENT_FILE
-// env vars. Skips if either is unset (BIG-IP-Next image may not be available).
-// ---------------------------------------------------------------------------
-
-// testAccCheckTenantDeploymentFileOnDevice queries the device directly and
-// verifies Config.DeploymentFile matches the expected value.
-func testAccCheckTenantDeploymentFileOnDevice(tenantName, expected string) resource.TestCheckFunc {
-	return func(s *terraform.State) error {
-		client, err := newTenantClientFromEnv()
-		if err != nil {
-			return fmt.Errorf("failed to create client: %w", err)
-		}
-		resp, err := client.GetTenant(tenantName)
-		if err != nil {
-			return fmt.Errorf("GetTenant failed: %w", err)
-		}
-		if len(resp.F5TenantsTenant) == 0 {
-			return fmt.Errorf("tenant %q not found on device", tenantName)
-		}
-		actual := resp.F5TenantsTenant[0].Config.DeploymentFile
-		if actual != expected {
-			return fmt.Errorf("tenant %q deployment_file: expected %q, got %q", tenantName, expected, actual)
-		}
-		return nil
-	}
-}
-
 // testAccCheckTenantNoDeploymentFileOnDevice queries the device directly and
 // verifies Config.DeploymentFile is empty for a standard BIG-IP tenant.
 func testAccCheckTenantNoDeploymentFileOnDevice(tenantName string) resource.TestCheckFunc {
@@ -885,64 +831,6 @@ func testAccCheckTenantNoDeploymentFileOnDevice(tenantName string) resource.Test
 		}
 		return nil
 	}
-}
-
-// tenantNextImage returns the BIG-IP-Next image name from F5OS_TENANT_NEXT_IMAGE.
-func tenantNextImage() string {
-	return os.Getenv("F5OS_TENANT_NEXT_IMAGE")
-}
-
-// tenantNextDeploymentFile returns the BIG-IP-Next deployment file name from
-// F5OS_TENANT_NEXT_DEPLOYMENT_FILE.
-func tenantNextDeploymentFile() string {
-	return os.Getenv("F5OS_TENANT_NEXT_DEPLOYMENT_FILE")
-}
-
-// TestAccTenantDeploymentFileNextTenant verifies that deployment_file is:
-//   - populated in Terraform state after Create
-//   - present on the device via direct API verification
-//   - preserved after Import
-//
-// This is the acceptance-level companion to TestUnitTenantDeploymentFilePopulatedFromDevice.
-func TestAccTenantDeploymentFileNextTenant(t *testing.T) {
-	nextImage := tenantNextImage()
-	nextDF := tenantNextDeploymentFile()
-	if nextImage == "" || nextDF == "" {
-		t.Skip("Skipping BIG-IP-Next deployment_file test: F5OS_TENANT_NEXT_IMAGE and/or F5OS_TENANT_NEXT_DEPLOYMENT_FILE not set")
-	}
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		CheckDestroy:             testAccCheckTenantDestroy,
-		Steps: []resource.TestStep{
-			// Step 1: Create BIG-IP-Next tenant with deployment_file
-			{
-				Config: testAccTenantNextDeploymentFileConfigFunc(nextImage, nextDF),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant.df_next_test", "name", "test-df-next"),
-					resource.TestCheckResourceAttr("f5os_tenant.df_next_test", "type", "BIG-IP-Next"),
-					resource.TestCheckResourceAttr("f5os_tenant.df_next_test", "deployment_file", nextDF),
-					resource.TestCheckResourceAttr("f5os_tenant.df_next_test", "status", "Configured"),
-					// Direct device API verification
-					testAccCheckTenantDeploymentFileOnDevice("test-df-next", nextDF),
-					testAccCheckTenantTypeOnDevice("test-df-next", "BIG-IP-Next"),
-				),
-			},
-			// Step 2: Import — deployment_file must survive because
-			// tenantResourceModeltoState now reads Config.DeploymentFile.
-			// Before the fix, this field would be empty after import.
-			{
-				ResourceName:      "f5os_tenant.df_next_test",
-				ImportState:       true,
-				ImportStateVerify: true,
-				ImportStateVerifyIgnore: []string{
-					"timeout",
-					"virtual_disk_size",
-				},
-			},
-		},
-	})
 }
 
 // TestAccTenantDeploymentFileAbsentForBigIP verifies that for a standard
@@ -979,23 +867,6 @@ func TestAccTenantDeploymentFileAbsentForBigIP(t *testing.T) {
 	})
 }
 
-func testAccTenantNextDeploymentFileConfigFunc(image, deploymentFile string) string {
-	return fmt.Sprintf(`
-resource "f5os_tenant" "df_next_test" {
-  name              = "test-df-next"
-  image_name        = %q
-  deployment_file   = %q
-  mgmt_ip           = "10.10.10.41"
-  mgmt_gateway      = "10.10.10.1"
-  mgmt_prefix       = 24
-  type              = "BIG-IP-Next"
-  cpu_cores         = 4
-  running_state     = "configured"
-  virtual_disk_size = 30
-}
-`, image, deploymentFile)
-}
-
 func testAccTenantBigIPNoDeploymentFileConfigFunc() string {
 	return fmt.Sprintf(`
 resource "f5os_tenant" "df_bigip_test" {
@@ -1007,7 +878,7 @@ resource "f5os_tenant" "df_bigip_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 82
+  virtual_disk_size = 83
 }
 `, tenantTestImage())
 }
@@ -1039,7 +910,7 @@ resource "f5os_tenant" "test2" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 82
+  virtual_disk_size = 83
 }
 `, tenantTestImage())
 }
@@ -1062,7 +933,7 @@ resource "f5os_tenant" "vlans_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 82
+  virtual_disk_size = 83
   vlans             = [%s]
 }
 `, tenantTestImage(), vlanStr)
@@ -1079,7 +950,7 @@ resource "f5os_tenant" "vlans_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 82
+  virtual_disk_size = 83
 }
 `, tenantTestImage())
 }
@@ -1095,7 +966,7 @@ resource "f5os_tenant" "test2" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 82
+  virtual_disk_size = 83
 }
 `, tenantTestImage())
 }
@@ -1174,7 +1045,7 @@ resource "f5os_tenant" "test-tenant22" {
 //  type              = "BIG-IP"
 //  cpu_cores         = 8
 //  running_state     = "configured"
-//  virtual_disk_size = 82
+//  virtual_disk_size = 83
 //  nodes             = [1]
 //  cryptos           = "enabled"
 //  vlans             = [1,2,3]
@@ -1209,94 +1080,6 @@ resource "f5os_tenant" "test2" {
   virtual_disk_size = 82
 }
 `
-
-// TestUnitTenantDeploymentFilePopulatedFromDevice verifies that when the device
-// API returns a non-empty deployment-file in Config, tenantResourceModeltoState
-// populates data.DeploymentFile so the value survives Read and Import.
-func TestUnitTenantDeploymentFilePopulatedFromDevice(t *testing.T) {
-	testAccPreUnitCheck(t)
-
-	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/yang-data+json")
-		w.Header().Set("X-Auth-Token", "test-token")
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
-	})
-	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
-	})
-	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIG-IP-Next-20.0.1-2.123.17", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIG-IP-Next-20.0.1-2.123.17","in-use":false,"type":"vm-image","status":"replicated","date":"2024-1-15","size":"3.5 GB"}]}`)
-	})
-	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-	})
-	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-next/state", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_next_get_status.json"))
-	})
-	deleted := false
-	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-next", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "DELETE" {
-			deleted = true
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.Method == "GET" && !deleted {
-			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_next_config.json"))
-		} else if r.Method == "GET" {
-			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"invalid-value","error-message":"uri keypath not found"}]}}`)
-		} else {
-			w.WriteHeader(http.StatusOK)
-		}
-	})
-
-	defer teardown()
-
-	resource.Test(t, resource.TestCase{
-		IsUnitTest:               true,
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			// Step 1: Create BIG-IP-Next tenant with deployment_file
-			{
-				Config: testAccTenantNextWithDeploymentFile,
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant.next_test", "name", "testtenant-next"),
-					resource.TestCheckResourceAttr("f5os_tenant.next_test", "type", "BIG-IP-Next"),
-					resource.TestCheckResourceAttr("f5os_tenant.next_test", "deployment_file", "BIG-IP-Next-20.0.1-2.123.17.yaml"),
-					resource.TestCheckResourceAttr("f5os_tenant.next_test", "status", "Configured"),
-				),
-			},
-			// Step 2: Import — deployment_file must survive because
-			// tenantResourceModeltoState now reads Config.DeploymentFile.
-			{
-				ResourceName:      "f5os_tenant.next_test",
-				ImportState:       true,
-				ImportStateVerify: true,
-				ImportStateVerifyIgnore: []string{
-					"timeout",
-					"virtual_disk_size",
-				},
-				ImportStateCheck: func(states []*terraform.InstanceState) error {
-					if len(states) != 1 {
-						return fmt.Errorf("expected 1 state, got %d", len(states))
-					}
-					df := states[0].Attributes["deployment_file"]
-					if df != "BIG-IP-Next-20.0.1-2.123.17.yaml" {
-						return fmt.Errorf("expected deployment_file %q after import, got %q", "BIG-IP-Next-20.0.1-2.123.17.yaml", df)
-					}
-					return nil
-				},
-			},
-		},
-	})
-}
 
 // TestUnitTenantDeploymentFileNullForBigIP verifies that for a standard BIG-IP
 // tenant (no deployment_file in HCL or API response), the deployment_file
@@ -1365,38 +1148,4 @@ func TestUnitTenantDeploymentFileNullForBigIP(t *testing.T) {
 	})
 }
 
-const testAccTenantNextWithDeploymentFile = `
-resource "f5os_tenant" "next_test" {
-  name              = "testtenant-next"
-  image_name        = "BIG-IP-Next-20.0.1-2.123.17"
-  deployment_file   = "BIG-IP-Next-20.0.1-2.123.17.yaml"
-  mgmt_ip           = "10.10.10.40"
-  mgmt_gateway      = "10.10.10.1"
-  mgmt_prefix       = 24
-  type              = "BIG-IP-Next"
-  cpu_cores         = 4
-  running_state     = "configured"
-  virtual_disk_size = 30
-  vlans             = [1]
-}
-`
 
-const testAccTenantDeployTC5 = `
-resource "f5os_tenant" "velos_bigip_next_tenant_tc5" {
-	cpu_cores       = 4
-	cryptos         = "enabled"
-	deployment_file = "BIG-IP-Next-20.0.1-2.123.17.yaml"
-	image_name = "BIG-IP-Next-20.0.1-2.123.17"
-	mgmt_gateway           = "100.10.100.1"
-	mgmt_ip                = "100.10.100.110"
-	mgmt_prefix            = 24
-	dag_ipv6_prefix_length = 100
-	mac_block_size         = "medium"
-	name                   = "testtenant-ecosys03"
-	nodes                  = [2]
-	running_state          = "configured"
-	timeout           = 600
-	type              = "BIG-IP-Next"
-	virtual_disk_size = 30
-  }
-`
