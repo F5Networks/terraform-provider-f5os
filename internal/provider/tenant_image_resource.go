@@ -260,10 +260,15 @@ func (r *TenantImageResource) importImage(ctx context.Context, data *TenantImage
 	tflog.Info(ctx, fmt.Sprintf("timeout data :%+v", timeout))
 	importConfig := &f5ossdk.F5ReqTenantImage{}
 	if data.Insecure.ValueBool() {
-		importConfig.Insecure = "true"
-	} else {
-		importConfig.Insecure = ""
+		// The F5OS RESTCONF API models "insecure" as a YANG empty leaf.
+		// When present (any value, including ""), it enables insecure mode.
+		// When absent (omitted from JSON), insecure mode is disabled.
+		// A *string set to "" serializes as "insecure":"" in JSON;
+		// a nil *string is omitted by omitempty.
+		emptyVal := ""
+		importConfig.Insecure = &emptyVal
 	}
+	// When Insecure is false, leave importConfig.Insecure as nil (omitted).
 	importConfig.RemoteHost = data.RemoteHost.ValueString()
 	importConfig.RemoteFile = fmt.Sprintf("%s/%s", data.RemotePath.ValueString(), data.ImageName.ValueString())
 	importConfig.LocalFile = data.LocalPath.ValueString()

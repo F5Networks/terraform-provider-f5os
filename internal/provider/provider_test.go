@@ -27,6 +27,10 @@ var (
 
 	// server is a test HTTP server used to provide mock API responses
 	server *httptest.Server
+
+	// savedEnv holds the original F5OS env vars so teardown() can restore
+	// them after unit tests that overwrite them with mock-server values.
+	savedEnv map[string]string
 )
 
 var (
@@ -52,14 +56,18 @@ func testAccPreCheck(t *testing.T) {
 }
 
 func testAccPreUnitCheck(t *testing.T) {
-	// You can add code here to run prior to any test case execution, for example assertions
-	// about the appropriate environment variables being set are common to see in a pre-check
-	// function.
+	// Save original env vars so teardown() can restore them. This prevents
+	// unit tests from polluting F5OS_HOST for acceptance tests that run
+	// later in the same process.
+	savedEnv = map[string]string{
+		"F5OS_HOST":     os.Getenv("F5OS_HOST"),
+		"F5OS_USERNAME": os.Getenv("F5OS_USERNAME"),
+		"F5OS_PASSWORD": os.Getenv("F5OS_PASSWORD"),
+	}
 	setup()
 	_ = os.Setenv("F5OS_HOST", server.URL)
 	_ = os.Setenv("F5OS_USERNAME", "testuser")
 	_ = os.Setenv("F5OS_PASSWORD", "testpass")
-	//defer teardown()
 }
 
 func setup() {
@@ -70,6 +78,18 @@ func setup() {
 
 func teardown() {
 	server.Close()
+	// Restore original env vars so acceptance tests that run later in the
+	// same process connect to the real device, not the (now-closed) mock.
+	if savedEnv != nil {
+		for k, v := range savedEnv {
+			if v == "" {
+				_ = os.Unsetenv(k)
+			} else {
+				_ = os.Setenv(k, v)
+			}
+		}
+		savedEnv = nil
+	}
 }
 
 // loadFixtureBytes returns the entire contents of the given file as a byte slice

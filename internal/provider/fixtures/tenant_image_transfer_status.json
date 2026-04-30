@@ -48,7 +48,16 @@
         },
         {
             "local-file-path": "images/tenant/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
-            "remote-host": "spkapexsrvc01.olympus.f5net.com",
+            "remote-host": "10.238.1.148",
+            "remote-file-path": "v17.1.0.1/dist/release/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "operation": "Import file",
+            "protocol": "HTTPS   ",
+            "status": "         Completed",
+            "timestamp": "Mon Jun 26 16:05:22 2023"
+        },
+        {
+            "local-file-path": "images/tenant/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "remote-host": "10.238.1.148",
             "remote-file-path": "v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
             "operation": "Import file",
             "protocol": "HTTPS   ",
@@ -57,7 +66,7 @@
         },
         {
             "local-file-path": "images/tenant/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
-            "remote-host": "spkapexsrvc01.olympus.f5net.com",
+            "remote-host": "10.238.1.148",
             "remote-file-path": "v17.1.0.1/daily/release/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
             "operation": "Import file",
             "protocol": "HTTPS   ",

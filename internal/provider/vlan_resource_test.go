@@ -59,7 +59,7 @@ func TestAccVlanCreateTC2Resource(t *testing.T) {
 	})
 }
 
-func TestAccVlanCreateUnitTC1Resource(t *testing.T) {
+func TestUnitVlanCreateTC1Resource(t *testing.T) {
 	testAccPreUnitCheck(t)
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "GET", r.Method, "Expected method 'GET', got %s", r.Method)
@@ -114,7 +114,7 @@ func TestAccVlanCreateUnitTC1Resource(t *testing.T) {
 	})
 }
 
-func TestAccVlanCreateUnitTC2Resource(t *testing.T) {
+func TestUnitVlanCreateTC2Resource(t *testing.T) {
 	testAccPreUnitCheck(t)
 	var count = 0
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
