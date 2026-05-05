@@ -679,7 +679,9 @@ func (r *SystemResource) SystemResourceModelToState(ctx context.Context, resSyst
 	}
 
 	// data.CliTimeout = types.Int64Value(int64(resSystemSettingsConfig.Settings.Config.CliTimeout.(int)))
-	data.SshdIdleTimeout = types.StringValue(resSystemSettingsConfig.Settings.Config.SshdIdleTimeout.(string))
+	if resSystemSettingsConfig.Settings.Config.SshdIdleTimeout != nil {
+		data.SshdIdleTimeout = types.StringValue(resSystemSettingsConfig.Settings.Config.SshdIdleTimeout.(string))
+	}
 
 	data.TokenLifetime = types.Int64Value(int64(resTokenLifetime.Lifetime))
 

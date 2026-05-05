@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -172,6 +174,122 @@ func TestAccSystemUpdateTC2Resource(t *testing.T) {
 // 		},
 // 	})
 // }
+
+func TestUnitSystemCreateNoSshdIdleTimeoutTC3Resource(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.Header().Set("Content-Type", "application/yang-data+json")
+			w.Header().Set("X-Auth-Token", "eyJhbGciOiJIXzI2NiIsInR6cCI6IkcXVCJ9.eyJhdXRoaW5mbyI6ImFkbWluIDEwMDAgOTAwMCBcL3ZhclwvRjVcL3BhcnRpdGlvbiIsImV4cCI6MTY4MDcyMDc4MiwiaWF0IjoxNjgwNzE5ODgyLCJyZW5ld2xpbWl0IjoiNSIsInVzZXJpbmZvIjoiYWRtaW4gMTcyLjE4LjIzMy4yMiJ9.c6Fw4AVm9dN4F-rRJZ1655Ks3xEWCzdAvum-Q3K7cwU")
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+		}
+		if r.Method == "PATCH" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, ``)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, ``)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-system-settings:settings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			// Return settings WITHOUT sshd-idle-timeout to simulate a device
+			// where SSH idle timeout has never been configured (nil value)
+			_, _ = fmt.Fprintf(w, `{
+				"f5-system-settings:settings": {
+					"config": {
+						"idle-timeout": 3600
+					}
+				}
+			}`)
+		}
+		if r.Method == "PATCH" {
+			w.WriteHeader(http.StatusNoContent)
+			_, _ = fmt.Fprintf(w, ``)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/config", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{
+			"openconfig-system:config": {
+				"hostname": "system-no-sshd.example.net",
+				"login-banner": "Welcome.",
+				"motd-banner": "Hello"
+			}
+		}`)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/clock", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{
+			"openconfig-system:clock": {
+				"config": {
+					"timezone-name": "UTC"
+				}
+			}
+		}`)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-security-ciphers:security/services/service", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{
+			"f5-security-ciphers:service": [
+				{
+					"name": "httpd",
+					"config": {
+						"ssl-cipher-suite": "ECDHE-RSA-AES256-GCM-SHA384"
+					}
+				},
+				{
+					"name": "sshd",
+					"config": {
+						"ciphers": ["aes256-ctr"]
+					}
+				}
+			]
+		}`)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-aaa-confd-restconf-token:restconf-token/state/lifetime", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-aaa-confd-restconf-token:lifetime": 15}`)
+	})
+
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccSystemCreateNoSshdIdleTimeoutConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "id", "system-no-sshd.example.net"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "hostname", "system-no-sshd.example.net"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "cli_timeout", "3600"),
+					resource.TestCheckNoResourceAttr("f5os_system.system_settings", "sshd_idle_timeout"),
+				),
+			},
+		},
+	})
+}
+
+const testAccSystemCreateNoSshdIdleTimeoutConfig = `
+resource "f5os_system" "system_settings" {
+  hostname = "system-no-sshd.example.net"
+  motd = "Hello"
+  login_banner = "Welcome."
+  timezone = "UTC"
+  cli_timeout = 3600
+  token_lifetime = 15
+  httpd_ciphersuite = "ECDHE-RSA-AES256-GCM-SHA384"
+  sshd_ciphers = ["aes256-ctr"]
+}`
 
 const testAccSystemCreateResourceConfig = `
 resource "f5os_system" "system_settings" {
