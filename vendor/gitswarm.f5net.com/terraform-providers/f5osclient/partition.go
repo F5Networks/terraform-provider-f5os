@@ -390,9 +390,16 @@ func (p *F5os) DeleteTlsCertKey(certKeyName string) error {
 
 // PatchDNSConfig sets DNS config using PATCH to /system/dns
 func (c *F5os) PatchDNSConfig(dnsServers []string, searchDomains []string) error {
-	var servers []DNSServer
+	// Pre-allocate so json.Marshal produces "server":[] not "server":null
+	// when dnsServers is empty.
+	servers := make([]DNSServer, 0, len(dnsServers))
 	for _, s := range dnsServers {
 		servers = append(servers, DNSServer{Address: s})
+	}
+
+	// Ensure non-nil so json.Marshal produces "search":[] not "search":null
+	if searchDomains == nil {
+		searchDomains = []string{}
 	}
 
 	payload := DNSConfigPayload{
