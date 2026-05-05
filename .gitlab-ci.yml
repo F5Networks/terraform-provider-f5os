@@ -24,6 +24,7 @@ workflow:
     - if: $CI_MERGE_REQUEST_IID
     - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
 
 cache:
   key:
@@ -52,6 +53,7 @@ go:build:
         - .gitlab-ci.yml
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "schedule"
   needs: []
   stage: build
   script:
@@ -86,6 +88,7 @@ unit-tests:
         - .gitlab-ci.yml
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "schedule"
   stage: unittest
   script:
     - make test
@@ -106,97 +109,235 @@ unit-tests:
       - coverage_report.txt
     expire_in: 30 days
 
+# ---------------------------------------------------------------------------
+# Release & publish — mirrors .github/workflows/release.yml
+#
+# Triggered on tags matching v*. Builds release artifacts with goreleaser,
+# then publishes them to GitHub so the Terraform Registry can pick them up.
+#
+# Required CI/CD variables (Settings → CI/CD → Variables):
+#   GPG_PRIVATE_KEY          – ASCII-armored GPG private key (file variable)
+#   GITHUB_TOKEN_FOR_SYNC    – GitHub PAT with repo scope
+#   GITHUB_ORG               – GitHub organisation (default: f5networks)
+#   GITHUB_USER              – GitHub username for git push
+#   GITHUB_MAIL              – Email for git commits to GitHub
+#   RUN_RELEASE              – Set to "true" on a pipeline schedule to run
+#                              the goreleaser build (snapshot mode)
+#   PUBLISH_TO_GITHUB        – Set to "true" to enable the GitHub publish job
+#                              (add as a pipeline schedule variable)
+#   RELEASE_TAG              – Tag to publish (e.g. "v1.2.0"); required for
+#                              scheduled runs of github-for-terraform-registry
+#                              when CI_COMMIT_TAG is not set
+# ---------------------------------------------------------------------------
+
 goreleaser:
   stage: release
   dependencies: []
-  only:
-    - tags
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $RUN_RELEASE == "true"
   image:
     name: "${DOCKER_HUB_PROXY}/goreleaser/goreleaser"
   variables:
-    # Disable shallow cloning so that goreleaser can diff between tags to
-    # generate a changelog.
     GIT_DEPTH: 0
     GITLAB_TOKEN: $CI_JOB_TOKEN
   before_script:
-    - apk add gpg-agent
-    - chmod +x setup_deps.bash
-    - ./setup_deps.bash
-    - gpg --batch --no-tty --import $GPG_PRIVATE_KEY
+    - apk add gpg-agent git
+    # Fail fast if GPG_PASSPHRASE is not set — without it the GPG import
+    # silently fails and goreleaser produces unsigned artifacts.
+    - |
+      if [ -z "$GPG_PASSPHRASE" ]; then
+        echo "ERROR: GPG_PASSPHRASE is not set. Add it as a CI/CD variable."
+        exit 1
+      fi
+    # Download secure files
+    - curl --silent "https://gitlab.com/gitlab-org/incubation-engineering/mobile-devops/download-secure-files/-/raw/main/installer" | bash
+
+    # Import the GPG key
+    - gpg --batch --passphrase "$GPG_PASSPHRASE" --import .secure_files/private.key
+
+    # Verify import
+    - gpg --list-secret-keys
     - "export GPG_FINGERPRINT=$(gpg --with-colons --list-keys | awk -F: '/^pub/ { print $5 }')"
+    # When running from a schedule, CI_COMMIT_TAG may be empty. Derive
+    # the version from the latest v* tag in the repository.
+    - |
+      if [ -z "$CI_COMMIT_TAG" ]; then
+        CI_COMMIT_TAG=$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null || true)
+        if [ -z "$CI_COMMIT_TAG" ]; then
+          echo "ERROR: CI_COMMIT_TAG is not set and no v* tag found in the repository."
+          exit 1
+        fi
+        export CI_COMMIT_TAG
+        echo "Derived tag from git: $CI_COMMIT_TAG"
+      fi
   script:
-    - echo $GPG_FINGERPRINT
-    - goreleaser release
-    - cp terraform-registry-manifest.json dist/${CI_PROJECT_NAME}_${CI_COMMIT_TAG:1}_manifest.json
+    # Tag push → full release; schedule → snapshot build (no publish).
+    - |
+      if [ "$CI_PIPELINE_SOURCE" = "schedule" ]; then
+        goreleaser release --snapshot --clean
+      else
+        goreleaser release
+      fi
+    - |
+      VERSION="${CI_COMMIT_TAG#v}"
+      cp terraform-registry-manifest.json "dist/${CI_PROJECT_NAME}_${VERSION}_manifest.json"
   artifacts:
     paths:
-      - dist/$CI_PROJECT_NAME_*.zip
-      - dist/$CI_PROJECT_NAME_*_SHA256SUMS*
-      - dist/$CI_PROJECT_NAME_*_manifest.json
+      - dist/*.zip
+      - dist/*_SHA256SUMS*
+      - dist/*_manifest.json
       - docs/
 
 github-for-terraform-registry:
   stage: publish
-  only:
-    - tags
-  image: alpine:3.16
+  rules:
+    - if: $PUBLISH_TO_GITHUB == "true" && $CI_COMMIT_TAG =~ /^v/
+    - if: $PUBLISH_TO_GITHUB == "true" && $CI_PIPELINE_SOURCE == "schedule"
+  image: "${DOCKER_HUB_PROXY}/alpine:3.16"
   variables:
     GIT_STRATEGY: none
-    GITHUB_ORG: RavinderReddyF5
+    GITHUB_ORG: f5networks
     GITHUB_REPO: $CI_PROJECT_NAME
-    GITHUB_USER: RavinderReddyF5
+    GITHUB_USER: f5networks
   before_script:
     - apk add --update curl jq file git
+    # Fail fast if critical variables are missing — without these the job
+    # produces cryptic failures during git clone, GitHub API calls, or
+    # generates releases with empty tags.
+    - |
+      missing=""
+      for var in GITHUB_TOKEN_FOR_SYNC GITHUB_MAIL GITHUB_USER GITHUB_ORG; do
+        eval val=\$$var
+        if [ -z "$val" ]; then
+          missing="$missing $var"
+        fi
+      done
+      if [ -n "$missing" ]; then
+        echo "ERROR: Required CI/CD variables are not set:$missing"
+        exit 1
+      fi
+    # When running from a schedule, CI_COMMIT_TAG is empty. Use
+    # RELEASE_TAG (a schedule variable) or extract from artifact names.
+    - |
+      if [ -z "$CI_COMMIT_TAG" ]; then
+        if [ -n "$RELEASE_TAG" ]; then
+          export CI_COMMIT_TAG="$RELEASE_TAG"
+        else
+          CI_COMMIT_TAG=$(ls dist/*.zip 2>/dev/null | head -1 | sed 's/.*_\([0-9][^_]*\)_.*/v\1/')
+          export CI_COMMIT_TAG
+        fi
+        if [ -z "$CI_COMMIT_TAG" ]; then
+          echo "ERROR: Could not determine release tag. Set RELEASE_TAG or ensure dist/ contains release artifacts."
+          exit 1
+        fi
+        echo "Derived tag: $CI_COMMIT_TAG"
+      fi
+    # Ensure dist/ actually contains release artifacts. If the goreleaser
+    # job failed silently or artifacts were not passed, there is nothing
+    # to publish and we should fail before creating an empty GitHub release.
+    - |
+      if ! ls dist/*.zip 1>/dev/null 2>&1; then
+        echo "ERROR: No .zip files found in dist/. The goreleaser job may have failed or its artifacts were not passed to this job."
+        exit 1
+      fi
     - ls dist/
   script:
+    # Push generated docs to the GitHub mirror.
     - |
       git clone --depth 1 https://$GITHUB_USER:$GITHUB_TOKEN_FOR_SYNC@github.com/$GITHUB_ORG/$GITHUB_REPO.git /tmp/github-repo
       cp -rf docs /tmp/github-repo
       cd /tmp/github-repo
-      git config user.email $GITHUB_MAIL
-      git config user.name $GITHUB_USER
+      git config user.email "$GITHUB_MAIL"
+      git config user.name "$GITHUB_USER"
       git add docs
       git commit --message "Update docs for $CI_COMMIT_TAG release" --allow-empty
       git push
       cd -
       rm -rf /tmp/github-repo
-    # create a pre-release Release on GitHub
-    # see https://docs.github.com/en/rest/releases/releases#create-a-release
+    # Create a pre-release on GitHub (the Terraform Registry watches for these).
+    # https://docs.github.com/en/rest/releases/releases#create-a-release
     - |
-      gh_release=$(curl --silent --show-error --fail-with-body -X POST -H "Accept: application/vnd.github.v3+json" -H "Authorization: token $GITHUB_TOKEN_FOR_SYNC" \
-        https://api.github.com/repos/$GITHUB_ORG/$GITHUB_REPO/releases \
+      gh_release=$(curl --silent --show-error --fail-with-body \
+        -X POST \
+        -H "Accept: application/vnd.github.v3+json" \
+        -H "Authorization: token $GITHUB_TOKEN_FOR_SYNC" \
+        "https://api.github.com/repos/$GITHUB_ORG/$GITHUB_REPO/releases" \
         -d '{
-          "tag_name":"'$CI_COMMIT_TAG'",
+          "tag_name":"'"$CI_COMMIT_TAG"'",
           "target_commitish":"main",
-          "name":"'$CI_COMMIT_TAG'",
-          "body":"This release hosted on GitHub only exists because it is the only way to publish to the Terraform Provider Registry.\n\nSee the official release page on GitLab here: **'$CI_PROJECT_URL'/-/releases/'$CI_COMMIT_TAG'**",
+          "name":"'"$CI_COMMIT_TAG"'",
+          "body":"This release hosted on GitHub only exists because it is the only way to publish to the Terraform Provider Registry.\n\nSee the official release page on GitLab here: **'"$CI_PROJECT_URL"'/-/releases/'"$CI_COMMIT_TAG"'**",
           "draft":false,
           "prerelease":true,
           "generate_release_notes":false
-        }'
-      )
-    - gh_release_id=$(echo $gh_release | jq -r '.id')
+        }')
+    - gh_release_id=$(echo "$gh_release" | jq -r '.id')
     - gh_release_upload_url="https://uploads.github.com/repos/$GITHUB_ORG/$GITHUB_REPO/releases/$gh_release_id/assets"
     - 'echo "GitHub Release URL: $gh_release_upload_url"'
-    # uploading release assets for GitHub release created in previous step
-    # see https://docs.github.com/en/rest/releases/assets#upload-a-release-asset
+    # Upload every release asset produced by goreleaser.
+    # On failure, retry once. Track all failures so we can report them
+    # after the loop completes instead of aborting on the first error.
+    # https://docs.github.com/en/rest/releases/assets#upload-a-release-asset
     - |
       echo "Uploading assets from dist/ produced by goreleaser"
+      failed_assets=""
       for asset in dist/*; do
-        echo -n "Uploading $asset ..."
         content_type=$(file -b --mime-type "$asset")
         filename=$(basename "$asset")
-        curl --silent --output /dev/null --show-error --fail-with-body -X POST -H "Accept: application/vnd.github.v3+json" -H "Authorization: token $GITHUB_TOKEN_FOR_SYNC" \
-          "$gh_release_upload_url?name=$filename" \
-          -H "Content-Type: $content_type" \
-          --data-binary "@$asset"
-        echo " done."
+        uploaded=false
+        for attempt in 1 2; do
+          if [ "$attempt" -eq 2 ]; then
+            echo "  Retrying $filename (attempt 2/2)..."
+            sleep 5
+          fi
+          if curl --silent --output /dev/null --show-error --fail-with-body \
+            -X POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token $GITHUB_TOKEN_FOR_SYNC" \
+            "$gh_release_upload_url?name=$filename" \
+            -H "Content-Type: $content_type" \
+            --data-binary "@$asset"; then
+            echo "Uploaded $filename"
+            uploaded=true
+            break
+          fi
+        done
+        if [ "$uploaded" = "false" ]; then
+          echo "FAILED to upload $filename after 2 attempts"
+          failed_assets="$failed_assets $filename"
+        fi
       done
-    # now that all assets are uploaded we can "release" the "pre-release" created earlier.
+      if [ -n "$failed_assets" ]; then
+        echo ""
+        echo "============================================================"
+        echo "ERROR: The following assets failed to upload after 2 attempts:"
+        echo " $failed_assets"
+        echo ""
+        echo "The GitHub release ($CI_COMMIT_TAG) remains in pre-release state."
+        echo "To upload the failed assets manually and promote the release, run:"
+        echo ""
+        for f in $failed_assets; do
+          echo "  curl -X POST -H 'Authorization: token \$GITHUB_TOKEN' \\"
+          echo "    -H 'Content-Type: $(file -b --mime-type "dist/$f")' \\"
+          echo "    --data-binary @dist/$f \\"
+          echo "    '${gh_release_upload_url}?name=$f'"
+          echo ""
+        done
+        echo "Then promote the release:"
+        echo ""
+        echo "  curl -X PATCH -H 'Authorization: token \$GITHUB_TOKEN' \\"
+        echo "    -H 'Accept: application/vnd.github+json' \\"
+        echo "    'https://api.github.com/repos/$GITHUB_ORG/$GITHUB_REPO/releases/$gh_release_id' \\"
+        echo "    -d '{\"prerelease\":false}'"
+        echo "============================================================"
+        exit 1
+      fi
+    # Promote pre-release → release now that all assets are uploaded.
     - |
       curl --silent --show-error --fail-with-body \
         -X PATCH \
         -H "Accept: application/vnd.github+json" \
         -H "Authorization: token $GITHUB_TOKEN_FOR_SYNC" \
-        https://api.github.com/repos/$GITHUB_ORG/$GITHUB_REPO/releases/$gh_release_id \
+        "https://api.github.com/repos/$GITHUB_ORG/$GITHUB_REPO/releases/$gh_release_id" \
         -d '{"prerelease":false}'
