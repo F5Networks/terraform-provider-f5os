@@ -5,10 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
+	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
 const (
@@ -104,6 +106,39 @@ func loadFixtureBytes(path string) []byte {
 // loadFixtureString returns the entire contents of the given file as a string
 func loadFixtureString(path string) string {
 	return string(loadFixtureBytes(path))
+}
+
+// testAccPreCheckPlatformRSeries creates a throwaway f5osclient session to
+// detect the device's platform type and skips the test if it is not rSeries.
+// Use this in PreCheck for acceptance tests that assume an rSeries target.
+func testAccPreCheckPlatformRSeries(t *testing.T) {
+	t.Helper()
+	testAccPreCheck(t)
+
+	host := os.Getenv("F5OS_HOST")
+	user := os.Getenv("F5OS_USERNAME")
+	pass := os.Getenv("F5OS_PASSWORD")
+	port := 8888
+	if p := os.Getenv("F5OS_PORT"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil {
+			port = v
+		}
+	}
+	client, err := f5ossdk.NewSession(&f5ossdk.F5osConfig{
+		Host:             host,
+		User:             user,
+		Password:         pass,
+		Port:             port,
+		DisableSSLVerify: true,
+	})
+	if err != nil {
+		t.Fatalf("testAccPreCheckPlatformRSeries: failed to create session: %s", err)
+	}
+	// PlatformType for rSeries is the model name (e.g. "r5900", "r12800-DS").
+	// Skip if the device is a VELOS partition or controller.
+	if client.PlatformType == "Velos Partition" || client.PlatformType == "Velos Controller" {
+		t.Skipf("skipping: test requires rSeries but device is %q", client.PlatformType)
+	}
 }
 
 // setupMockPlatformVersion registers handlers on the shared mux that make
