@@ -10,11 +10,13 @@ stages:
   - build
   - Mend
   - unittest
+  - schema-diff
   - release
   - publish
 
 workflow:
   rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_MERGE_REQUEST_IID
       changes:
         - .gitlab/ci/Dockerfile
@@ -109,6 +111,60 @@ unit-tests:
       - coverage_report.txt
     expire_in: 30 days
 
+# ── Schema Diff ────────────────────────────────────────────────────────
+# Compares the RESTCONF/YANG schemas of two F5OS devices running different
+# versions and generates a Markdown report highlighting breaking changes,
+# new APIs, and new properties.
+#
+# Runs on a schedule or when triggered manually with SCHEMA_DIFF_RUN=true.
+#
+# Required CI/CD variables (set in GitLab > Settings > CI/CD > Variables):
+#   SCHEMA_BASE_HOST     - Base device host:port  (e.g. 10.0.0.1:8888)
+#   SCHEMA_BASE_USER     - Base device username
+#   SCHEMA_BASE_PASS     - Base device password    (masked, env var only)
+#   SCHEMA_NEW_HOST      - New device host:port    (e.g. 10.0.0.2:8888)
+#   SCHEMA_NEW_USER      - New device username
+#   SCHEMA_NEW_PASS      - New device password     (masked, env var only)
+#
+# Note: Passwords are passed via environment variables only (not CLI flags)
+# to avoid leaking credentials in the process table.
+#
+# Schedule setup:
+#   Go to Settings > CI/CD > Pipeline schedules and create a new schedule.
+#   Set the cron expression (e.g. "0 6 * * 1" for weekly Monday 6am UTC).
+#   Ensure the schedule targets the default branch.
+schema-diff:
+  stage: schema-diff
+  needs: []
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $SCHEMA_DIFF_RUN == "true"
+  script:
+    - export GOFLAGS=-mod=vendor
+    - mkdir -p build reports
+    - go build -v -o build/schemadiff ./cmd/schemadiff
+    # Passwords are read from env vars only — CLI flags were removed to
+    # avoid leaking credentials in the process table.
+    - export SCHEMA_BASE_PASS="${SCHEMA_BASE_PASS}"
+    - export SCHEMA_NEW_PASS="${SCHEMA_NEW_PASS}"
+    - |
+      build/schemadiff \
+        -base-host "${SCHEMA_BASE_HOST}" \
+        -base-user "${SCHEMA_BASE_USER}" \
+        -new-host  "${SCHEMA_NEW_HOST}"  \
+        -new-user  "${SCHEMA_NEW_USER}"  \
+        -out reports/schema_diff_report.md || DIFF_EXIT=$?
+    - echo "Schema diff exited with code ${DIFF_EXIT:-0}"
+    - cat reports/schema_diff_report.md
+    # exit 0 so the job always succeeds (breaking changes are flagged in the report)
+    # change to "exit ${DIFF_EXIT:-0}" if you want breaking changes to fail the pipeline
+    - exit 0
+  artifacts:
+    when: always
+    paths:
+      - reports/schema_diff_report.md
+    expire_in: 90 days
+
 # ---------------------------------------------------------------------------
 # Release & publish — mirrors .github/workflows/release.yml
 #
@@ -129,7 +185,6 @@ unit-tests:
 #                              scheduled runs of github-for-terraform-registry
 #                              when CI_COMMIT_TAG is not set
 # ---------------------------------------------------------------------------
-
 goreleaser:
   stage: release
   dependencies: []

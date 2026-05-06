@@ -25,4 +25,7 @@ testacc:
 clean:
 	go clean -testcache
 
-.PHONY: build install lint generate fmt test testacc
+schemadiff:
+	go build -v -o build/schemadiff ./cmd/schemadiff
+
+.PHONY: build install lint generate fmt test testacc schemadiff
