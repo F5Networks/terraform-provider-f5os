@@ -198,7 +198,7 @@ func (r *NTPServerResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	payload, err := r.client.CreateNTPServerPayload(plan.Server.ValueString(), plan) // Reusing CreateNTPServerPayload
+	payload, err := r.client.UpdateNTPServerPayload(plan.Server.ValueString(), plan)
 	if err != nil {
 		resp.Diagnostics.AddError("Payload Creation Error", err.Error())
 		return

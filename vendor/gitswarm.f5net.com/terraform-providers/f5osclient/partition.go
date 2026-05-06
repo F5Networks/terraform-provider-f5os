@@ -522,8 +522,8 @@ const (
 type ntpServerConfig struct {
 	Address string `json:"address"`
 	KeyID   *int64 `json:"f5-openconfig-system-ntp:key-id,omitempty"`
-	Prefer  bool   `json:"prefer,omitempty"`
-	Iburst  bool   `json:"iburst,omitempty"`
+	Prefer  bool   `json:"prefer"`
+	Iburst  bool   `json:"iburst"`
 }
 
 type ntpServerPayload struct {
@@ -616,6 +616,33 @@ func (c *F5os) GetNTPGlobalConfig() (service bool, auth bool, err error) {
 		return false, false, fmt.Errorf("invalid JSON for NTP global config: %w", err)
 	}
 	return envelope.Config.Enabled, envelope.Config.EnableNTPAuth, nil
+}
+
+// UpdateNTPServerPayload builds a PATCH-appropriate payload for an individual
+// NTP server endpoint. Unlike CreateNTPServerPayload (which builds a POST
+// collection-level payload with "server":[...]), this wraps the entry in
+// "openconfig-system:server":[...] which is what PATCH on
+// /ntp/servers/server={addr} expects.
+func (c *F5os) UpdateNTPServerPayload(server string, plan NTPServerModel) ([]byte, error) {
+	cfg := ntpServerConfig{
+		Address: server,
+		Prefer:  plan.Prefer.ValueBool(),
+		Iburst:  plan.IBurst.ValueBool(),
+	}
+	if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() {
+		v := plan.KeyID.ValueInt64()
+		cfg.KeyID = &v
+	}
+	// PATCH on /server={addr} expects "openconfig-system:server" key
+	payload := map[string]interface{}{
+		"openconfig-system:server": []map[string]interface{}{
+			{
+				"address": server,
+				"config":  cfg,
+			},
+		},
+	}
+	return json.Marshal(payload)
 }
 
 func (c *F5os) UpdateNTPServer(server string, payload []byte) error {

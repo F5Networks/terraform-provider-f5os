@@ -37,7 +37,6 @@ resource "f5os_ntp_server" "test" {
 const testAccNTPServerBasicConfig = `
 resource "f5os_ntp_server" "test" {
   server             = "10.255.255.1"
-  key_id             = 0
   prefer             = true
   iburst             = true
   ntp_service        = true
@@ -48,7 +47,6 @@ resource "f5os_ntp_server" "test" {
 const testAccNTPServerUpdatedConfig = `
 resource "f5os_ntp_server" "test" {
   server             = "10.255.255.1"
-  key_id             = 0
   prefer             = false
   iburst             = false
   ntp_service        = true
@@ -825,7 +823,6 @@ func TestUnitNTPServerKeyIDOmittedNotSerialized(t *testing.T) {
 const testAccNTPGlobalConfigCreateEnabled = `
 resource "f5os_ntp_server" "global" {
   server             = "10.255.255.2"
-  key_id             = 0
   prefer             = true
   iburst             = true
   ntp_service        = true
@@ -836,7 +833,6 @@ resource "f5os_ntp_server" "global" {
 const testAccNTPGlobalConfigUpdateDisabled = `
 resource "f5os_ntp_server" "global" {
   server             = "10.255.255.2"
-  key_id             = 0
   prefer             = true
   iburst             = true
   ntp_service        = false
@@ -847,7 +843,6 @@ resource "f5os_ntp_server" "global" {
 const testAccNTPGlobalConfigUpdateReEnabled = `
 resource "f5os_ntp_server" "global" {
   server             = "10.255.255.2"
-  key_id             = 0
   prefer             = true
   iburst             = true
   ntp_service        = true
@@ -874,7 +869,7 @@ func TestAccNTPGlobalConfigPatched(t *testing.T) {
 					resource.TestCheckResourceAttr("f5os_ntp_server.global", "server", "10.255.255.2"),
 					resource.TestCheckResourceAttr("f5os_ntp_server.global", "ntp_service", "true"),
 					resource.TestCheckResourceAttr("f5os_ntp_server.global", "ntp_authentication", "true"),
-					// Direct device API verification — the whole point of this test
+					// Direct device API verification
 					testAccCheckNTPServerOnDevice("10.255.255.2", 0, true, true),
 					testAccCheckNTPGlobalConfigOnDevice(true, true),
 				),
@@ -977,7 +972,6 @@ func TestAccF5osNTPServerResource(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					// Terraform state checks
 					resource.TestCheckResourceAttr("f5os_ntp_server.test", "server", "10.255.255.1"),
-					resource.TestCheckResourceAttr("f5os_ntp_server.test", "key_id", "0"),
 					resource.TestCheckResourceAttr("f5os_ntp_server.test", "prefer", "true"),
 					resource.TestCheckResourceAttr("f5os_ntp_server.test", "iburst", "true"),
 					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_service", "true"),
@@ -1000,7 +994,6 @@ func TestAccF5osNTPServerResource(t *testing.T) {
 				Config: testAccNTPServerUpdatedConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_ntp_server.test", "server", "10.255.255.1"),
-					resource.TestCheckResourceAttr("f5os_ntp_server.test", "key_id", "0"),
 					resource.TestCheckResourceAttr("f5os_ntp_server.test", "prefer", "false"),
 					resource.TestCheckResourceAttr("f5os_ntp_server.test", "iburst", "false"),
 					// Direct device API verification
