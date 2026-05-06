@@ -99,6 +99,34 @@ In order to test the provider, you can run
 It's important to note that acceptance tests (`testacc`) will actually spawn real resources, and often cost money to run. Read more about they work on the
 [official page](https://www.terraform.io/plugin/sdkv2/testing/acceptance-tests).
 
+### Schema diff
+
+The `schemadiff` tool crawls two F5OS devices (different versions) via RESTCONF, compares their YANG module lists and API response structures, then writes a Markdown report highlighting breaking changes, new APIs, and new properties.
+
+Build it with:
+
+```sh
+make schemadiff
+```
+
+Run it against two devices:
+
+```sh
+export SCHEMA_BASE_PASS=admin
+export SCHEMA_NEW_PASS=admin
+
+build/schemadiff \
+  -base-host 10.0.0.1:8888 -base-user admin \
+  -new-host 10.0.0.2:8888  -new-user admin  \
+  -out report.md
+```
+
+Passwords must be supplied via environment variables (`SCHEMA_BASE_PASS`, `SCHEMA_NEW_PASS`) — CLI flags for passwords are not supported to avoid leaking credentials in the process table and shell history.
+
+All flags can also be set via environment variables: `SCHEMA_BASE_HOST`, `SCHEMA_BASE_USER`, `SCHEMA_NEW_HOST`, `SCHEMA_NEW_USER`, and `SCHEMA_DIFF_REPORT`.
+
+The tool exits with code 1 if breaking changes are detected, making it suitable for CI gating. A `schema-diff` job is included in `.gitlab-ci.yml` and runs on scheduled pipelines or when `SCHEMA_DIFF_RUN=true`.
+
 ### Generating documentation
 
 This provider uses [terraform-plugin-docs](https://github.com/hashicorp/terraform-plugin-docs/)

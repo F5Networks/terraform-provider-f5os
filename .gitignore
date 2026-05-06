@@ -38,6 +38,8 @@ cover.out
 reports/
 coverage_report.txt
 AGENTS.md
+*schemadiff
+!schemadiff/
 
 website/vendor
 
