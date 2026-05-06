@@ -88,13 +88,19 @@ func (r *DNSResource) Configure(_ context.Context, req resource.ConfigureRequest
 	r.client = client
 }
 
-// extractStringList safely extracts a string list from a types.List
+// extractStringList safely extracts a string list from a types.List.
+// Always returns a non-nil slice so callers never send JSON null to the
+// API and types.ListValueFrom never produces a null Terraform list.
 func extractStringList(ctx context.Context, list types.List) ([]string, diag.Diagnostics) {
 	var result []string
 	var diags diag.Diagnostics
 
 	if !list.IsNull() && !list.IsUnknown() {
 		diags = list.ElementsAs(ctx, &result, false)
+	}
+
+	if result == nil {
+		result = []string{}
 	}
 
 	return result, diags
@@ -157,6 +163,17 @@ func (r *DNSResource) Create(ctx context.Context, req resource.CreateRequest, re
 	resourceID := computeResourceID(dnsServers, dnsDomains)
 	plan.Id = types.StringValue(resourceID)
 
+	// Ensure dns_domains is never null in state — when omitted from the
+	// HCL config, the plan value is null, but Computed attributes must
+	// be known after apply. Set it to an empty list.
+	if plan.DNSDomains.IsNull() || plan.DNSDomains.IsUnknown() {
+		plan.DNSDomains, diags = types.ListValueFrom(ctx, types.StringType, dnsDomains)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	tflog.Debug(ctx, "DNS configuration created successfully", map[string]interface{}{
 		"servers": dnsServers,
 		"domains": dnsDomains,
@@ -197,11 +214,13 @@ func (r *DNSResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		config.DNS.Config.Search = []string{}
 	}
 
-	// Extract values
-	var servers, domains []string
+	// Extract values — use non-nil empty slices so types.ListValueFrom
+	// always produces an empty list rather than a null Terraform value.
+	servers := make([]string, 0, len(config.DNS.Servers.Server))
 	for _, s := range config.DNS.Servers.Server {
 		servers = append(servers, s.Address)
 	}
+	domains := make([]string, 0, len(config.DNS.Config.Search))
 	domains = append(domains, config.DNS.Config.Search...)
 
 	// Set Terraform types
@@ -284,6 +303,15 @@ func (r *DNSResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	// Compute resource ID based on updated configuration
 	resourceID := computeResourceID(dnsServers, dnsDomains)
 	plan.Id = types.StringValue(resourceID)
+
+	// Ensure dns_domains is never null/unknown in state after Update.
+	if plan.DNSDomains.IsNull() || plan.DNSDomains.IsUnknown() {
+		plan.DNSDomains, diags = types.ListValueFrom(ctx, types.StringType, dnsDomains)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
 
 	tflog.Debug(ctx, "DNS configuration updated successfully", map[string]interface{}{
 		"servers": dnsServers,
