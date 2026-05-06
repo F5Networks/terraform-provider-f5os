@@ -31,16 +31,19 @@ type (
 // -- Acceptance Test (requires live F5OS device) --
 
 func TestAccF5osDNSResource(t *testing.T) {
+	expectedID := computeResourceID([]string{"8.8.8.8"}, []string{"internal.domain"})
+
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckDNSDestroy,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccF5osDNSConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.0", "8.8.8.8"),
-					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.0", "internal.domain"), // fix this index
-					resource.TestCheckResourceAttr("f5os_dns.test", "id", "dns"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.0", "internal.domain"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "id", expectedID),
 				),
 			},
 		},

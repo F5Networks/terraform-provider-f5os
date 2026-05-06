@@ -150,6 +150,42 @@ func (r *DNSResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
+	// Read the current device state so we can remove pre-existing entries
+	// that are not in the Terraform config. The F5OS DNS PATCH API is
+	// additive — it merges with existing config rather than replacing it.
+	// Without this step, pre-existing servers/domains would persist on the
+	// device and cause drift on the next refresh.
+	existing, err := r.client.ReadDNSConfig()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"DNS Configuration Error",
+			fmt.Sprintf("Failed to read existing DNS configuration: %s", err),
+		)
+		return
+	}
+
+	var existingServers, existingDomains []string
+	for _, s := range existing.DNS.Servers.Server {
+		existingServers = append(existingServers, s.Address)
+	}
+	existingDomains = append(existingDomains, existing.DNS.Config.Search...)
+
+	staleServers := removedEntries(existingServers, dnsServers)
+	staleDomains := removedEntries(existingDomains, dnsDomains)
+	if len(staleServers) > 0 || len(staleDomains) > 0 {
+		tflog.Debug(ctx, "Removing pre-existing DNS entries not in config", map[string]interface{}{
+			"stale_servers": staleServers,
+			"stale_domains": staleDomains,
+		})
+		if err := r.client.DeleteDNSConfig(staleServers, staleDomains); err != nil {
+			resp.Diagnostics.AddError(
+				"DNS Configuration Error",
+				fmt.Sprintf("Failed to remove pre-existing DNS entries: %s", err),
+			)
+			return
+		}
+	}
+
 	// Call client to PATCH DNS config
 	if err := r.client.PatchDNSConfig(dnsServers, dnsDomains); err != nil {
 		resp.Diagnostics.AddError(
