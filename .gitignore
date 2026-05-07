@@ -41,6 +41,8 @@ AGENTS.md
 *schemadiff
 !schemadiff/
 
+.secure_files/
+
 website/vendor
 
 # Test exclusions
