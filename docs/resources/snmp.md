@@ -5,6 +5,7 @@ subcategory: ""
 description: |-
   Resource used to manage SNMP configuration (Communities, Users, Targets, and MIB settings) on F5OS systems (VELOS or rSeries).
   ~> NOTE: The f5os_snmp resource manages SNMP settings on F5OS platforms using Open API. Due to API restrictions, passwords cannot be retrieved which may lead to Terraform detecting changes on every plan.
+  ~> NOTE: Running terraform destroy will reset MIB fields (sysContact, sysLocation, sysName) to their defaults and remove the resource from Terraform state.
 ---
 
 # f5os_snmp (Resource)
@@ -12,6 +13,8 @@ description: |-
 Resource used to manage SNMP configuration (Communities, Users, Targets, and MIB settings) on F5OS systems (VELOS or rSeries).
 
 ~> **NOTE:** The `f5os_snmp` resource manages SNMP settings on F5OS platforms using Open API. Due to API restrictions, passwords cannot be retrieved which may lead to Terraform detecting changes on every plan.
+
+~> **NOTE:** Running `terraform destroy` will reset MIB fields (sysContact, sysLocation, sysName) to their defaults and remove the resource from Terraform state.
 
 ## Example Usage
 
