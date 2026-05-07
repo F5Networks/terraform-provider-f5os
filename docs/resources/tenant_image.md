@@ -32,8 +32,10 @@ resource "f5os_tenant_image" "test" {
 
 ### Optional
 
+- `insecure` (Boolean) When set to `true`, the image transfer skips TLS certificate verification on the remote host.
+Useful when importing images over HTTPS from servers with self-signed certificates.
 - `local_path` (String) The path on the F5OS where the the tenant image is to be imported to.
-- `protocol` (String) Protocol for image transfer.
+- `protocol` (String) Protocol for image transfer. Supported values: `scp`, `sftp`, `https`.
 - `remote_host` (String) The hostname or IP address of the remote server on which the tenant image is stored.
 The server must make the image accessible via the specified protocol.
 - `remote_password` (String, Sensitive) Password for the user on the remote server on which the tenant image is stored.

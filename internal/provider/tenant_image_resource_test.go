@@ -100,12 +100,11 @@ func testAccEnsureTestImage(t *testing.T) {
 
 	// Image doesn't exist — import it
 	t.Logf("Importing test image %s from %s", testAccImageName, testAccImageRemoteHost)
-	insecureEmpty := "" // YANG empty leaf: present = insecure mode enabled
 	importConfig := &f5ossdk.F5ReqTenantImage{
 		RemoteHost: testAccImageRemoteHost,
 		RemoteFile: fmt.Sprintf("%s/%s", testAccImageRemotePath, testAccImageName),
 		LocalFile:  "images/tenant",
-		Insecure:   &insecureEmpty, // Certificates are not functional on DUTs
+		Insecure:   []interface{}{nil}, // YANG empty leaf (RFC 7951): [null]
 	}
 
 	_, err = client.ImportImage(importConfig, 600) // 10 minute timeout for large images
@@ -1496,8 +1495,8 @@ func TestUnitTenantImageStatusPopulatedAfterCreate(t *testing.T) {
 
 // TestUnitTenantImageInsecureFlagInPayload verifies that when insecure=true
 // is set in the HCL config, the import payload includes the "insecure" key
-// (as a YANG empty leaf with value ""). When insecure is false (the default),
-// the field should be omitted from the payload entirely (nil *string, omitempty).
+// encoded as [null] (RFC 7951 YANG empty leaf). When insecure is false (the
+// default), the field should be omitted from the payload entirely.
 func TestUnitTenantImageInsecureFlagInPayload(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
 		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
@@ -1517,9 +1516,15 @@ func TestUnitTenantImageInsecureFlagInPayload(t *testing.T) {
 							return fmt.Errorf("import endpoint was never called")
 						}
 						// The F5OS API models "insecure" as a YANG empty leaf.
-						// When present, the value is "" (empty string), not "true".
-						if _, ok := st.capturedBody["insecure"]; !ok {
+						// Per RFC 7951 the JSON encoding is [null].
+						v, ok := st.capturedBody["insecure"]
+						if !ok {
 							return fmt.Errorf("expected insecure key present in request body, but it was absent")
+						}
+						// json.Unmarshal decodes [null] as []interface{}{nil}.
+						arr, isArr := v.([]interface{})
+						if !isArr || len(arr) != 1 || arr[0] != nil {
+							return fmt.Errorf("expected insecure value to be [null] (YANG empty leaf), got %#v", v)
 						}
 						return nil
 					},
@@ -1531,7 +1536,7 @@ func TestUnitTenantImageInsecureFlagInPayload(t *testing.T) {
 
 // TestUnitTenantImageInsecureDefaultOmitted verifies that when insecure is
 // not set (defaults to false), the "insecure" field is omitted from the
-// import payload (empty string triggers omitempty).
+// import payload (nil interface{} is stripped by omitempty).
 func TestUnitTenantImageInsecureDefaultOmitted(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
 		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
@@ -1551,7 +1556,7 @@ func TestUnitTenantImageInsecureDefaultOmitted(t *testing.T) {
 							return fmt.Errorf("import endpoint was never called")
 						}
 						// When insecure is false, importImage leaves Insecure
-						// as nil (*string), which omitempty strips from JSON.
+						// as nil (interface{}), which omitempty strips from JSON.
 						// So the key should be absent entirely.
 						if v, ok := st.capturedBody["insecure"]; ok {
 							return fmt.Errorf("expected insecure key to be absent from request body, got %v", v)
@@ -1619,6 +1624,140 @@ resource "f5os_tenant_image" "test" {
   timeout     = 360
 }
 `, testAccImageRemoteHost)
+
+// ---------------------------------------------------------------------------
+// Unit tests for insecure + protocol combination and http protocol rejection
+// ---------------------------------------------------------------------------
+
+// TestUnitTenantImageInsecureWithHTTPSProtocol verifies that when both
+// insecure=true and protocol="https" are set, the import payload contains
+// both fields with the correct encoding: protocol as "https" and insecure
+// as [null] (RFC 7951 YANG empty leaf).
+func TestUnitTenantImageInsecureWithHTTPSProtocol(t *testing.T) {
+	st := setupTenantImageMock(t, []string{
+		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+	})
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageInsecureHTTPSConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "insecure", "true"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "protocol", "https"),
+					func(s *terraform.State) error {
+						if st.capturedBody == nil {
+							return fmt.Errorf("import endpoint was never called")
+						}
+						// Verify protocol is present and correct.
+						if v, ok := st.capturedBody["protocol"]; !ok || v != "https" {
+							return fmt.Errorf("expected protocol=https in request body, got %v", v)
+						}
+						// Verify insecure is encoded as [null] per RFC 7951.
+						v, ok := st.capturedBody["insecure"]
+						if !ok {
+							return fmt.Errorf("expected insecure key present in request body, but it was absent")
+						}
+						arr, isArr := v.([]interface{})
+						if !isArr || len(arr) != 1 || arr[0] != nil {
+							return fmt.Errorf("expected insecure value to be [null] (YANG empty leaf), got %#v", v)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+var testAccTenantImageInsecureHTTPSConfig = fmt.Sprintf(`
+resource "f5os_tenant_image" "test" {
+  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  remote_host = %q
+  remote_path = "v17.1.0.1/daily/current/VM"
+  local_path  = "images"
+  protocol    = "https"
+  insecure    = true
+  timeout     = 360
+}
+`, testAccImageRemoteHost)
+
+// TestUnitTenantImageHTTPProtocolRejected verifies that protocol="http"
+// is rejected at plan time by the schema validator. The F5OS RESTCONF API
+// does not support HTTP for file transfers so it was removed from the
+// allowed protocol list.
+func TestUnitTenantImageHTTPProtocolRejected(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+resource "f5os_tenant_image" "http_test" {
+  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  remote_host = "10.0.0.1"
+  remote_path = "v17.1.0.1/daily/current/VM"
+  local_path  = "images"
+  protocol    = "http"
+  timeout     = 360
+}
+`,
+				ExpectError: regexp.MustCompile(`(?i)value must be one of`),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageInsecurePayloadSerialization directly tests that
+// F5ReqTenantImage serializes the insecure field as [null] (RFC 7951 YANG
+// empty leaf) when set, and omits it entirely when nil.
+func TestUnitTenantImageInsecurePayloadSerialization(t *testing.T) {
+	// Case 1: insecure enabled — should serialize as [null]
+	req := &f5ossdk.F5ReqTenantImage{
+		Insecure:   []interface{}{nil},
+		RemoteHost: "10.0.0.1",
+		RemoteFile: "img/test.qcow2",
+		LocalFile:  "images/tenant",
+		Protocol:   "https",
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Failed to marshal F5ReqTenantImage with insecure: %v", err)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("Failed to unmarshal serialized body: %v", err)
+	}
+	v, ok := decoded["insecure"]
+	if !ok {
+		t.Fatal("Expected 'insecure' key in serialized JSON, but it was absent")
+	}
+	arr, isArr := v.([]interface{})
+	if !isArr || len(arr) != 1 || arr[0] != nil {
+		t.Fatalf("Expected insecure to serialize as [null], got %#v", v)
+	}
+
+	// Case 2: insecure disabled (nil) — field should be omitted
+	req2 := &f5ossdk.F5ReqTenantImage{
+		RemoteHost: "10.0.0.1",
+		RemoteFile: "img/test.qcow2",
+		LocalFile:  "images/tenant",
+		Protocol:   "https",
+	}
+	body2, err := json.Marshal(req2)
+	if err != nil {
+		t.Fatalf("Failed to marshal F5ReqTenantImage without insecure: %v", err)
+	}
+	var decoded2 map[string]interface{}
+	if err := json.Unmarshal(body2, &decoded2); err != nil {
+		t.Fatalf("Failed to unmarshal serialized body: %v", err)
+	}
+	if _, ok := decoded2["insecure"]; ok {
+		t.Fatalf("Expected 'insecure' key to be absent from serialized JSON when nil, but it was present: %s", string(body2))
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Acceptance tests for uncommitted fixes (ImportState + tenantImageResourceModeltoState)
@@ -2250,6 +2389,151 @@ resource "f5os_tenant_image" "import_success_test" {
 }
 `, imageName, testAccImageRemoteHost)
 }
+
+// ---------------------------------------------------------------------------
+// Acceptance tests for insecure [null] encoding (RFC 7951) and protocol removal
+// ---------------------------------------------------------------------------
+
+// TestAccTenantImageInsecureHTTPSImport verifies that the fixed insecure
+// encoding ([null] per RFC 7951) is accepted by a real F5OS device when
+// importing via HTTPS. This is the primary acceptance test for the
+// insecure/protocol fix.
+//
+// The test imports the standard test image using protocol="https" and
+// insecure=true. If the image already exists, Create adopts it without
+// calling the import endpoint — which still validates that the provider
+// accepts the config and populates state correctly. If the image does NOT
+// exist, Create triggers a real import call whose payload now contains
+// "insecure": [null] instead of the old "insecure": "" that the device
+// rejected.
+func TestAccTenantImageInsecureHTTPSImport(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
+	}
+	testAccPreCheckWithSetup(t)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantImageDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageInsecureHTTPSImportConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.insecure_https_test", "id", testAccImageName),
+					resource.TestCheckResourceAttr("f5os_tenant_image.insecure_https_test", "image_name", testAccImageName),
+					resource.TestCheckResourceAttr("f5os_tenant_image.insecure_https_test", "insecure", "true"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.insecure_https_test", "protocol", "https"),
+					testAccCheckTenantImageExistsOnDevice(testAccImageName),
+				),
+			},
+			// ImportState round-trip
+			{
+				ResourceName:      "f5os_tenant_image.insecure_https_test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"local_path", "remote_host", "remote_path", "remote_user",
+					"remote_password", "remote_port", "protocol", "insecure",
+					"upload_from_path", "timeout",
+				},
+			},
+		},
+	})
+}
+
+var testAccTenantImageInsecureHTTPSImportConfig = fmt.Sprintf(`
+resource "f5os_tenant_image" "insecure_https_test" {
+  image_name  = %q
+  remote_host = %q
+  remote_path = %q
+  local_path  = "images/tenant"
+  protocol    = "https"
+  insecure    = true
+  timeout     = 360
+}
+`, testAccImageName, testAccImageRemoteHost, testAccImageRemotePath)
+
+// TestAccTenantImageInsecureDirectAPIImport bypasses Terraform and calls the
+// f5osclient ImportImage function directly with the fixed [null] insecure
+// encoding against a real device. This validates that the F5OS RESTCONF API
+// at /f5-utils-file-transfer:file/import accepts the RFC 7951 YANG empty
+// leaf encoding. Unlike TestAccTenantImageInsecureHTTPSImport (which may
+// adopt an existing image and skip the import call), this test always hits
+// the import endpoint.
+//
+// It uses a non-existent image name so the import will fail with a transfer
+// error (unreachable file), NOT with "invalid value for: insecure". This
+// proves the insecure field encoding is accepted by the API.
+func TestAccTenantImageInsecureDirectAPIImport(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
+	}
+	testAccPreCheck(t)
+
+	client, err := newTenantImageClientFromEnv()
+	if err != nil {
+		t.Fatalf("Cannot create client: %v", err)
+	}
+
+	importConfig := &f5ossdk.F5ReqTenantImage{
+		RemoteHost: testAccImageRemoteHost,
+		RemoteFile: "nonexistent-path/BIGIP-fake-insecure-test.qcow2.zip.bundle",
+		LocalFile:  "images/tenant",
+		Protocol:   "https",
+		Insecure:   []interface{}{nil}, // RFC 7951 YANG empty leaf: [null]
+	}
+
+	// We expect ImportImage to NOT fail with "invalid value for: insecure".
+	// It will fail for other reasons (file not found, transfer timeout, etc.)
+	// which is fine — we only care that the insecure field was accepted.
+	_, err = client.ImportImage(importConfig, 60) // short timeout; we don't need it to complete
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "invalid value") && strings.Contains(errStr, "insecure") {
+			t.Fatalf("API rejected insecure field encoding: %v", err)
+		}
+		// Any other error is expected (file not found, timeout, etc.)
+		t.Logf("Import failed as expected (file doesn't exist): %v", err)
+	}
+}
+
+// TestAccTenantImageInsecureFalseHTTPSCertError verifies that when
+// insecure=false (the default), the insecure field is omitted from the
+// import payload and the F5OS device's HTTPS client rejects the server
+// certificate. This is the counterpart to TestAccTenantImageInsecureHTTPSImport
+// and validates that omitting insecure (nil, omitempty) still produces
+// the expected certificate verification behavior.
+//
+// This test overlaps with TestAccTenantImageImportWaitCertError but
+// explicitly sets protocol="https" to test the combination.
+func TestAccTenantImageInsecureFalseHTTPSCertError(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
+	}
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheckWithSetup(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccTenantImageInsecureFalseHTTPSConfig,
+				ExpectError: regexp.MustCompile(`(?i)certificate|Peer certificate cannot be authenticated|Unable to Import`),
+			},
+		},
+	})
+}
+
+var testAccTenantImageInsecureFalseHTTPSConfig = fmt.Sprintf(`
+resource "f5os_tenant_image" "cert_test" {
+  image_name  = "BIGIP-insecure-false-test-nonexistent.qcow2.zip.bundle"
+  remote_host = %q
+  remote_path = "v17.1.0.1/daily/current/VM"
+  local_path  = "images/tenant"
+  protocol    = "https"
+  insecure    = false
+  timeout     = 90
+}
+`, testAccImageRemoteHost)
 
 // TestAccTenantImageTransferStatusShape queries the transfer-status
 // endpoint directly (bypassing Terraform entirely) and verifies that the
