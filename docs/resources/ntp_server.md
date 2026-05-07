@@ -42,4 +42,11 @@ resource "f5os_ntp_server" "test" {
 
 - `id` (String) Terraform synthetic ID (server address).
 
+## Import
 
+Import is supported using the following syntax:
+
+```shell
+# NTP server can be imported by specifying the server address.
+terraform import f5os_ntp_server.example 10.20.30.40
+```

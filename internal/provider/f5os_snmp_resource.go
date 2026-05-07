@@ -135,7 +135,8 @@ func (r *SnmpResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Resource used to manage SNMP configuration (Communities, Users, Targets, and MIB settings) on F5OS systems (VELOS or rSeries).\n\n" +
 			"~> **NOTE:** The `f5os_snmp` resource manages SNMP settings on F5OS platforms using Open API. " +
-			"Due to API restrictions, passwords cannot be retrieved which may lead to Terraform detecting changes on every plan.",
+			"Due to API restrictions, passwords cannot be retrieved which may lead to Terraform detecting changes on every plan.\n\n" +
+			"~> **NOTE:** Running `terraform destroy` will reset MIB fields (sysContact, sysLocation, sysName) to their defaults and remove the resource from Terraform state.",
 		Attributes: map[string]schema.Attribute{
 			"snmp_community": schema.ListNestedAttribute{
 				Optional:            true,

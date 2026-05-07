@@ -97,7 +97,8 @@ func (r *AuthResource) Configure(_ context.Context, req resource.ConfigureReques
 
 func (r *AuthResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manage AAA authentication on F5OS. Includes authentication method order and role GID mappings.",
+		MarkdownDescription: "Manage AAA authentication on F5OS. Includes authentication method order, role GID mappings, and password policy.\n\n" +
+			"~> **NOTE:** Running `terraform destroy` will restore the original authentication order and revert any role GID changes made by this resource.",
 		Attributes: map[string]schema.Attribute{
 			"auth_order": schema.ListAttribute{
 				MarkdownDescription: "Ordered list of authentication methods. Allowed values: local, radius, tacacs, ldap.",

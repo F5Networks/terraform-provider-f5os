@@ -48,7 +48,8 @@ func (r *DNSResource) Metadata(_ context.Context, req resource.MetadataRequest, 
 func (r *DNSResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Resource used to configure DNS settings (servers and domains) on F5OS systems (VELOS or rSeries).\n\n" +
-			"~> **NOTE:** The `f5os_dns` resource updates DNS servers and search domains on the F5OS platforms using Open API.\n\n" +
+			"~> **NOTE:** The `f5os_dns` resource updates DNS servers and search domains on the F5OS platforms using Open API. " +
+			"When updating, any servers or domains removed from the configuration are also deleted from the device before the new values are applied.\n\n" +
 			"~> **IMPORTANT:** Running `terraform destroy` will remove this resource from Terraform state but will **not** delete the DNS configuration from the device. DNS is a critical system service and removing it could make the device unreachable.",
 		Attributes: map[string]schema.Attribute{
 			"dns_servers": schema.ListAttribute{

@@ -3,12 +3,15 @@
 page_title: "f5os_auth Resource - terraform-provider-f5os"
 subcategory: ""
 description: |-
-  Manage AAA authentication on F5OS. Includes authentication method order and role GID mappings.
+  Manage AAA authentication on F5OS. Includes authentication method order, role GID mappings, and password policy.
+  ~> NOTE: Running terraform destroy will restore the original authentication order and revert any role GID changes made by this resource.
 ---
 
 # f5os_auth (Resource)
 
-Manage AAA authentication on F5OS. Includes authentication method order and role GID mappings.
+Manage AAA authentication on F5OS. Includes authentication method order, role GID mappings, and password policy.
+
+~> **NOTE:** Running `terraform destroy` will restore the original authentication order and revert any role GID changes made by this resource.
 
 ## Example Usage
 
@@ -85,4 +88,11 @@ Optional:
 - `ldap_group` (String)
 - `remote_gid` (Number)
 
+## Import
 
+Import is supported using the following syntax:
+
+```shell
+# Auth resource can be imported using a fixed identifier.
+terraform import f5os_auth.example auth
+```
