@@ -99,10 +99,10 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 				},
 			},
 			"protocol": schema.StringAttribute{
-				MarkdownDescription: "Protocol for image transfer. Supported values: `scp`, `sftp`, `https`, `http`.",
+				MarkdownDescription: "Protocol for image transfer. Supported values: `scp`, `sftp`, `https`.",
 				Optional:            true,
 				Validators: []validator.String{
-					stringvalidator.OneOf("scp", "sftp", "https", "http"),
+					stringvalidator.OneOf("scp", "sftp", "https"),
 				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
@@ -261,14 +261,10 @@ func (r *TenantImageResource) importImage(ctx context.Context, data *TenantImage
 	importConfig := &f5ossdk.F5ReqTenantImage{}
 	if data.Insecure.ValueBool() {
 		// The F5OS RESTCONF API models "insecure" as a YANG empty leaf.
-		// When present (any value, including ""), it enables insecure mode.
-		// When absent (omitted from JSON), insecure mode is disabled.
-		// A *string set to "" serializes as "insecure":"" in JSON;
-		// a nil *string is omitted by omitempty.
-		emptyVal := ""
-		importConfig.Insecure = &emptyVal
+		// Per RFC 7951 the JSON encoding of an empty leaf is [null].
+		// When the field is nil it is omitted by omitempty (insecure disabled).
+		importConfig.Insecure = []interface{}{nil}
 	}
-	// When Insecure is false, leave importConfig.Insecure as nil (omitted).
 	importConfig.RemoteHost = data.RemoteHost.ValueString()
 	importConfig.RemoteFile = fmt.Sprintf("%s/%s", data.RemotePath.ValueString(), data.ImageName.ValueString())
 	importConfig.LocalFile = data.LocalPath.ValueString()
