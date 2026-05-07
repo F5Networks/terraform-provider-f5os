@@ -589,6 +589,9 @@ func (r *SystemResource) Update(ctx context.Context, req resource.UpdateRequest,
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
+// Delete only guards optional fields with IsNull() (not IsUnknown()) because
+// state values in Delete are never Unknown — Unknown only appears during planning.
+// Create/Update use both IsNull() && IsUnknown() checks since plan values can be Unknown.
 func (r *SystemResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var data *SystemResourceModel
 
@@ -608,17 +611,25 @@ func (r *SystemResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		}
 	}
 
-	baseURL = "/openconfig-system:system/aaa/f5-aaa-confd-restconf-token:restconf-token/config/lifetime/lifetime"
-	err := r.client.DeleteRequest(baseURL)
-	if err != nil {
-		resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Token Lifetime, got error: %s", err))
-		return
+	if !data.TokenLifetime.IsNull() {
+		baseURL = "/openconfig-system:system/aaa/f5-aaa-confd-restconf-token:restconf-token/config/lifetime/lifetime"
+		err := r.client.DeleteRequest(baseURL)
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Token Lifetime, got error: %s", err))
+			return
+		}
 	}
 
 	baseURL = "/openconfig-system:system/f5-system-settings:settings"
-	paths = []string{"idle-timeout", "sshd-idle-timeout"}
-	for _, path := range paths {
-		err := r.client.DeleteRequest(fmt.Sprintf(`%s/%s`, baseURL, path))
+	if !data.CliTimeout.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s/%s`, baseURL, "idle-timeout"))
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting System Settings, got error: %s", err))
+			return
+		}
+	}
+	if !data.SshdIdleTimeout.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s/%s`, baseURL, "sshd-idle-timeout"))
 		if err != nil {
 			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting System Settings, got error: %s", err))
 			return
@@ -626,22 +637,39 @@ func (r *SystemResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	}
 
 	baseURL = "/openconfig-system:system/f5-security-ciphers:security/services/service"
-	paths = []string{"ssl-cipher-suite", "ciphers", "kexalgorithms", "macs", "host-key-algorithms"}
-	// services := []string{"httpd", "sshd"}
-
-	for _, path := range paths {
-		if path == "ssl-cipher-suite" {
-			err := r.client.DeleteRequest(fmt.Sprintf(`%s="httpd"/config/%s`, baseURL, path))
-			if err != nil {
-				resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting System Settings, got error: %s", err))
-				return
-			}
-		} else {
-			err := r.client.DeleteRequest(fmt.Sprintf(`%s="sshd"/config/%s`, baseURL, path))
-			if err != nil {
-				resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Ciphers Config, got error: %s", err))
-				return
-			}
+	if !data.HttpdCipherSuite.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s="httpd"/config/%s`, baseURL, "ssl-cipher-suite"))
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting System Settings, got error: %s", err))
+			return
+		}
+	}
+	if !data.SshdCiphers.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s="sshd"/config/%s`, baseURL, "ciphers"))
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Ciphers Config, got error: %s", err))
+			return
+		}
+	}
+	if !data.SshdKeyAlg.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s="sshd"/config/%s`, baseURL, "kexalgorithms"))
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Ciphers Config, got error: %s", err))
+			return
+		}
+	}
+	if !data.SshdMacAlg.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s="sshd"/config/%s`, baseURL, "macs"))
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Ciphers Config, got error: %s", err))
+			return
+		}
+	}
+	if !data.SshdHkeyAlg.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s="sshd"/config/%s`, baseURL, "host-key-algorithms"))
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Ciphers Config, got error: %s", err))
+			return
 		}
 	}
 
@@ -690,7 +718,7 @@ func (r *SystemResource) SystemResourceModelToState(ctx context.Context, resSyst
 		case float64:
 			data.CliTimeout = types.Int64Value(int64(v))
 		default:
-			// Use id
+			// Unrecognized type; leave CliTimeout unchanged
 		}
 	}
 

@@ -751,7 +751,7 @@ resource "f5os_system" "system_settings" {
 }`
 
 // ---------------------------------------------------------------------------
-// Unit test: verifies terraform import populates optional fields from device
+// Unit test: import populates all optional fields from device
 // ---------------------------------------------------------------------------
 
 func TestUnitSystemImportPopulatesOptionalFields(t *testing.T) {
@@ -795,6 +795,26 @@ func TestUnitSystemImportPopulatesOptionalFields(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-security-ciphers:security/services/service", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"f5-security-ciphers:service":[{"name":"httpd","config":{"ssl-ciphersuite":"ECDHE-RSA-AES256-GCM-SHA384"}},{"name":"sshd","config":{"ciphers":["aes256-ctr"],"kexalgorithms":["ecdh-sha2-nistp384"],"macs":["hmac-sha2-256"],"host-key-algorithms":["ssh-ed25519"]}}]}`))
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-security-ciphers:security/services/service=httpd/config", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-security-ciphers:security/services/service=sshd/config/ciphers", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-security-ciphers:security/services/service=sshd/config/kexalgorithms", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-security-ciphers:security/services/service=sshd/config/macs", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-security-ciphers:security/services/service=sshd/config/host-key-algorithms", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-aaa-confd-restconf-token:restconf-token/state/lifetime", func(w http.ResponseWriter, r *http.Request) {
@@ -843,10 +863,10 @@ func TestUnitSystemImportPopulatesOptionalFields(t *testing.T) {
 
 const testAccSystemImportConfig = `
 resource "f5os_system" "system_settings" {
-  hostname     = "import-test.example.net"
-  motd         = "Imported motd"
-  login_banner = "Imported banner"
-  timezone     = "America/Los_Angeles"
+  hostname          = "import-test.example.net"
+  motd              = "Imported motd"
+  login_banner      = "Imported banner"
+  timezone          = "America/Los_Angeles"
   cli_timeout       = 3600
   token_lifetime    = 20
   sshd_idle_timeout = 1800
@@ -855,4 +875,89 @@ resource "f5os_system" "system_settings" {
   sshd_kex_alg      = ["ecdh-sha2-nistp384"]
   sshd_mac_alg      = ["hmac-sha2-256"]
   sshd_hkey_alg     = ["ssh-ed25519"]
+}`
+
+// ---------------------------------------------------------------------------
+// Unit test: minimal config with no optional fields — verifies no errors
+// during Create, Read, and Delete when optional attributes are omitted.
+// ---------------------------------------------------------------------------
+
+func TestUnitSystemMinimalConfigNoOptionalFields(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.Header().Set("Content-Type", "application/yang-data+json")
+			w.Header().Set("X-Auth-Token", "eyJhbGciOiJIXzI2NiIsInR6cCI6IkcXVCJ9.eyJhdXRoaW5mbyI6ImFkbWluIDEwMDAgOTAwMCBcL3ZhclwvRjVcL3BhcnRpdGlvbiIsImV4cCI6MTY4MDcyMDc4MiwiaWF0IjoxNjgwNzE5ODgyLCJyZW5ld2xpbWl0IjoiNSIsInVzZXJpbmZvIjoiYWRtaW4gMTcyLjE4LjIzMy4yMiJ9.c6Fw4AVm9dN4F-rRJZ1655Ks3xEWCzdAvum-Q3K7cwU")
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+		}
+		if r.Method == "PATCH" {
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-system-settings:settings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"f5-system-settings:settings":{"config":{}}}`))
+		}
+		if r.Method == "PATCH" {
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/config", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"openconfig-system:config":{"hostname":"minimal-test.example.net","login-banner":"Welcome.","motd-banner":"Hello"}}`))
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/clock", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"openconfig-system:clock":{"config":{"timezone-name":"UTC"}}}`))
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-security-ciphers:security/services/service", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"f5-security-ciphers:service":[{"name":"httpd","config":{}},{"name":"sshd","config":{}}]}`))
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-aaa-confd-restconf-token:restconf-token/state/lifetime", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"f5-aaa-confd-restconf-token:lifetime": 15}`))
+	})
+
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccSystemMinimalConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "id", "minimal-test.example.net"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "hostname", "minimal-test.example.net"),
+					resource.TestCheckNoResourceAttr("f5os_system.system_settings", "cli_timeout"),
+					resource.TestCheckNoResourceAttr("f5os_system.system_settings", "token_lifetime"),
+					resource.TestCheckNoResourceAttr("f5os_system.system_settings", "sshd_idle_timeout"),
+					resource.TestCheckNoResourceAttr("f5os_system.system_settings", "httpd_ciphersuite"),
+					resource.TestCheckNoResourceAttr("f5os_system.system_settings", "sshd_ciphers"),
+					resource.TestCheckNoResourceAttr("f5os_system.system_settings", "sshd_kex_alg"),
+					resource.TestCheckNoResourceAttr("f5os_system.system_settings", "sshd_mac_alg"),
+					resource.TestCheckNoResourceAttr("f5os_system.system_settings", "sshd_hkey_alg"),
+				),
+			},
+		},
+	})
+}
+
+const testAccSystemMinimalConfig = `
+resource "f5os_system" "system_settings" {
+  hostname     = "minimal-test.example.net"
+  motd         = "Hello"
+  login_banner = "Welcome."
+  timezone     = "UTC"
 }`
