@@ -166,7 +166,7 @@ func (r *SystemResource) Create(ctx context.Context, req resource.CreateRequest,
 		tflog.Debug(ctx, fmt.Sprintf("[CREATE], Token Lifetime Resp:%+v", string(res)))
 	}
 
-	if (!data.CliTimeout.IsNull() && !data.CliTimeout.IsUnknown()) || (data.SshdIdleTimeout.IsNull() && data.SshdIdleTimeout.IsUnknown()) {
+	if (!data.CliTimeout.IsNull() && !data.CliTimeout.IsUnknown()) || (!data.SshdIdleTimeout.IsNull() && !data.SshdIdleTimeout.IsUnknown()) {
 		systemSettingsReq := getSystemSettingsConfig(ctx, data)
 
 		byteBody, err := json.Marshal(systemSettingsReq)
@@ -404,7 +404,10 @@ func (r *SystemResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 
-	r.SystemResourceModelToState(ctx, resSystemConfig, resClockConfig, resHttpdBlock, resSshdBlock, resSystemSettingsConfig, resTokenLifetime, data)
+	// Hostname is null only during import (ImportState sets id alone).
+	isImport := data.Hostname.IsNull()
+
+	r.SystemResourceModelToState(ctx, resSystemConfig, resClockConfig, resHttpdBlock, resSshdBlock, resSystemSettingsConfig, resTokenLifetime, data, isImport)
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -440,7 +443,7 @@ func (r *SystemResource) Update(ctx context.Context, req resource.UpdateRequest,
 		tflog.Debug(ctx, fmt.Sprintf("[UPDATE], Token Lifetime Resp:%+v", string(res)))
 	}
 
-	if (!data.CliTimeout.IsNull() && !data.CliTimeout.IsUnknown()) || (data.SshdIdleTimeout.IsNull() && data.SshdIdleTimeout.IsUnknown()) {
+	if (!data.CliTimeout.IsNull() && !data.CliTimeout.IsUnknown()) || (!data.SshdIdleTimeout.IsNull() && !data.SshdIdleTimeout.IsUnknown()) {
 		systemSettingsReq := getSystemSettingsConfig(ctx, data)
 
 		byteBody, err := json.Marshal(systemSettingsReq)
@@ -651,7 +654,7 @@ func (r *SystemResource) ImportState(ctx context.Context, req resource.ImportSta
 
 func (r *SystemResource) SystemResourceModelToState(ctx context.Context, resSystemConfig *f5ossdk.F5ResSystemConfig, resClockConfig *f5ossdk.F5ResClockConfig,
 	resHttpdBlock *f5ossdk.HttpdBlock, resSshdBlock *f5ossdk.SshdBlock, resSystemSettingsConfig *f5ossdk.F5ResSettingsConfig,
-	resTokenLifetime *f5ossdk.F5ResTokenLifetime, data *SystemResourceModel) {
+	resTokenLifetime *f5ossdk.F5ResTokenLifetime, data *SystemResourceModel, isImport bool) {
 
 	data.Hostname = types.StringValue(resSystemConfig.OpenConfigSystem.Hostname)
 
@@ -660,28 +663,46 @@ func (r *SystemResource) SystemResourceModelToState(ctx context.Context, resSyst
 
 	data.Timezone = types.StringValue(resClockConfig.OpenConfigClock.Config.TimeZoneName)
 
-	data.HttpdCipherSuite = types.StringValue(resHttpdBlock.Config.SSLCipherSuite)
-
-	data.SshdCiphers, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.Ciphers)
-	data.SshdMacAlg, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.MACs)
-	data.SshdKeyAlg, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.KexAlgorithms)
-	data.SshdHkeyAlg, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.HostKeyAlgos)
-
-	switch v := resSystemSettingsConfig.Settings.Config.CliTimeout.(type) {
-	case string:
-		id, _ := strconv.Atoi(v)
-		data.CliTimeout = types.Int64Value(int64(id))
-	case int:
-		id := int(v)
-		data.CliTimeout = types.Int64Value(int64(id))
-	default:
-		// Use id
+	if !data.HttpdCipherSuite.IsNull() || isImport {
+		data.HttpdCipherSuite = types.StringValue(resHttpdBlock.Config.SSLCipherSuite)
 	}
 
-	// data.CliTimeout = types.Int64Value(int64(resSystemSettingsConfig.Settings.Config.CliTimeout.(int)))
-	data.SshdIdleTimeout = types.StringValue(resSystemSettingsConfig.Settings.Config.SshdIdleTimeout.(string))
+	if !data.SshdCiphers.IsNull() || isImport {
+		data.SshdCiphers, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.Ciphers)
+	}
+	if !data.SshdMacAlg.IsNull() || isImport {
+		data.SshdMacAlg, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.MACs)
+	}
+	if !data.SshdKeyAlg.IsNull() || isImport {
+		data.SshdKeyAlg, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.KexAlgorithms)
+	}
+	if !data.SshdHkeyAlg.IsNull() || isImport {
+		data.SshdHkeyAlg, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.HostKeyAlgos)
+	}
 
-	data.TokenLifetime = types.Int64Value(int64(resTokenLifetime.Lifetime))
+	if !data.CliTimeout.IsNull() || isImport {
+		switch v := resSystemSettingsConfig.Settings.Config.CliTimeout.(type) {
+		case string:
+			id, _ := strconv.Atoi(v)
+			data.CliTimeout = types.Int64Value(int64(id))
+		case int:
+			data.CliTimeout = types.Int64Value(int64(v))
+		case float64:
+			data.CliTimeout = types.Int64Value(int64(v))
+		default:
+			// Use id
+		}
+	}
+
+	if !data.SshdIdleTimeout.IsNull() || isImport {
+		if s, ok := resSystemSettingsConfig.Settings.Config.SshdIdleTimeout.(string); ok {
+			data.SshdIdleTimeout = types.StringValue(s)
+		}
+	}
+
+	if !data.TokenLifetime.IsNull() || isImport {
+		data.TokenLifetime = types.Int64Value(int64(resTokenLifetime.Lifetime))
+	}
 
 }
 
