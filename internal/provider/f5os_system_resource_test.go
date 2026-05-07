@@ -586,3 +586,273 @@ func TestAccSystemReadPopulatesSSHLists(t *testing.T) {
 		},
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Unit test: verifies no panic when SshdIdleTimeout is nil (never configured)
+// ---------------------------------------------------------------------------
+
+func TestUnitSystemCreateNoSshdIdleTimeoutTC3Resource(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.Header().Set("Content-Type", "application/yang-data+json")
+			w.Header().Set("X-Auth-Token", "eyJhbGciOiJIXzI2NiIsInR6cCI6IkcXVCJ9.eyJhdXRoaW5mbyI6ImFkbWluIDEwMDAgOTAwMCBcL3ZhclwvRjVcL3BhcnRpdGlvbiIsImV4cCI6MTY4MDcyMDc4MiwiaWF0IjoxNjgwNzE5ODgyLCJyZW5ld2xpbWl0IjoiNSIsInVzZXJpbmZvIjoiYWRtaW4gMTcyLjE4LjIzMy4yMiJ9.c6Fw4AVm9dN4F-rRJZ1655Ks3xEWCzdAvum-Q3K7cwU")
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+		}
+		if r.Method == "PATCH" {
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-system-settings:settings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"f5-system-settings:settings":{"config":{}}}`))
+		}
+		if r.Method == "PATCH" {
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/config", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"openconfig-system:config":{"hostname":"system-no-sshd.example.net","login-banner":"Welcome.","motd-banner":"Hello"}}`))
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/clock", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"openconfig-system:clock":{"config":{"timezone-name":"UTC"}}}`))
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-security-ciphers:security/services/service", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"f5-security-ciphers:service":[{"name":"httpd","config":{}},{"name":"sshd","config":{}}]}`))
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-aaa-confd-restconf-token:restconf-token/state/lifetime", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"f5-aaa-confd-restconf-token:lifetime": 15}`))
+	})
+
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccSystemCreateNoSshdIdleTimeoutConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "id", "system-no-sshd.example.net"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "hostname", "system-no-sshd.example.net"),
+					resource.TestCheckNoResourceAttr("f5os_system.system_settings", "sshd_idle_timeout"),
+				),
+			},
+		},
+	})
+}
+
+const testAccSystemCreateNoSshdIdleTimeoutConfig = `
+resource "f5os_system" "system_settings" {
+  hostname = "system-no-sshd.example.net"
+  motd = "Hello"
+  login_banner = "Welcome."
+  timezone = "UTC"
+}`
+
+// ---------------------------------------------------------------------------
+// Unit test: verifies SshdIdleTimeout triggers a settings PATCH when configured
+// ---------------------------------------------------------------------------
+
+func TestUnitSystemSshdIdleTimeoutTriggersPatch(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	var settingsPatchCalled bool
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.Header().Set("Content-Type", "application/yang-data+json")
+			w.Header().Set("X-Auth-Token", "eyJhbGciOiJIXzI2NiIsInR6cCI6IkcXVCJ9.eyJhdXRoaW5mbyI6ImFkbWluIDEwMDAgOTAwMCBcL3ZhclwvRjVcL3BhcnRpdGlvbiIsImV4cCI6MTY4MDcyMDc4MiwiaWF0IjoxNjgwNzE5ODgyLCJyZW5ld2xpbWl0IjoiNSIsInVzZXJpbmZvIjoiYWRtaW4gMTcyLjE4LjIzMy4yMiJ9.c6Fw4AVm9dN4F-rRJZ1655Ks3xEWCzdAvum-Q3K7cwU")
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+		}
+		if r.Method == "PATCH" {
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-system-settings:settings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PATCH" {
+			settingsPatchCalled = true
+			w.WriteHeader(http.StatusNoContent)
+		}
+		if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"f5-system-settings:settings":{"config":{"sshd-idle-timeout":"1800"}}}`))
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/config", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"openconfig-system:config":{"hostname":"sshd-patch-test.example.net","login-banner":"Welcome.","motd-banner":"Hello"}}`))
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/clock", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"openconfig-system:clock":{"config":{"timezone-name":"UTC"}}}`))
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-security-ciphers:security/services/service", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"f5-security-ciphers:service":[{"name":"httpd","config":{}},{"name":"sshd","config":{}}]}`))
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-aaa-confd-restconf-token:restconf-token/state/lifetime", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"f5-aaa-confd-restconf-token:lifetime": 15}`))
+	})
+
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccSystemSshdIdleTimeoutConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "id", "sshd-patch-test.example.net"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_idle_timeout", "1800"),
+					func(s *terraform.State) error {
+						if !settingsPatchCalled {
+							return fmt.Errorf("expected PATCH to /f5-system-settings:settings but it was not called")
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+const testAccSystemSshdIdleTimeoutConfig = `
+resource "f5os_system" "system_settings" {
+  hostname          = "sshd-patch-test.example.net"
+  motd              = "Hello"
+  login_banner      = "Welcome."
+  timezone          = "UTC"
+  sshd_idle_timeout = 1800
+}`
+
+// ---------------------------------------------------------------------------
+// Unit test: verifies terraform import populates optional fields from device
+// ---------------------------------------------------------------------------
+
+func TestUnitSystemImportPopulatesOptionalFields(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.Header().Set("Content-Type", "application/yang-data+json")
+			w.Header().Set("X-Auth-Token", "eyJhbGciOiJIXzI2NiIsInR6cCI6IkcXVCJ9.eyJhdXRoaW5mbyI6ImFkbWluIDEwMDAgOTAwMCBcL3ZhclwvRjVcL3BhcnRpdGlvbiIsImV4cCI6MTY4MDcyMDc4MiwiaWF0IjoxNjgwNzE5ODgyLCJyZW5ld2xpbWl0IjoiNSIsInVzZXJpbmZvIjoiYWRtaW4gMTcyLjE4LjIzMy4yMiJ9.c6Fw4AVm9dN4F-rRJZ1655Ks3xEWCzdAvum-Q3K7cwU")
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+		}
+		if r.Method == "PATCH" {
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-system-settings:settings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"f5-system-settings:settings":{"config":{"idle-timeout":3600,"sshd-idle-timeout":"1800"}}}`))
+		}
+		if r.Method == "PATCH" {
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/config", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"openconfig-system:config":{"hostname":"import-test.example.net","login-banner":"Imported banner","motd-banner":"Imported motd"}}`))
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/clock", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"openconfig-system:clock":{"config":{"timezone-name":"America/Los_Angeles"}}}`))
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-security-ciphers:security/services/service", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"f5-security-ciphers:service":[{"name":"httpd","config":{"ssl-ciphersuite":"ECDHE-RSA-AES256-GCM-SHA384"}},{"name":"sshd","config":{"ciphers":["aes256-ctr"],"kexalgorithms":["ecdh-sha2-nistp384"],"macs":["hmac-sha2-256"],"host-key-algorithms":["ssh-ed25519"]}}]}`))
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-aaa-confd-restconf-token:restconf-token/state/lifetime", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"f5-aaa-confd-restconf-token:lifetime": 20}`))
+	})
+
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create the resource so it exists in state
+			{
+				Config: testAccSystemImportConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "hostname", "import-test.example.net"),
+				),
+			},
+			// Step 2: Import and verify all optional fields are populated
+			{
+				ResourceName:      "f5os_system.system_settings",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateId:     "import-test.example.net",
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// Required fields
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "hostname", "import-test.example.net"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "motd", "Imported motd"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "login_banner", "Imported banner"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "timezone", "America/Los_Angeles"),
+					// Optional fields — must be populated from device during import
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "cli_timeout", "3600"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "token_lifetime", "20"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_idle_timeout", "1800"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "httpd_ciphersuite", "ECDHE-RSA-AES256-GCM-SHA384"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_ciphers.0", "aes256-ctr"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_kex_alg.0", "ecdh-sha2-nistp384"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_mac_alg.0", "hmac-sha2-256"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_hkey_alg.0", "ssh-ed25519"),
+				),
+			},
+		},
+	})
+}
+
+const testAccSystemImportConfig = `
+resource "f5os_system" "system_settings" {
+  hostname     = "import-test.example.net"
+  motd         = "Imported motd"
+  login_banner = "Imported banner"
+  timezone     = "America/Los_Angeles"
+  cli_timeout       = 3600
+  token_lifetime    = 20
+  sshd_idle_timeout = 1800
+  httpd_ciphersuite = "ECDHE-RSA-AES256-GCM-SHA384"
+  sshd_ciphers      = ["aes256-ctr"]
+  sshd_kex_alg      = ["ecdh-sha2-nistp384"]
+  sshd_mac_alg      = ["hmac-sha2-256"]
+  sshd_hkey_alg     = ["ssh-ed25519"]
+}`
