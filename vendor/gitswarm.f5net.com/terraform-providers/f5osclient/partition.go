@@ -456,6 +456,12 @@ func (c *F5os) ReadDNSConfig() (*DNSConfigPayload, error) {
 		return nil, fmt.Errorf("failed to GET DNS config: %w", err)
 	}
 
+	// When no DNS config exists on the device, the API may return an
+	// empty body. Return an empty struct so callers can proceed.
+	if len(resp) == 0 {
+		return &DNSConfigPayload{}, nil
+	}
+
 	var config DNSConfigPayload
 	if err := json.Unmarshal(resp, &config); err != nil {
 		return nil, fmt.Errorf("invalid JSON in DNS read: %w", err)

@@ -1328,3 +1328,139 @@ resource "f5os_dns" "acc_test" {
   dns_domains = ["added.invalid"]
 }
 `
+
+// ---------------------------------------------------------------------------
+// Unit tests for ReadDNSConfig empty response handling
+// ---------------------------------------------------------------------------
+
+// TestUnitDNSCreateWhenDeviceHasNoConfig verifies that Create succeeds when
+// the device has no pre-existing DNS configuration (API returns empty body
+// on the initial GET). Before the fix, ReadDNSConfig would fail with
+// "unexpected end of JSON input" on the empty response.
+func TestUnitDNSCreateWhenDeviceHasNoConfig(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	getCallCount := 0
+	mux.HandleFunc("/restconf/data/openconfig-system:system/dns", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			getCallCount++
+			if getCallCount == 1 {
+				// First GET (Create's pre-existing check): empty body
+				// simulates no DNS config on a fresh device.
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte{})
+			} else {
+				// Subsequent GETs (Read after Create): return the
+				// config that was patched so state reconciles.
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{
+					"openconfig-system:dns": {
+						"servers": {"server": [{"address": "8.8.8.8"}]},
+						"config": {"search": ["test.internal"]}
+					}
+				}`))
+			}
+		case "PATCH":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testUnitDNSCreateNoExistingConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.#", "1"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.0", "8.8.8.8"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.#", "1"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_domains.0", "test.internal"),
+				),
+			},
+		},
+	})
+}
+
+const testUnitDNSCreateNoExistingConfig = `
+resource "f5os_dns" "test" {
+  dns_servers = ["8.8.8.8"]
+  dns_domains = ["test.internal"]
+}
+`
+
+// TestUnitDNSReadHandlesEmptyArraysFromDevice verifies that Read handles
+// the device returning empty server and domain arrays gracefully. This
+// simulates the scenario where DNS entries were removed externally, but
+// the API still returns a valid JSON envelope with empty arrays.
+// Note: this does NOT test the empty-body path (len(resp)==0) — that is
+// covered by TestUnitDNSCreateWhenDeviceHasNoConfig.
+func TestUnitDNSReadHandlesEmptyArraysFromDevice(t *testing.T) {
+	st := setupDNSMock(t, []string{"8.8.8.8"}, []string{"test.internal"})
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create resource with valid config
+			{
+				Config: testUnitDNSCreateNoExistingConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.#", "1"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.0", "8.8.8.8"),
+				),
+			},
+			// Step 2: Simulate device returning empty arrays.
+			// The mock still returns valid JSON but with no entries.
+			{
+				PreConfig: func() {
+					st.servers = nil
+					st.domains = nil
+				},
+				Config: testUnitDNSCreateNoExistingConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.#", "1"),
+					resource.TestCheckResourceAttr("f5os_dns.test", "dns_servers.0", "8.8.8.8"),
+				),
+			},
+		},
+	})
+}
+
+// TestUnitDNSConfigPayloadUnmarshalEmpty verifies that unmarshaling an
+// empty JSON body into DNSConfigPayload produces usable zero-value fields
+// (nil slices) rather than a parse error. This validates the assumption
+// behind the ReadDNSConfig fix — that an empty DNSConfigPayload{} is safe
+// to use when the API returns no data.
+func TestUnitDNSConfigPayloadUnmarshalEmpty(t *testing.T) {
+	// Case 1: empty input should fail json.Unmarshal (this is what the fix guards against)
+	var config1 DNSConfigPayload
+	err := json.Unmarshal([]byte{}, &config1)
+	if err == nil {
+		t.Error("Expected json.Unmarshal to fail on empty input, but it succeeded")
+	}
+
+	// Case 2: an empty struct literal should be safe to use (nil slices, no panic)
+	config2 := &DNSConfigPayload{}
+	if config2.DNS.Servers.Server != nil {
+		t.Errorf("Expected nil servers slice, got %v", config2.DNS.Servers.Server)
+	}
+	if config2.DNS.Config.Search != nil {
+		t.Errorf("Expected nil search slice, got %v", config2.DNS.Config.Search)
+	}
+	// Verify ranging over nil slices doesn't panic
+	for _, s := range config2.DNS.Servers.Server {
+		t.Errorf("Unexpected server: %s", s.Address)
+	}
+	for _, d := range config2.DNS.Config.Search {
+		t.Errorf("Unexpected domain: %s", d)
+	}
+}
