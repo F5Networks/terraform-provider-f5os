@@ -227,13 +227,9 @@ goreleaser:
         echo "Derived tag from git: $CI_COMMIT_TAG"
       fi
   script:
-    # Tag push → full release; schedule → snapshot build (no publish).
+    # Tag/Schedule snapshot build (no publish).
     - |
-      if [ "$CI_PIPELINE_SOURCE" = "schedule" ]; then
-        goreleaser release --snapshot --clean
-      else
-        goreleaser release
-      fi
+      goreleaser release --snapshot --clean
     - |
       VERSION="${CI_COMMIT_TAG#v}"
       cp terraform-registry-manifest.json "dist/${CI_PROJECT_NAME}_${VERSION}_manifest.json"
