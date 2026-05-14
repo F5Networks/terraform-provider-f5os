@@ -50,6 +50,7 @@ BUG FIXES:
 
 IMPROVEMENTS:
 * Added unit and acceptance tests for partition_change_password resource
+* Added configurable PollInterval to f5osclient, reducing unit test runtime from ~24 minutes to ~7 minutes
 * Documentation updates
 
 ## 1.5.1
