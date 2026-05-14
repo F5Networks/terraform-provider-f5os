@@ -51,7 +51,7 @@ func testAccProxyPreCheck(t *testing.T) {
 	// Check standard F5OS env vars
 	for _, envVar := range []string{"F5OS_HOST", "F5OS_USERNAME", "F5OS_PASSWORD"} {
 		if os.Getenv(envVar) == "" {
-			t.Fatalf("%s must be set for proxy acceptance tests", envVar)
+			t.Skipf("%s must be set for proxy acceptance tests", envVar)
 		}
 	}
 

@@ -93,7 +93,7 @@ func (d *ImageInfoDataSource) Read(ctx context.Context, req datasource.ReadReque
 				if val.Status == "not-present" || val.Status == "processing" {
 					availableFlag = false
 				}
-				if val.Status == "replicated" || val.Status == "processed" {
+				if val.Status == "replicated" || val.Status == "processed" || val.Status == "verified" {
 					diff := time.Until(timeBefore)
 					if diff <= 2*time.Minute {
 						time.Sleep(2 * time.Minute)

@@ -94,6 +94,7 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 			"deployment_file": schema.StringAttribute{
 				MarkdownDescription: "Deployment file used for BIG-IP-Next .\nRequired for if `type` is `BIG-IP-Next`.",
 				Optional:            true,
+				Computed:            true,
 			},
 			"type": schema.StringAttribute{
 				MarkdownDescription: "Name of the tenant image to be used.\nRequired for create operations",
@@ -387,7 +388,24 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	data.MgmtIP = types.StringValue(respData.F5TenantsTenant[0].State.MgmtIp)
 	data.MgmtPrefix = types.Int64Value(int64(respData.F5TenantsTenant[0].State.PrefixLength))
 	data.CpuCores = types.Int64Value(int64(respData.F5TenantsTenant[0].State.VcpuCoresPerNode))
-	data.Nodes, _ = types.ListValueFrom(ctx, types.Int64Type, respData.F5TenantsTenant[0].Config.Nodes)
+	if respData.F5TenantsTenant[0].Config.Nodes != nil {
+		nodesList, diags := types.ListValueFrom(ctx, types.Int64Type, respData.F5TenantsTenant[0].Config.Nodes)
+		if diags.HasError() {
+			tflog.Warn(ctx, "failed to convert nodes to list", map[string]interface{}{"nodes": respData.F5TenantsTenant[0].Config.Nodes})
+		}
+		data.Nodes = nodesList
+	} else {
+		data.Nodes = types.ListNull(types.Int64Type)
+	}
+	if respData.F5TenantsTenant[0].Config.Vlans != nil {
+		vlansList, diags := types.ListValueFrom(ctx, types.Int64Type, respData.F5TenantsTenant[0].Config.Vlans)
+		if diags.HasError() {
+			tflog.Warn(ctx, "failed to convert vlans to list", map[string]interface{}{"vlans": respData.F5TenantsTenant[0].Config.Vlans})
+		}
+		data.Vlans = vlansList
+	} else {
+		data.Vlans = types.ListNull(types.Int64Type)
+	}
 	data.MgmtGateway = types.StringValue(respData.F5TenantsTenant[0].State.Gateway)
 	data.Status = types.StringValue(respData.F5TenantsTenant[0].State.Status)
 	data.DagIpv6prefixLength = types.Int64Value(int64(respData.F5TenantsTenant[0].State.DagIpv6PrefixLength))
@@ -413,6 +431,12 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 		data.Memory = types.Int64Value(int64(memoryInt))
 	}
 	data.Cryptos = types.StringValue(respData.F5TenantsTenant[0].State.Cryptos)
+	data.Type = types.StringValue(respData.F5TenantsTenant[0].State.Type)
+	if respData.F5TenantsTenant[0].Config.DeploymentFile != "" {
+		data.DeploymentFile = types.StringValue(respData.F5TenantsTenant[0].Config.DeploymentFile)
+	} else if data.DeploymentFile.IsUnknown() {
+		data.DeploymentFile = types.StringNull()
+	}
 }
 
 func (r *TenantResource) getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.F5ReqTenants {

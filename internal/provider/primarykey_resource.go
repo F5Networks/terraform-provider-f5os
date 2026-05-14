@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -104,6 +106,65 @@ func (r *PrimaryKeyResource) Configure(ctx context.Context, req resource.Configu
 	r.teemData = teemData
 }
 
+// primaryKeyPollInterval is the delay between status-check attempts.
+// Overridden in tests to avoid real wall-clock waits.
+var primaryKeyPollInterval = 2 * time.Second
+
+// primaryKeyMigrationTimeout is the maximum time to wait for COMPLETE status.
+// Overridden in tests to keep suite fast.
+var primaryKeyMigrationTimeout = 60 * time.Second
+
+// primaryKeyInitialReadDelay gives the device time to settle after SetPrimaryKey
+// before the polling loop begins. Overridden in tests to avoid wall-clock sleeps.
+var primaryKeyInitialReadDelay = 5 * time.Second
+
+// waitForPrimaryKeyMigration polls GetPrimaryKey until status is COMPLETE or
+// primaryKeyMigrationTimeout elapses.
+func (r *PrimaryKeyResource) waitForPrimaryKeyMigration(ctx context.Context) error {
+	maxPolls := int(primaryKeyMigrationTimeout / primaryKeyPollInterval)
+	if maxPolls < 1 {
+		maxPolls = 1
+	}
+
+	tflog.Info(ctx, "Waiting for primary key migration to complete")
+
+	if primaryKeyInitialReadDelay > 0 {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while waiting for primary key migration")
+		case <-time.After(primaryKeyInitialReadDelay):
+		}
+	}
+
+	for poll := 0; poll < maxPolls; poll++ {
+		keyData, err := r.client.GetPrimaryKey()
+		switch {
+		case err != nil:
+			tflog.Warn(ctx, fmt.Sprintf("Error polling primary key status: %s", err))
+		case keyData == nil:
+			tflog.Warn(ctx, "Error polling primary key status: empty response from device")
+		default:
+			status := keyData.PrimaryKey.State.Status
+			tflog.Debug(ctx, fmt.Sprintf("Primary key migration status: %s", status))
+			if strings.Contains(status, "COMPLETE") {
+				tflog.Info(ctx, "Primary key migration completed successfully")
+				return nil
+			}
+		}
+
+		// Sleep before the next poll (skip sleep on the last iteration)
+		if poll < maxPolls-1 {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("context cancelled while waiting for primary key migration")
+			case <-time.After(primaryKeyPollInterval):
+			}
+		}
+	}
+
+	return fmt.Errorf("primary key migration did not complete within %s", primaryKeyMigrationTimeout)
+}
+
 func (r *PrimaryKeyResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var data *PrimaryKeyResourceModel
 
@@ -119,21 +180,18 @@ func (r *PrimaryKeyResource) Create(ctx context.Context, req resource.CreateRequ
 
 	_ = r.client.SendTeem(map[string]any{"teemData": r.teemData})
 
-	// Skip if already present and not forced
-	if !data.ForceUpdate.ValueBool() {
-		existing, err := r.client.GetPrimaryKey()
-		if err == nil && existing.PrimaryKey.State.Status != "" {
-			tflog.Info(ctx, "[CREATE] Skipping creation as primary key exists and force_update is false")
-			r.primaryKeyResourceModelToState(existing, data)
-			resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-			return
-		}
-	}
-
-	// Set the key
+	// Always set the key on Create. Create is only called for new or
+	// recreated resources (passphrase/salt have RequiresReplace), so
+	// SetPrimaryKey must always run to apply the configured credentials.
 	_, err := r.client.SetPrimaryKey(primaryKeyReq)
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to create PrimaryKey: %s", err))
+		return
+	}
+
+	// Wait for async migration to complete before reading state
+	if err := r.waitForPrimaryKeyMigration(ctx); err != nil {
+		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Primary key migration failed: %s", err))
 		return
 	}
 
@@ -141,6 +199,10 @@ func (r *PrimaryKeyResource) Create(ctx context.Context, req resource.CreateRequ
 	keyData, err := r.client.GetPrimaryKey()
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to fetch state after setting PrimaryKey: %s", err))
+		return
+	}
+	if keyData == nil {
+		resp.Diagnostics.AddError("F5OS Client Error", "Failed to fetch state after setting PrimaryKey: empty response from device")
 		return
 	}
 
@@ -165,6 +227,10 @@ func (r *PrimaryKeyResource) Read(ctx context.Context, req resource.ReadRequest,
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to fetch Primary Key configuration: %s", err))
 		return
 	}
+	if keyData == nil {
+		resp.Diagnostics.AddError("F5OS Client Error", "Failed to fetch Primary Key configuration: empty response from device")
+		return
+	}
 
 	tflog.Debug(ctx, fmt.Sprintf("PrimaryKey Response: %+v", keyData))
 
@@ -186,21 +252,34 @@ func (r *PrimaryKeyResource) Update(ctx context.Context, req resource.UpdateRequ
 
 	tflog.Info(ctx, "[UPDATE] Updating Primary Key configuration")
 
-	// Prepare request payload
-	keyReqConfig := getPrimaryKeyConfig(data)
-	tflog.Debug(ctx, fmt.Sprintf("PrimaryKey Update Payload: %+v", keyReqConfig))
+	if data.ForceUpdate.ValueBool() {
+		// Only re-key when force_update=true. Changing force_update alone
+		// (false → true) is the user's explicit signal to rotate the key.
+		keyReqConfig := getPrimaryKeyConfig(data)
+		tflog.Debug(ctx, fmt.Sprintf("PrimaryKey Update Payload: %+v", keyReqConfig))
 
-	// Send the update to the F5OS system
-	_, err := r.client.SetPrimaryKey(keyReqConfig) // Use SetPrimaryKey as this acts as upsert
-	if err != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to update Primary Key: %s", err))
-		return
+		_, err := r.client.SetPrimaryKey(keyReqConfig)
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to update Primary Key: %s", err))
+			return
+		}
+
+		if err := r.waitForPrimaryKeyMigration(ctx); err != nil {
+			resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Primary key migration failed: %s", err))
+			return
+		}
+	} else {
+		tflog.Info(ctx, "[UPDATE] force_update=false — skipping SetPrimaryKey, refreshing state only")
 	}
 
 	// Fetch the latest status after update
 	keyData, err := r.client.GetPrimaryKey()
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Failed to retrieve Primary Key after update: %s", err))
+		return
+	}
+	if keyData == nil {
+		resp.Diagnostics.AddError("F5OS Client Error", "Failed to retrieve Primary Key after update: empty response from device")
 		return
 	}
 

@@ -88,6 +88,8 @@ type snmpClient interface {
 	DeleteSnmpTarget(name string) error
 	DeleteSnmpCommunity(name string) error
 	DeleteSnmpUser(name string) error
+	GetSnmpConfig() ([]byte, error)
+	GetSnmpMib() ([]byte, error)
 }
 
 // f5osSnmpClient adapts the concrete SDK client to the snmpClient interface.
@@ -111,6 +113,8 @@ func (a *f5osSnmpClient) UpdateSnmpTargets(payload []byte) error {
 func (a *f5osSnmpClient) DeleteSnmpTarget(name string) error    { return a.c.DeleteSnmpTarget(name) }
 func (a *f5osSnmpClient) DeleteSnmpCommunity(name string) error { return a.c.DeleteSnmpCommunity(name) }
 func (a *f5osSnmpClient) DeleteSnmpUser(name string) error      { return a.c.DeleteSnmpUser(name) }
+func (a *f5osSnmpClient) GetSnmpConfig() ([]byte, error)        { return a.c.GetSnmpConfig() }
+func (a *f5osSnmpClient) GetSnmpMib() ([]byte, error)           { return a.c.GetSnmpMib() }
 
 // NewSnmpResource creates a new instance of the resource
 func NewSnmpResource() resource.Resource {
@@ -127,7 +131,8 @@ func (r *SnmpResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Resource used to manage SNMP configuration (Communities, Users, Targets, and MIB settings) on F5OS systems (VELOS or rSeries).\n\n" +
 			"~> **NOTE:** The `f5os_snmp` resource manages SNMP settings on F5OS platforms using Open API. " +
-			"Due to API restrictions, passwords cannot be retrieved which may lead to Terraform detecting changes on every plan.",
+			"Due to API restrictions, passwords cannot be retrieved which may lead to Terraform detecting changes on every plan.\n\n" +
+			"~> **NOTE:** Running `terraform destroy` will reset MIB fields (sysContact, sysLocation, sysName) to their defaults and remove the resource from Terraform state.",
 		Attributes: map[string]schema.Attribute{
 			"snmp_community": schema.ListNestedAttribute{
 				Optional:            true,
@@ -201,6 +206,9 @@ func (r *SnmpResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 							Optional:            true,
 							Sensitive:           true,
 							MarkdownDescription: "Password for authentication.",
+							PlanModifiers: []planmodifier.String{
+								stringplanmodifier.UseStateForUnknown(),
+							},
 						},
 						"privacy_proto": schema.StringAttribute{
 							Optional:            true,
@@ -210,6 +218,9 @@ func (r *SnmpResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 							Optional:            true,
 							Sensitive:           true,
 							MarkdownDescription: "Password for encryption.",
+							PlanModifiers: []planmodifier.String{
+								stringplanmodifier.UseStateForUnknown(),
+							},
 						},
 					},
 				},
@@ -269,47 +280,6 @@ func (r *SnmpResource) Configure(_ context.Context, req resource.ConfigureReques
 
 	r.client = &f5osSnmpClient{c: client}
 }
-
-// // computeResourceID generates a hash-based ID from SNMP configuration
-// func computeSnmpResourceID(communities []SnmpCommunityModel, targets []SnmpTargetModel, users []SnmpUserModel, mib *SnmpMibModel) string {
-// 	var configParts []string
-
-// 	// Add communities
-// 	for _, community := range communities {
-// 		configParts = append(configParts, fmt.Sprintf("community:%s", community.Name.ValueString()))
-// 	}
-
-// 	// Add targets
-// 	for _, target := range targets {
-// 		configParts = append(configParts, fmt.Sprintf("target:%s", target.Name.ValueString()))
-// 	}
-
-// 	// Add users
-// 	for _, user := range users {
-// 		configParts = append(configParts, fmt.Sprintf("user:%s", user.Name.ValueString()))
-// 	}
-
-// 	// Add MIB
-// 	if mib != nil {
-// 		if !mib.SysName.IsNull() {
-// 			configParts = append(configParts, fmt.Sprintf("mib:sysname:%s", mib.SysName.ValueString()))
-// 		}
-// 		if !mib.SysContact.IsNull() {
-// 			configParts = append(configParts, fmt.Sprintf("mib:syscontact:%s", mib.SysContact.ValueString()))
-// 		}
-// 		if !mib.SysLocation.IsNull() {
-// 			configParts = append(configParts, fmt.Sprintf("mib:syslocation:%s", mib.SysLocation.ValueString()))
-// 		}
-// 	}
-
-// 	// Sort to ensure consistent hash
-// 	sort.Strings(configParts)
-// 	configStr := strings.Join(configParts, ";")
-
-// 	// Generate SHA-256 hash
-// 	hash := sha256.Sum256([]byte(configStr))
-// 	return hex.EncodeToString(hash[:])
-// }
 
 // extractSnmpCommunities safely extracts SNMP communities from a types.List
 func extractSnmpCommunities(ctx context.Context, list types.List) ([]SnmpCommunityModel, diag.Diagnostics) {
@@ -426,7 +396,7 @@ func (r *SnmpResource) Create(ctx context.Context, req resource.CreateRequest, r
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-// Read refreshes the Terraform state with the latest data
+// Read refreshes the Terraform state with the latest data from the device.
 func (r *SnmpResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state SnmpResourceModel
 
@@ -438,25 +408,271 @@ func (r *SnmpResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 	tflog.Info(ctx, "Reading SNMP configuration from F5OS")
 
-	// IMPORTANT: The resource ID must never be changed in Read to prevent Terraform state drift and test failures.
-	// During import, the state field might be empty, so we need to set it
-	// For SNMP configuration resources, we assume the state is "present" if the resource exists
-	if state.State.IsNull() || state.State.IsUnknown() {
-		state.State = types.StringValue("present")
-	}
-	// Always use the static resource ID
+	// Always use the static resource ID and present state.
 	state.Id = types.StringValue("snmp_config")
+	state.State = types.StringValue("present")
 
-	// For now, we'll keep the existing state as SNMP config reading is complex
-	// This is a common pattern for configuration resources where the API doesn't
-	// provide complete read capabilities, especially for sensitive data like passwords
+	// ------------------------------------------------------------------
+	// 1. Read SNMP communities, targets, and users from the device.
+	// ------------------------------------------------------------------
+	snmpData, err := r.client.GetSnmpConfig()
+	if err != nil {
+		resp.Diagnostics.AddError("SNMP Read Error", fmt.Sprintf("Failed to read SNMP config from device: %s", err))
+		return
+	}
+
+	var snmpEnvelope struct {
+		SNMP struct {
+			Communities struct {
+				Community []struct {
+					Name   string `json:"name"`
+					Config struct {
+						Name          string   `json:"name"`
+						SecurityModel []string `json:"security-model"`
+					} `json:"config"`
+				} `json:"community"`
+			} `json:"communities"`
+			Targets struct {
+				Target []struct {
+					Name   string `json:"name"`
+					Config struct {
+						Name          string `json:"name"`
+						SecurityModel string `json:"security-model"`
+						Community     string `json:"community"`
+						User          string `json:"user"`
+						IPv4          *struct {
+							Address string `json:"address"`
+							Port    int64  `json:"port"`
+						} `json:"ipv4"`
+						IPv6 *struct {
+							Address string `json:"address"`
+							Port    int64  `json:"port"`
+						} `json:"ipv6"`
+					} `json:"config"`
+				} `json:"target"`
+			} `json:"targets"`
+			Users struct {
+				User []struct {
+					Name   string `json:"name"`
+					Config struct {
+						Name                   string `json:"name"`
+						AuthenticationProtocol string `json:"authentication-protocol"`
+						PrivacyProtocol        string `json:"privacy-protocol"`
+					} `json:"config"`
+				} `json:"user"`
+			} `json:"users"`
+		} `json:"f5-system-snmp:snmp"`
+	}
+
+	if err := json.Unmarshal(snmpData, &snmpEnvelope); err != nil {
+		resp.Diagnostics.AddError("SNMP Parse Error", fmt.Sprintf("Failed to parse SNMP config JSON: %s", err))
+		return
+	}
+
+	// Build lookups from the prior state so we know which entries are managed
+	// by this resource and can preserve sensitive fields the API won't return.
+	oldCommunities, diags := extractSnmpCommunities(ctx, state.SnmpCommunity)
+	resp.Diagnostics.Append(diags...)
+	oldTargets, diags := extractSnmpTargets(ctx, state.SnmpTarget)
+	resp.Diagnostics.Append(diags...)
+	oldUsers, diags := extractSnmpUsers(ctx, state.SnmpUser)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// When the prior state has entries, Read should only track the entries
+	// that Terraform manages (i.e., those names present in state).
+	// When the prior state is empty/null (e.g., after import), Read imports
+	// everything from the device.
+	managedCommunities := make(map[string]bool)
+	for _, c := range oldCommunities {
+		managedCommunities[c.Name.ValueString()] = true
+	}
+	managedTargets := make(map[string]bool)
+	for _, t := range oldTargets {
+		managedTargets[t.Name.ValueString()] = true
+	}
+	managedUsers := make(map[string]bool)
+	for _, u := range oldUsers {
+		managedUsers[u.Name.ValueString()] = true
+	}
+	userPasswords := make(map[string][2]types.String) // name -> {auth_passwd, privacy_passwd}
+	for _, u := range oldUsers {
+		userPasswords[u.Name.ValueString()] = [2]types.String{u.AuthPasswd, u.PrivacyPasswd}
+	}
+
+	filterCommunities := len(managedCommunities) > 0
+	filterTargets := len(managedTargets) > 0
+	filterUsers := len(managedUsers) > 0
+
+	// --- Communities ---
+	snmpCommunities := snmpEnvelope.SNMP.Communities.Community
+	{
+		communityObjects := make([]SnmpCommunityModel, 0, len(snmpCommunities))
+		for _, c := range snmpCommunities {
+			if filterCommunities && !managedCommunities[c.Config.Name] {
+				continue
+			}
+			smVals := make([]attr.Value, 0, len(c.Config.SecurityModel))
+			for _, sm := range c.Config.SecurityModel {
+				smVals = append(smVals, types.StringValue(sm))
+			}
+			smList, listDiags := types.ListValue(types.StringType, smVals)
+			resp.Diagnostics.Append(listDiags...)
+			communityObjects = append(communityObjects, SnmpCommunityModel{
+				Name:          types.StringValue(c.Config.Name),
+				SecurityModel: smList,
+			})
+		}
+		if len(communityObjects) > 0 {
+			communityList, listDiags := types.ListValueFrom(ctx, state.SnmpCommunity.ElementType(ctx), communityObjects)
+			resp.Diagnostics.Append(listDiags...)
+			state.SnmpCommunity = communityList
+		} else if !state.SnmpCommunity.IsNull() {
+			state.SnmpCommunity = types.ListNull(state.SnmpCommunity.ElementType(ctx))
+		}
+	}
+
+	// --- Targets ---
+	snmpTargets := snmpEnvelope.SNMP.Targets.Target
+	{
+		targetObjects := make([]SnmpTargetModel, 0, len(snmpTargets))
+		for _, t := range snmpTargets {
+			if filterTargets && !managedTargets[t.Config.Name] {
+				continue
+			}
+			tm := SnmpTargetModel{
+				Name: types.StringValue(t.Config.Name),
+			}
+			if t.Config.SecurityModel != "" {
+				tm.SecurityModel = types.StringValue(t.Config.SecurityModel)
+			} else {
+				tm.SecurityModel = types.StringNull()
+			}
+			if t.Config.Community != "" {
+				tm.Community = types.StringValue(t.Config.Community)
+			} else {
+				tm.Community = types.StringNull()
+			}
+			if t.Config.User != "" {
+				tm.User = types.StringValue(t.Config.User)
+			} else {
+				tm.User = types.StringNull()
+			}
+			switch {
+			case t.Config.IPv4 != nil:
+				tm.Ipv4Address = types.StringValue(t.Config.IPv4.Address)
+				tm.Port = types.Int64Value(t.Config.IPv4.Port)
+				tm.Ipv6Address = types.StringNull()
+			case t.Config.IPv6 != nil:
+				tm.Ipv6Address = types.StringValue(t.Config.IPv6.Address)
+				tm.Port = types.Int64Value(t.Config.IPv6.Port)
+				tm.Ipv4Address = types.StringNull()
+			default:
+				tm.Ipv4Address = types.StringNull()
+				tm.Ipv6Address = types.StringNull()
+				tm.Port = types.Int64Value(0)
+			}
+			targetObjects = append(targetObjects, tm)
+		}
+		if len(targetObjects) > 0 {
+			targetList, listDiags := types.ListValueFrom(ctx, state.SnmpTarget.ElementType(ctx), targetObjects)
+			resp.Diagnostics.Append(listDiags...)
+			state.SnmpTarget = targetList
+		} else if !state.SnmpTarget.IsNull() {
+			state.SnmpTarget = types.ListNull(state.SnmpTarget.ElementType(ctx))
+		}
+	}
+
+	// --- Users ---
+	snmpUsers := snmpEnvelope.SNMP.Users.User
+	{
+		userObjects := make([]SnmpUserModel, 0, len(snmpUsers))
+		for _, u := range snmpUsers {
+			if filterUsers && !managedUsers[u.Config.Name] {
+				continue
+			}
+			um := SnmpUserModel{
+				Name: types.StringValue(u.Config.Name),
+			}
+			if u.Config.AuthenticationProtocol != "" {
+				um.AuthProto = types.StringValue(u.Config.AuthenticationProtocol)
+			} else {
+				um.AuthProto = types.StringNull()
+			}
+			if u.Config.PrivacyProtocol != "" {
+				um.PrivacyProto = types.StringValue(u.Config.PrivacyProtocol)
+			} else {
+				um.PrivacyProto = types.StringNull()
+			}
+			// Passwords are never returned by the API. Preserve prior state values.
+			if pw, ok := userPasswords[u.Config.Name]; ok {
+				um.AuthPasswd = pw[0]
+				um.PrivacyPasswd = pw[1]
+			} else {
+				um.AuthPasswd = types.StringNull()
+				um.PrivacyPasswd = types.StringNull()
+			}
+			userObjects = append(userObjects, um)
+		}
+		if len(userObjects) > 0 {
+			userList, listDiags := types.ListValueFrom(ctx, state.SnmpUser.ElementType(ctx), userObjects)
+			resp.Diagnostics.Append(listDiags...)
+			state.SnmpUser = userList
+		} else if !state.SnmpUser.IsNull() {
+			state.SnmpUser = types.ListNull(state.SnmpUser.ElementType(ctx))
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// 2. Read MIB settings from the device.
+	// Only populate snmp_mib in state if the user is managing it (i.e.,
+	// the prior state had snmp_mib set). If snmp_mib was null, the user
+	// did not declare it and we should not pull device-global MIB values
+	// into state — that would cause spurious diffs.
+	// ------------------------------------------------------------------
+	mibWasManaged := !state.SnmpMib.IsNull()
+
+	mibData, err := r.client.GetSnmpMib()
+	if err != nil {
+		// MIB read failure is non-fatal; leave snmp_mib unchanged.
+		tflog.Warn(ctx, "Failed to read SNMP MIB from device", map[string]interface{}{"error": err.Error()})
+	} else if mibWasManaged {
+		var mibEnvelope struct {
+			System struct {
+				SysName     string `json:"sysName"`
+				SysContact  string `json:"sysContact"`
+				SysLocation string `json:"sysLocation"`
+			} `json:"SNMPv2-MIB:system"`
+		}
+		if err := json.Unmarshal(mibData, &mibEnvelope); err != nil {
+			tflog.Warn(ctx, "Failed to parse SNMP MIB JSON", map[string]interface{}{"error": err.Error()})
+		} else {
+			mibModel := SnmpMibModel{
+				SysName:     types.StringValue(mibEnvelope.System.SysName),
+				SysContact:  types.StringValue(mibEnvelope.System.SysContact),
+				SysLocation: types.StringValue(mibEnvelope.System.SysLocation),
+			}
+			mibObj, objDiags := types.ObjectValueFrom(ctx, map[string]attr.Type{
+				"sysname":     types.StringType,
+				"syscontact":  types.StringType,
+				"syslocation": types.StringType,
+			}, mibModel)
+			resp.Diagnostics.Append(objDiags...)
+			state.SnmpMib = mibObj
+		}
+	}
+
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	tflog.Debug(ctx, "SNMP configuration read completed", map[string]interface{}{
 		"id":    state.Id.ValueString(),
 		"state": state.State.ValueString(),
 	})
 
-	// Save current state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -492,7 +708,7 @@ func (r *SnmpResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	state := plan.State.ValueString()
 	if state == "absent" {
 		// If state is absent, we should remove the configuration
-		if err := r.deleteSnmpConfig(ctx, communities, targets, users); err != nil {
+		if err := r.deleteSnmpConfig(ctx, communities, targets, users, mib != nil); err != nil {
 			resp.Diagnostics.AddError(
 				"SNMP Configuration Error",
 				fmt.Sprintf("Failed to remove SNMP configuration: %s", err),
@@ -552,8 +768,11 @@ func (r *SnmpResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
+	// Only reset MIB fields if the user actually managed them.
+	resetMib := !state.SnmpMib.IsNull()
+
 	// Delete SNMP configuration
-	if err := r.deleteSnmpConfig(ctx, communities, targets, users); err != nil {
+	if err := r.deleteSnmpConfig(ctx, communities, targets, users, resetMib); err != nil {
 		resp.Diagnostics.AddError(
 			"SNMP Deletion Error",
 			fmt.Sprintf("Failed to delete SNMP configuration: %s", err),
@@ -708,8 +927,11 @@ func (r *SnmpResource) updateSnmpConfig(ctx context.Context, communities []SnmpC
 	return nil
 }
 
-// deleteSnmpConfig handles the deletion of SNMP configuration
-func (r *SnmpResource) deleteSnmpConfig(ctx context.Context, communities []SnmpCommunityModel, targets []SnmpTargetModel, users []SnmpUserModel) error {
+// deleteSnmpConfig handles the deletion of SNMP configuration.
+// When resetMib is true the MIB sysName/sysContact/sysLocation fields are
+// reset to empty strings on the device. Pass false when the user never
+// declared snmp_mib so we don't wipe device-level values they don't own.
+func (r *SnmpResource) deleteSnmpConfig(ctx context.Context, communities []SnmpCommunityModel, targets []SnmpTargetModel, users []SnmpUserModel, resetMib bool) error {
 	// Delete targets first (they may depend on communities/users)
 	for _, target := range targets {
 		err := r.client.DeleteSnmpTarget(target.Name.ValueString())
@@ -740,6 +962,24 @@ func (r *SnmpResource) deleteSnmpConfig(ctx context.Context, communities []SnmpC
 				"user":  user.Name.ValueString(),
 				"error": err.Error(),
 			})
+		}
+	}
+
+	// Only reset MIB fields when the user declared snmp_mib in their config.
+	// Otherwise we would wipe device-level values the user never claimed.
+	if resetMib {
+		emptyMib := map[string]interface{}{
+			"SNMPv2-MIB:system": map[string]interface{}{
+				"SNMPv2-MIB:sysContact":  "",
+				"SNMPv2-MIB:sysName":     "",
+				"SNMPv2-MIB:sysLocation": "",
+			},
+		}
+		mibBytes, err := json.Marshal(emptyMib)
+		if err != nil {
+			tflog.Warn(ctx, "Failed to marshal empty MIB payload", map[string]interface{}{"error": err.Error()})
+		} else if err := r.client.UpdateSnmpMib(mibBytes); err != nil {
+			tflog.Warn(ctx, "Failed to reset SNMP MIB on delete", map[string]interface{}{"error": err.Error()})
 		}
 	}
 

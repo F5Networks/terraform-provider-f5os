@@ -94,10 +94,13 @@ func (r *UserResource) Create(ctx context.Context, req resource.CreateRequest, r
 	username := plan.Username.ValueString()
 
 	// Try to create the user with all fields including secondary role
-	err := r.createUserWithRetry(ctx, plan)
+	createWarnings, err := r.createUserWithRetry(ctx, plan)
 	if err != nil {
 		resp.Diagnostics.AddError("User Create Error", err.Error())
 		return
+	}
+	for _, w := range createWarnings {
+		resp.Diagnostics.AddWarning("Role Assignment Warning", w)
 	}
 
 	// Set the password using the set-password endpoint
@@ -250,10 +253,13 @@ func (r *UserResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 
 	// Step 1: Update user attributes (without password)
-	err = r.updateUserWithRetry(ctx, username, plan)
+	updateWarnings, err := r.updateUserWithRetry(ctx, username, plan)
 	if err != nil {
 		resp.Diagnostics.AddError("User Update Error", err.Error())
 		return
+	}
+	for _, w := range updateWarnings {
+		resp.Diagnostics.AddWarning("Role Update Warning", w)
 	}
 
 	// Step 2: Update password if it changed
@@ -695,15 +701,17 @@ func (r *UserResource) createUser(payload []byte) error {
 	return nil
 }
 
-// createUserWithRetry creates a user and assigns secondary role via separate endpoint
-func (r *UserResource) createUserWithRetry(ctx context.Context, plan UserModel) error {
+// createUserWithRetry creates a user and assigns secondary role via separate endpoint.
+// It returns a slice of warning messages for non-fatal issues (e.g. role assignment
+// failures) so the caller can surface them via resp.Diagnostics.AddWarning.
+func (r *UserResource) createUserWithRetry(ctx context.Context, plan UserModel) (warnings []string, err error) {
 	username := plan.Username.ValueString()
 	primaryRole := plan.Role.ValueString()
 
 	// Step 1: Create the user with primary role (never include secondary role in user config)
 	payload, err := r.createUserPayload(plan, false, false)
 	if err != nil {
-		return fmt.Errorf("failed to create payload: %w", err)
+		return nil, fmt.Errorf("failed to create payload: %w", err)
 	}
 
 	tflog.Info(ctx, "Creating F5OS user with primary role", map[string]interface{}{
@@ -714,7 +722,7 @@ func (r *UserResource) createUserWithRetry(ctx context.Context, plan UserModel) 
 
 	err = r.createUser(payload)
 	if err != nil {
-		return fmt.Errorf("failed to create user: %w", err)
+		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
 	// Step 2: Assign user to primary role via roles endpoint (this ensures they appear in role membership)
@@ -725,12 +733,10 @@ func (r *UserResource) createUserWithRetry(ctx context.Context, plan UserModel) 
 
 	err = r.assignUserToRole(ctx, username, primaryRole)
 	if err != nil {
-		tflog.Warn(ctx, "Failed to assign user to primary role, user created but role assignment may be incomplete",
-			map[string]interface{}{
-				"username":     username,
-				"primary_role": primaryRole,
-				"error":        err.Error(),
-			})
+		msg := fmt.Sprintf("User %q created but primary role %q assignment via roles endpoint failed: %s. "+
+			"The device may not reflect the intended role membership.", username, primaryRole, err.Error())
+		tflog.Warn(ctx, msg)
+		warnings = append(warnings, msg)
 	}
 
 	// Step 3: Assign secondary role if specified (using roles endpoint)
@@ -744,27 +750,26 @@ func (r *UserResource) createUserWithRetry(ctx context.Context, plan UserModel) 
 
 		err = r.assignUserToRole(ctx, username, secondaryRole)
 		if err != nil {
-			// If secondary role assignment fails, warn but don't fail the creation
-			tflog.Warn(ctx, "Failed to assign secondary role, user created with primary role only",
-				map[string]interface{}{
-					"username":       username,
-					"secondary_role": secondaryRole,
-					"error":          err.Error(),
-				})
+			msg := fmt.Sprintf("User %q created with primary role only; secondary role %q assignment failed: %s. "+
+				"The device may not reflect the intended role membership.", username, secondaryRole, err.Error())
+			tflog.Warn(ctx, msg)
+			warnings = append(warnings, msg)
 		}
 	}
 
-	return nil
+	return warnings, nil
 }
 
-// updateUserWithRetry updates a user and manages secondary role via separate endpoint
-func (r *UserResource) updateUserWithRetry(ctx context.Context, username string, plan UserModel) error {
+// updateUserWithRetry updates a user and manages secondary role via separate endpoint.
+// It returns a slice of warning messages for non-fatal issues (e.g. stale role removal
+// failures) so the caller can surface them via resp.Diagnostics.AddWarning.
+func (r *UserResource) updateUserWithRetry(ctx context.Context, username string, plan UserModel) (warnings []string, err error) {
 	primaryRole := plan.Role.ValueString()
 
 	// Step 1: Update user attributes with primary role (never include secondary role in user config)
 	payload, err := r.createUserPayload(plan, false, false)
 	if err != nil {
-		return fmt.Errorf("failed to create payload: %w", err)
+		return nil, fmt.Errorf("failed to create payload: %w", err)
 	}
 
 	tflog.Info(ctx, "Updating F5OS user with primary role", map[string]interface{}{
@@ -774,10 +779,47 @@ func (r *UserResource) updateUserWithRetry(ctx context.Context, username string,
 
 	err = r.updateUser(username, payload)
 	if err != nil {
-		return fmt.Errorf("failed to update user: %w", err)
+		return nil, fmt.Errorf("failed to update user: %w", err)
 	}
 
-	// Step 2: Ensure user is assigned to primary role via roles endpoint
+	// Step 2: Build the set of desired roles so we can remove stale ones.
+	desiredRoles := map[string]bool{primaryRole: true}
+	if !plan.SecondaryRole.IsNull() && !plan.SecondaryRole.IsUnknown() && plan.SecondaryRole.ValueString() != "" {
+		desiredRoles[plan.SecondaryRole.ValueString()] = true
+	}
+
+	// Step 3: Query the user's current role assignments and remove any
+	// that are no longer in the desired set. This mirrors the pattern
+	// used in the Delete method (getUserRoles + removeUserFromRole).
+	currentRoles, err := r.getUserRoles(ctx, username)
+	if err != nil {
+		msg := fmt.Sprintf("Failed to query current roles for user %q: %s. "+
+			"Desired roles will be assigned but stale roles cannot be detected or removed. "+
+			"The device may retain role assignments that are no longer in the Terraform configuration.",
+			username, err.Error())
+		tflog.Warn(ctx, msg)
+		warnings = append(warnings, msg)
+	} else {
+		for _, role := range currentRoles {
+			if !desiredRoles[role] {
+				tflog.Info(ctx, "Removing stale role assignment", map[string]interface{}{
+					"username": username,
+					"role":     role,
+				})
+				removeErr := r.removeUserFromRole(ctx, username, role)
+				if removeErr != nil {
+					msg := fmt.Sprintf("Failed to remove stale role %q from user %q: %s. "+
+						"The device still retains this role assignment even though it is no longer in the Terraform configuration. "+
+						"A subsequent plan will not detect this drift because the Read path does not query role membership.",
+						role, username, removeErr.Error())
+					tflog.Warn(ctx, msg)
+					warnings = append(warnings, msg)
+				}
+			}
+		}
+	}
+
+	// Step 4: Ensure user is assigned to primary role via roles endpoint
 	tflog.Info(ctx, "Ensuring user is assigned to primary role", map[string]interface{}{
 		"username":     username,
 		"primary_role": primaryRole,
@@ -785,16 +827,14 @@ func (r *UserResource) updateUserWithRetry(ctx context.Context, username string,
 
 	err = r.assignUserToRole(ctx, username, primaryRole)
 	if err != nil {
-		tflog.Warn(ctx, "Failed to assign user to primary role during update",
-			map[string]interface{}{
-				"username":     username,
-				"primary_role": primaryRole,
-				"error":        err.Error(),
-			})
+		msg := fmt.Sprintf("Failed to assign primary role %q to user %q via roles endpoint: %s. "+
+			"The device may not reflect the intended role membership.", primaryRole, username, err.Error())
+		tflog.Warn(ctx, msg)
+		warnings = append(warnings, msg)
 	}
 
-	// Step 3: Manage secondary role assignment
-	if !plan.SecondaryRole.IsNull() && !plan.SecondaryRole.IsUnknown() && plan.SecondaryRole.ValueString() != "" {
+	// Step 5: Assign secondary role if specified
+	if desiredRoles[plan.SecondaryRole.ValueString()] {
 		secondaryRole := plan.SecondaryRole.ValueString()
 
 		tflog.Info(ctx, "Assigning secondary role to user", map[string]interface{}{
@@ -804,24 +844,14 @@ func (r *UserResource) updateUserWithRetry(ctx context.Context, username string,
 
 		err = r.assignUserToRole(ctx, username, secondaryRole)
 		if err != nil {
-			// If secondary role assignment fails, warn but don't fail the update
-			tflog.Warn(ctx, "Failed to assign secondary role during update",
-				map[string]interface{}{
-					"username":       username,
-					"secondary_role": secondaryRole,
-					"error":          err.Error(),
-				})
+			msg := fmt.Sprintf("Failed to assign secondary role %q to user %q: %s. "+
+				"The device may not reflect the intended role membership.", secondaryRole, username, err.Error())
+			tflog.Warn(ctx, msg)
+			warnings = append(warnings, msg)
 		}
-	} else {
-		// If secondary role is being removed, we might need to unassign it
-		// For now, we'll just log this - implementing role removal would require
-		// knowing the previous secondary role to remove the assignment
-		tflog.Info(ctx, "Secondary role not specified or being removed", map[string]interface{}{
-			"username": username,
-		})
 	}
 
-	return nil
+	return warnings, nil
 }
 
 // assignUserToRole assigns a user to a specific role using the roles endpoint

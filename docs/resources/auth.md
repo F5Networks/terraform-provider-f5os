@@ -3,12 +3,15 @@
 page_title: "f5os_auth Resource - terraform-provider-f5os"
 subcategory: ""
 description: |-
-  Manage AAA authentication on F5OS. Includes authentication method order and role GID mappings.
+  Manage AAA authentication on F5OS. Includes authentication method order, role GID mappings, and password policy.
+  ~> NOTE: Running terraform destroy will restore the original authentication order and revert any role GID changes made by this resource.
 ---
 
 # f5os_auth (Resource)
 
-Manage AAA authentication on F5OS. Includes authentication method order and role GID mappings.
+Manage AAA authentication on F5OS. Includes authentication method order, role GID mappings, and password policy.
+
+~> **NOTE:** Running `terraform destroy` will restore the original authentication order and revert any role GID changes made by this resource.
 
 ## Example Usage
 
@@ -21,6 +24,18 @@ resource "f5os_auth" "aaa" {
     { rolename = "admin", remote_gid = 9000 },
     { rolename = "operator", remote_gid = 9001 },
   ]
+
+  password_policy = {
+    min_length         = 8
+    required_numeric   = 1
+    required_uppercase = 1
+    required_lowercase = 1
+    required_special   = 1
+    reject_username    = true
+    max_login_failures = 5
+    unlock_time        = 300
+    max_age            = 90
+  }
 }
 ```
 
@@ -30,7 +45,7 @@ resource "f5os_auth" "aaa" {
 ### Optional
 
 - `auth_order` (List of String) Ordered list of authentication methods. Allowed values: local, radius, tacacs, ldap.
-- `password_policy` (Attributes) Password policy settings (note: device enforces final policy). (see [below for nested schema](#nestedatt--password_policy))
+- `password_policy` (Attributes) Password policy settings. Only fields you specify are managed; unspecified fields are left at device defaults. (see [below for nested schema](#nestedatt--password_policy))
 - `remote_roles` (Attributes Set) Remote role mappings. Configure role GID (and optionally LDAP group association). (see [below for nested schema](#nestedatt--remote_roles))
 
 ### Read-Only
@@ -42,17 +57,23 @@ resource "f5os_auth" "aaa" {
 
 Optional:
 
-- `allow_consecutive` (Boolean)
-- `allow_username` (Boolean)
-- `history` (Number)
-- `max_age_days` (Number)
-- `max_length` (Number)
-- `min_classes` (Number)
-- `min_length` (Number)
-- `require_digit` (Boolean)
-- `require_lower` (Boolean)
-- `require_special` (Boolean)
-- `require_upper` (Boolean)
+- `apply_to_root` (Boolean) Apply password restrictions to root accounts.
+- `max_age` (Number) Password max age in days (0 = never expires).
+- `max_class_repeat` (Number) Max repeating chars of any class allowed. Only supported on F5OS >= v1.7.
+- `max_letter_repeat` (Number) Max repeating lowercase letters allowed. Only supported on F5OS >= v1.7.
+- `max_login_failures` (Number) Failed login attempts before lockout.
+- `max_sequence_repeat` (Number) Max repeating letters/digits allowed. Only supported on F5OS >= v1.7.
+- `min_length` (Number) Minimum password length.
+- `reject_username` (Boolean) Reject passwords containing the username.
+- `required_differences` (Number) Characters that must differ from previous password.
+- `required_lowercase` (Number) Required lowercase character count.
+- `required_numeric` (Number) Required numeric digit count.
+- `required_special` (Number) Required special character count.
+- `required_uppercase` (Number) Required uppercase character count.
+- `retries` (Number) Password entry retries before failure.
+- `root_lockout` (Boolean) Enable lockout of root accounts.
+- `root_unlock_time` (Number) Root account unlock time in seconds.
+- `unlock_time` (Number) Account unlock time in seconds (0 = manual).
 
 
 <a id="nestedatt--remote_roles"></a>
@@ -67,4 +88,11 @@ Optional:
 - `ldap_group` (String)
 - `remote_gid` (Number)
 
+## Import
 
+Import is supported using the following syntax:
+
+```shell
+# Auth resource can be imported using a fixed identifier.
+terraform import f5os_auth.example auth
+```

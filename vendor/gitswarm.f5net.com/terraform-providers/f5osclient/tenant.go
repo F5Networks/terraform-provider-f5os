@@ -165,7 +165,7 @@ func (p *F5os) getUploadId(fileObj *os.File) (string, error) {
 }
 
 func (p *F5os) ImportImage(tenantImage *F5ReqTenantImage, timeOut int) ([]byte, error) {
-	f5osLogger.Debug("[ImportImage]", "Image struct:", hclog.Fmt("%+v", tenantImage))
+	f5osLogger.Debug("[ImportImage]", "RemoteHost:", tenantImage.RemoteHost, "RemoteFile:", tenantImage.RemoteFile, "LocalFile:", tenantImage.LocalFile, "Protocol:", tenantImage.Protocol, "Username:", tenantImage.Username)
 	byteBody, err := json.Marshal(tenantImage)
 	if err != nil {
 		return byteBody, err
@@ -179,9 +179,15 @@ func (p *F5os) ImportImage(tenantImage *F5ReqTenantImage, timeOut int) ([]byte, 
 		return []byte(""), fmt.Errorf("%s", string(respData))
 	}
 
+	// Parse the operation-id from the import response so importWait can
+	// match on the exact transfer operation instead of the remote-file-path
+	// (which may collide with historical entries in the transfer list).
+	operationID := parseImportOperationID(respData)
+	f5osLogger.Info("[ImportImage]", "Operation ID: ", hclog.Fmt("%+v", operationID))
+
 	t1 := time.Now()
 	for {
-		check, err := p.importWait(tenantImage)
+		check, err := p.importWait(tenantImage, operationID)
 		if err != nil {
 			return []byte(""), err
 		}
@@ -200,33 +206,88 @@ func (p *F5os) ImportImage(tenantImage *F5ReqTenantImage, timeOut int) ([]byte, 
 	}
 }
 
-func (p *F5os) importWait(tenantImage *F5ReqTenantImage) (bool, error) {
+// parseImportOperationID extracts the operation-id from the import POST
+// response JSON.  The expected format is:
+//
+//	{"f5-utils-file-transfer:output": {"result": "...", "operation-id": "IMPORT-xxxx"}}
+//
+// Returns an empty string if the ID cannot be parsed (older firmware may
+// not include it).
+func parseImportOperationID(respData []byte) string {
+	var envelope struct {
+		Output struct {
+			OperationID string `json:"operation-id"`
+		} `json:"f5-utils-file-transfer:output"`
+	}
+	if err := json.Unmarshal(respData, &envelope); err != nil {
+		return ""
+	}
+	return envelope.Output.OperationID
+}
+
+// importWait polls the transfer-operation list for the status of the import
+// identified by operationID.  If operationID is non-empty it matches on that
+// field for an exact 1:1 match; otherwise it falls back to matching on
+// remote-file-path (legacy behaviour for older firmware that does not return
+// an operation-id).
+func (p *F5os) importWait(tenantImage *F5ReqTenantImage, operationID string) (bool, error) {
 	transferMap, err := p.getImporttransferStatus()
-	for _, val := range transferMap["f5-utils-file-transfer:transfer-operation"].([]interface{}) {
-		if val.(map[string]interface{})["remote-file-path"].(string) != tenantImage.RemoteFile {
+	if err != nil {
+		return true, nil
+	}
+	if transferMap == nil {
+		return true, nil
+	}
+
+	ops, ok := transferMap["f5-utils-file-transfer:transfer-operation"].([]interface{})
+	if !ok || ops == nil {
+		return true, nil
+	}
+
+	for _, val := range ops {
+		entry, ok := val.(map[string]interface{})
+		if !ok {
 			continue
 		}
-		transStatus := val.(map[string]interface{})["status"].(string)
+
+		// Match by operation-id when available; fall back to remote-file-path.
+		if operationID != "" {
+			entryID, _ := entry["operation-id"].(string)
+			if entryID != operationID {
+				continue
+			}
+		} else {
+			remotePath, _ := entry["remote-file-path"].(string)
+			if remotePath != tenantImage.RemoteFile {
+				continue
+			}
+		}
+
+		transStatus, _ := entry["status"].(string)
 		f5osLogger.Info("[importWait]", "Trans Status: ", hclog.Fmt("%+v", transStatus))
-		if err != nil {
+
+		// Known in-progress statuses — keep polling.
+		if strings.HasPrefix(transStatus, "In Progress") || strings.Contains(transStatus, "File Transfer Initiated") {
 			return true, nil
 		}
+
+		// Completed — transfer succeeded.
 		if strings.Contains(transStatus, "Completed") {
 			return false, nil
 		}
-		if strings.Contains(transStatus, "HTTP Error") {
+
+		// Any other non-empty status is treated as a terminal error.
+		// This avoids silent infinite polling if the F5OS API introduces
+		// new error statuses in the future.
+		if transStatus != "" {
 			return false, fmt.Errorf("%s", transStatus)
 		}
-		if strings.Contains(transStatus, "Couldn't resolve host") {
-			return false, fmt.Errorf("%s", transStatus)
-		}
-		if strings.Contains(transStatus, "Failure") {
-			return false, fmt.Errorf("%s", transStatus)
-		}
-		for strings.HasPrefix(transStatus, "In Progress") {
-			return true, nil
-		}
+
+		// Empty status — entry exists but hasn't been populated yet;
+		// keep polling.
+		return true, nil
 	}
+	// No matching entry found yet — keep polling.
 	return true, nil
 }
 
