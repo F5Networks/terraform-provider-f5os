@@ -1,0 +1,19 @@
+{
+  "openconfig-platform:component": [
+    {
+      "name": "lcd",
+      "config": { "name": "lcd" },
+      "state": { "empty": false }
+    },
+    {
+      "name": "platform",
+      "config": { "name": "platform" },
+      "state": {
+        "description": "rSeries Platform",
+        "serial-no": "mock-serial",
+        "part-no": "mock-part",
+        "empty": false
+      }
+    }
+  ]
+}

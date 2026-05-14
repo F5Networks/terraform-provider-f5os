@@ -4,14 +4,17 @@ page_title: "f5os_dns Resource - terraform-provider-f5os"
 subcategory: ""
 description: |-
   Resource used to configure DNS settings (servers and domains) on F5OS systems (VELOS or rSeries).
-  ~> NOTE: The f5os_dns resource updates DNS servers and search domains on the F5OS platforms using Open API
+  ~> NOTE: The f5os_dns resource updates DNS servers and search domains on the F5OS platforms using Open API. When updating, any servers or domains removed from the configuration are also deleted from the device before the new values are applied.
+  ~> IMPORTANT: Running terraform destroy will remove this resource from Terraform state but will not delete the DNS configuration from the device. DNS is a critical system service and removing it could make the device unreachable.
 ---
 
 # f5os_dns (Resource)
 
 Resource used to configure DNS settings (servers and domains) on F5OS systems (VELOS or rSeries).
 
-~> **NOTE:** The `f5os_dns` resource updates DNS servers and search domains on the F5OS platforms using Open API
+~> **NOTE:** The `f5os_dns` resource updates DNS servers and search domains on the F5OS platforms using Open API. When updating, any servers or domains removed from the configuration are also deleted from the device before the new values are applied.
+
+~> **IMPORTANT:** Running `terraform destroy` will remove this resource from Terraform state but will **not** delete the DNS configuration from the device. DNS is a critical system service and removing it could make the device unreachable.
 
 ## Example Usage
 

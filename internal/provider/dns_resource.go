@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -49,7 +48,9 @@ func (r *DNSResource) Metadata(_ context.Context, req resource.MetadataRequest, 
 func (r *DNSResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Resource used to configure DNS settings (servers and domains) on F5OS systems (VELOS or rSeries).\n\n" +
-			"~> **NOTE:** The `f5os_dns` resource updates DNS servers and search domains on the F5OS platforms using Open API",
+			"~> **NOTE:** The `f5os_dns` resource updates DNS servers and search domains on the F5OS platforms using Open API. " +
+			"When updating, any servers or domains removed from the configuration are also deleted from the device before the new values are applied.\n\n" +
+			"~> **IMPORTANT:** Running `terraform destroy` will remove this resource from Terraform state but will **not** delete the DNS configuration from the device. DNS is a critical system service and removing it could make the device unreachable.",
 		Attributes: map[string]schema.Attribute{
 			"dns_servers": schema.ListAttribute{
 				ElementType:         types.StringType,
@@ -88,13 +89,19 @@ func (r *DNSResource) Configure(_ context.Context, req resource.ConfigureRequest
 	r.client = client
 }
 
-// extractStringList safely extracts a string list from a types.List
+// extractStringList safely extracts a string list from a types.List.
+// Always returns a non-nil slice so callers never send JSON null to the
+// API and types.ListValueFrom never produces a null Terraform list.
 func extractStringList(ctx context.Context, list types.List) ([]string, diag.Diagnostics) {
 	var result []string
 	var diags diag.Diagnostics
 
 	if !list.IsNull() && !list.IsUnknown() {
 		diags = list.ElementsAs(ctx, &result, false)
+	}
+
+	if result == nil {
+		result = []string{}
 	}
 
 	return result, diags
@@ -144,6 +151,42 @@ func (r *DNSResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
+	// Read the current device state so we can remove pre-existing entries
+	// that are not in the Terraform config. The F5OS DNS PATCH API is
+	// additive — it merges with existing config rather than replacing it.
+	// Without this step, pre-existing servers/domains would persist on the
+	// device and cause drift on the next refresh.
+	existing, err := r.client.ReadDNSConfig()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"DNS Configuration Error",
+			fmt.Sprintf("Failed to read existing DNS configuration: %s", err),
+		)
+		return
+	}
+
+	var existingServers, existingDomains []string
+	for _, s := range existing.DNS.Servers.Server {
+		existingServers = append(existingServers, s.Address)
+	}
+	existingDomains = append(existingDomains, existing.DNS.Config.Search...)
+
+	staleServers := removedEntries(existingServers, dnsServers)
+	staleDomains := removedEntries(existingDomains, dnsDomains)
+	if len(staleServers) > 0 || len(staleDomains) > 0 {
+		tflog.Debug(ctx, "Removing pre-existing DNS entries not in config", map[string]interface{}{
+			"stale_servers": staleServers,
+			"stale_domains": staleDomains,
+		})
+		if err := r.client.DeleteDNSConfig(staleServers, staleDomains); err != nil {
+			resp.Diagnostics.AddError(
+				"DNS Configuration Error",
+				fmt.Sprintf("Failed to remove pre-existing DNS entries: %s", err),
+			)
+			return
+		}
+	}
+
 	// Call client to PATCH DNS config
 	if err := r.client.PatchDNSConfig(dnsServers, dnsDomains); err != nil {
 		resp.Diagnostics.AddError(
@@ -156,6 +199,17 @@ func (r *DNSResource) Create(ctx context.Context, req resource.CreateRequest, re
 	// Compute resource ID based on configuration
 	resourceID := computeResourceID(dnsServers, dnsDomains)
 	plan.Id = types.StringValue(resourceID)
+
+	// Ensure dns_domains is never null in state — when omitted from the
+	// HCL config, the plan value is null, but Computed attributes must
+	// be known after apply. Set it to an empty list.
+	if plan.DNSDomains.IsNull() || plan.DNSDomains.IsUnknown() {
+		plan.DNSDomains, diags = types.ListValueFrom(ctx, types.StringType, dnsDomains)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
 
 	tflog.Debug(ctx, "DNS configuration created successfully", map[string]interface{}{
 		"servers": dnsServers,
@@ -180,25 +234,11 @@ func (r *DNSResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 	tflog.Info(ctx, "Reading DNS configuration from F5OS")
 
 	// Fetch DNS config from F5OS API
-	rawResp, err := r.client.GetRequest("/openconfig-system:system/dns")
+	config, err := r.client.ReadDNSConfig()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"DNS Read Error",
 			fmt.Sprintf("Failed to fetch DNS configuration: %s", err),
-		)
-		return
-	}
-
-	tflog.Debug(ctx, "Received DNS configuration", map[string]interface{}{
-		"response": string(rawResp),
-	})
-
-	// Parse the response
-	var config f5os.DNSConfigPayload
-	if err := json.Unmarshal(rawResp, &config); err != nil {
-		resp.Diagnostics.AddError(
-			"DNS Parse Error",
-			fmt.Sprintf("Failed to parse DNS configuration: %s\nRaw response: %s", err, string(rawResp)),
 		)
 		return
 	}
@@ -211,31 +251,33 @@ func (r *DNSResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		config.DNS.Config.Search = []string{}
 	}
 
-	// Extract values
-	var servers, domains []string
+	// Extract values — use non-nil empty slices so types.ListValueFrom
+	// always produces an empty list rather than a null Terraform value.
+	servers := make([]string, 0, len(config.DNS.Servers.Server))
 	for _, s := range config.DNS.Servers.Server {
 		servers = append(servers, s.Address)
 	}
+	domains := make([]string, 0, len(config.DNS.Config.Search))
 	domains = append(domains, config.DNS.Config.Search...)
 
 	// Set Terraform types
-	_, diags := types.ListValueFrom(ctx, types.StringType, servers)
+	serversTF, diags := types.ListValueFrom(ctx, types.StringType, servers)
 	resp.Diagnostics.Append(diags...)
 
-	_, diags = types.ListValueFrom(ctx, types.StringType, domains)
+	domainsTF, diags := types.ListValueFrom(ctx, types.StringType, domains)
 	resp.Diagnostics.Append(diags...)
 
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Update state
-	// state.DNSServers = serversTF
-	// state.DNSDomains = domainsTF
+	// Update state from device
+	state.DNSServers = serversTF
+	state.DNSDomains = domainsTF
 
-	// Compute resource ID based on current configuration
-	// resourceID := computeResourceID(servers, domains)
-	// state.Id = types.StringValue(resourceID)
+	// Recompute resource ID based on current device configuration
+	resourceID := computeResourceID(servers, domains)
+	state.Id = types.StringValue(resourceID)
 
 	tflog.Debug(ctx, "Setting DNS state", map[string]interface{}{
 		"servers": servers,
@@ -249,27 +291,44 @@ func (r *DNSResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 
 // Update updates the resource and sets the updated Terraform state
 func (r *DNSResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan DNSResourceModel
+	var plan, prior DNSResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	tflog.Info(ctx, "Updating DNS configuration")
 
-	// Extract DNS Servers and Domains
+	// Extract planned (new) values
 	dnsServers, diags := extractStringList(ctx, plan.DNSServers)
 	resp.Diagnostics.Append(diags...)
 
 	dnsDomains, diags := extractStringList(ctx, plan.DNSDomains)
 	resp.Diagnostics.Append(diags...)
 
+	// Extract prior (old) values
+	oldServers, diags := extractStringList(ctx, prior.DNSServers)
+	resp.Diagnostics.Append(diags...)
+
+	oldDomains, diags := extractStringList(ctx, prior.DNSDomains)
+	resp.Diagnostics.Append(diags...)
+
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Call PATCH operation via client SDK
+	// Delete servers and domains that were removed from the config
+	removed := removedEntries(oldServers, dnsServers)
+	removedDoms := removedEntries(oldDomains, dnsDomains)
+	if err := r.client.DeleteDNSConfig(removed, removedDoms); err != nil {
+		resp.Diagnostics.AddError("DNS Update Error",
+			fmt.Sprintf("Failed to remove stale DNS entries: %s", err))
+		return
+	}
+
+	// Patch remaining / newly added entries
 	if err := r.client.PatchDNSConfig(dnsServers, dnsDomains); err != nil {
 		resp.Diagnostics.AddError(
 			"DNS Update Error",
@@ -282,6 +341,15 @@ func (r *DNSResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	resourceID := computeResourceID(dnsServers, dnsDomains)
 	plan.Id = types.StringValue(resourceID)
 
+	// Ensure dns_domains is never null/unknown in state after Update.
+	if plan.DNSDomains.IsNull() || plan.DNSDomains.IsUnknown() {
+		plan.DNSDomains, diags = types.ListValueFrom(ctx, types.StringType, dnsDomains)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	tflog.Debug(ctx, "DNS configuration updated successfully", map[string]interface{}{
 		"servers": dnsServers,
 		"domains": dnsDomains,
@@ -291,51 +359,30 @@ func (r *DNSResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-// Delete deletes the resource and removes the Terraform state
+// removedEntries returns elements present in old but absent from new.
+func removedEntries(old, new []string) []string {
+	set := make(map[string]struct{}, len(new))
+	for _, v := range new {
+		set[v] = struct{}{}
+	}
+	var removed []string
+	for _, v := range old {
+		if _, ok := set[v]; !ok {
+			removed = append(removed, v)
+		}
+	}
+	return removed
+}
+
+// Delete removes the DNS resource from Terraform state without modifying the
+// device. DNS is a singleton system setting — removing the managed entries
+// would break name resolution and could make the device unreachable.
 func (r *DNSResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var state DNSResourceModel
+	tflog.Info(ctx, "Removing DNS resource from Terraform state (device configuration is preserved)")
 
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	tflog.Info(ctx, "Deleting DNS configuration")
-
-	// Extract DNS servers and domains
-	dnsServers, diags := extractStringList(ctx, state.DNSServers)
-	resp.Diagnostics.Append(diags...)
-
-	dnsDomains, diags := extractStringList(ctx, state.DNSDomains)
-	resp.Diagnostics.Append(diags...)
-
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	// Delete DNS servers individually
-	for _, server := range dnsServers {
-		if err := r.client.DeleteDNSServer(server); err != nil {
-			resp.Diagnostics.AddWarning(
-				"DNS Server Deletion Warning",
-				fmt.Sprintf("Failed to delete DNS server [%s]: %s", server, err),
-			)
-		}
-	}
-
-	// Delete DNS search domains individually
-	for _, domain := range dnsDomains {
-		if err := r.client.DeleteSearchDomain(domain); err != nil {
-			resp.Diagnostics.AddWarning(
-				"DNS Domain Deletion Warning",
-				fmt.Sprintf("Failed to delete DNS domain [%s]: %s", domain, err),
-			)
-		}
-	}
-
-	tflog.Debug(ctx, "DNS configuration deleted", map[string]interface{}{
-		"servers": dnsServers,
-		"domains": dnsDomains,
-		"id":      state.Id.ValueString(),
-	})
+	resp.Diagnostics.AddWarning(
+		"DNS Configuration Preserved",
+		"The DNS resource has been removed from Terraform state, but the DNS configuration on the device has been left intact. "+
+			"To modify DNS settings, re-import the resource or create a new f5os_dns resource.",
+	)
 }

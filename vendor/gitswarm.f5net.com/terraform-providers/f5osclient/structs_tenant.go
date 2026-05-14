@@ -44,10 +44,17 @@ type F5RespTenantImagesStatus struct {
 }
 
 type F5ReqTenantImage struct {
-	Insecure   string `json:"insecure"`
-	LocalFile  string `json:"local-file,omitempty"`
-	RemoteFile string `json:"remote-file,omitempty"`
-	RemoteHost string `json:"remote-host,omitempty"`
+	// Insecure represents a YANG empty leaf.  Per RFC 7951 the JSON
+	// encoding of an empty leaf is [null].  Set to []interface{}{nil}
+	// to enable insecure mode; leave nil to omit the field.
+	Insecure   interface{} `json:"insecure,omitempty"`
+	LocalFile  string      `json:"local-file,omitempty"`
+	RemoteFile string      `json:"remote-file,omitempty"`
+	RemoteHost string      `json:"remote-host,omitempty"`
+	Protocol   string      `json:"protocol,omitempty"`
+	Username   string      `json:"username,omitempty"`
+	Password   string      `json:"password,omitempty"`
+	RemotePort int         `json:"remote-port,omitempty"`
 }
 type F5ReqTenant struct {
 	Name           string `json:"name,omitempty"`
