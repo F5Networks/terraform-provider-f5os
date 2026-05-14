@@ -133,7 +133,7 @@ func (p *F5os) UploadImage(filePath string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	time.Sleep(time.Second * 10)
+	time.Sleep(p.pollInterval(10 * time.Second))
 	return resp, nil
 }
 
@@ -197,10 +197,10 @@ func (p *F5os) ImportImage(tenantImage *F5ReqTenantImage, timeOut int) ([]byte, 
 			return []byte(""), fmt.Errorf("image Import transfer still in In Progress with Timeout Period, please increase timeout")
 		}
 		if check {
-			time.Sleep(20 * time.Second)
+			time.Sleep(p.pollInterval(20 * time.Second))
 			continue
 		} else {
-			time.Sleep(20 * time.Second)
+			time.Sleep(p.pollInterval(20 * time.Second))
 			return []byte("Import Image Transfer Success"), nil
 		}
 	}
@@ -392,7 +392,7 @@ func (p *F5os) CreateTenantAndGetApi(tenantObj *F5ReqTenants, timeOut int) ([]by
 		for {
 			resp, err := p.GetApi()
 			f5osLogger.Info("[CreateTenantAndGetApi]", "RequestGetApi ", hclog.Fmt("%+v", string(resp)))
-			time.Sleep(15 * time.Second)
+			time.Sleep(p.pollInterval(15 * time.Second))
 			chan2 <- resp
 			err2 <- err
 		}
@@ -426,7 +426,7 @@ func (p *F5os) CreateTenant(tenantObj *F5ReqTenants, timeOut int) ([]byte, error
 		check, err := p.tenantWait(tenantObj.F5TenantsTenant[0].Name, tenantObj.F5TenantsTenant[0].Config.RunningState)
 		if err != nil {
 			if err.Error() == "tenant status not found" {
-				time.Sleep(30 * time.Second)
+				time.Sleep(p.pollInterval(30 * time.Second))
 				t1 = time.Now()
 				continue
 			}
@@ -455,10 +455,10 @@ func (p *F5os) CreateTenant(tenantObj *F5ReqTenants, timeOut int) ([]byte, error
 			//return []byte(""), fmt.Errorf("[TF-100]tenant deployment still in In Progress with in Timeout Period, please increase timeout")
 		}
 		if check {
-			time.Sleep(80 * time.Second)
+			time.Sleep(p.pollInterval(80 * time.Second))
 			continue
 		} else {
-			time.Sleep(20 * time.Second)
+			time.Sleep(p.pollInterval(20 * time.Second))
 			// stop <- true
 			return []byte("Tenant Deployment Success"), nil
 		}
@@ -486,7 +486,7 @@ func (p *F5os) UpdateTenant(tenantObj *F5ReqTenantsPatch, timeOut int) ([]byte, 
 		check, err := p.tenantWait(tenantObj.F5TenantsTenants.Tenant[0].Name, tenantObj.F5TenantsTenants.Tenant[0].Config.RunningState)
 		if err != nil {
 			if err.Error() == "tenant status not found" {
-				time.Sleep(30 * time.Second)
+				time.Sleep(p.pollInterval(30 * time.Second))
 				t1 = time.Now()
 				continue
 			}
@@ -498,10 +498,10 @@ func (p *F5os) UpdateTenant(tenantObj *F5ReqTenantsPatch, timeOut int) ([]byte, 
 			return []byte(""), fmt.Errorf("tenant deployment still in In Progress with Timeout Period, please incraese timeout")
 		}
 		if check {
-			time.Sleep(20 * time.Second)
+			time.Sleep(p.pollInterval(20 * time.Second))
 			continue
 		} else {
-			time.Sleep(20 * time.Second)
+			time.Sleep(p.pollInterval(20 * time.Second))
 			return []byte("Tenant Deployment Success"), nil
 		}
 	}
@@ -582,7 +582,7 @@ func (p *F5os) DeleteTenant(tenantName string) error {
 		return err
 	}
 	f5osLogger.Debug("[DeleteTenant]", "wait for 50 sec", hclog.Fmt("%d", 10))
-	time.Sleep(50 * time.Second)
+	time.Sleep(p.pollInterval(50 * time.Second))
 	p.CheckTenantnotexist(tenantName)
 	return nil
 }

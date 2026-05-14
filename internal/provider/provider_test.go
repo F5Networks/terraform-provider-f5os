@@ -62,14 +62,18 @@ func testAccPreUnitCheck(t *testing.T) {
 	// unit tests from polluting F5OS_HOST for acceptance tests that run
 	// later in the same process.
 	savedEnv = map[string]string{
-		"F5OS_HOST":     os.Getenv("F5OS_HOST"),
-		"F5OS_USERNAME": os.Getenv("F5OS_USERNAME"),
-		"F5OS_PASSWORD": os.Getenv("F5OS_PASSWORD"),
+		"F5OS_HOST":          os.Getenv("F5OS_HOST"),
+		"F5OS_USERNAME":      os.Getenv("F5OS_USERNAME"),
+		"F5OS_PASSWORD":      os.Getenv("F5OS_PASSWORD"),
+		"F5OS_POLL_INTERVAL": os.Getenv("F5OS_POLL_INTERVAL"),
 	}
 	setup()
 	_ = os.Setenv("F5OS_HOST", server.URL)
 	_ = os.Setenv("F5OS_USERNAME", "testuser")
 	_ = os.Setenv("F5OS_PASSWORD", "testpass")
+	// Use a very short poll interval in unit tests to avoid the 20-second
+	// sleeps that the real client uses between polling iterations.
+	_ = os.Setenv("F5OS_POLL_INTERVAL", "1ms")
 }
 
 func setup() {

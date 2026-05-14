@@ -138,11 +138,12 @@ func (r *PrimaryKeyResource) waitForPrimaryKeyMigration(ctx context.Context) err
 
 	for poll := 0; poll < maxPolls; poll++ {
 		keyData, err := r.client.GetPrimaryKey()
-		if err != nil {
+		switch {
+		case err != nil:
 			tflog.Warn(ctx, fmt.Sprintf("Error polling primary key status: %s", err))
-		} else if keyData == nil {
+		case keyData == nil:
 			tflog.Warn(ctx, "Error polling primary key status: empty response from device")
-		} else {
+		default:
 			status := keyData.PrimaryKey.State.Status
 			tflog.Debug(ctx, fmt.Sprintf("Primary key migration status: %s", status))
 			if strings.Contains(status, "COMPLETE") {

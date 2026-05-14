@@ -85,7 +85,23 @@ type F5os struct {
 	Password         string
 	DisableSSLVerify bool
 	Port             int
+	// PollInterval controls how long the client sleeps between polling
+	// iterations when waiting for asynchronous operations (image import,
+	// tenant deploy, partition creation, etc.). The zero value is treated
+	// as the production default of 20 seconds. Set to a short duration
+	// (e.g. 1ms) in unit tests to avoid slow test suites.
+	PollInterval time.Duration
 }
+
+// pollInterval returns the PollInterval if set, otherwise returns the
+// provided default duration.
+func (p *F5os) pollInterval(defaultInterval time.Duration) time.Duration {
+	if p.PollInterval > 0 {
+		return p.PollInterval
+	}
+	return defaultInterval
+}
+
 type requestError struct {
 	ErrorType    string `json:"error-type,omitempty"`
 	ErrorTag     string `json:"error-tag,omitempty"`
@@ -257,6 +273,15 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	}
 	f5osSession.Token = res.Header.Get("X-Auth-Token")
 	f5osSession.setPlatformType()
+
+	// Allow tests to override the poll interval via an environment variable
+	// so that unit tests with mock servers don't waste time sleeping.
+	if envPoll := os.Getenv("F5OS_POLL_INTERVAL"); envPoll != "" {
+		if d, err := time.ParseDuration(envPoll); err == nil {
+			f5osSession.PollInterval = d
+		}
+	}
+
 	f5osLogger.Info("[NewSession] Session creation Success")
 	return f5osSession, nil
 }
@@ -284,7 +309,7 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 	}
 
 	retries := 3
-	delay := 10 * time.Second
+	delay := p.pollInterval(10 * time.Second)
 	for i := 0; i < retries; i++ {
 
 		req, err := http.NewRequest(op, path, bytes.NewBuffer(body))
@@ -974,7 +999,7 @@ func (p *F5os) CreateConfigBackup(backupName string, timeout int64, exportCfg Fi
 
 	f5osLogger.Debug("[CreateConfigBackup]", "transferId and key are ", hclog.Fmt("%+v, %+v", transferId, key))
 	waitTime := time.Second * time.Duration(timeout)
-	for start := time.Now(); time.Since(start).Seconds() < waitTime.Seconds(); time.Sleep(5 * time.Second) {
+	for start := time.Now(); time.Since(start).Seconds() < waitTime.Seconds(); time.Sleep(p.pollInterval(5 * time.Second)) {
 		status, err := p.fileTransferStatus(key, transferId)
 		if err != nil {
 			return nil, err

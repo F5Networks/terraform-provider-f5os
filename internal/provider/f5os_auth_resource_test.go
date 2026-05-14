@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -326,6 +327,8 @@ func TestAuthResourceMocked_ErrorHandling(t *testing.T) {
 
 	client, err := f5os.NewSession(config)
 	assert.NoError(t, err, "Client initialization should not fail")
+	// Use a short poll/retry interval so the 3-retry loop doesn't take 30s.
+	client.PollInterval = time.Millisecond
 
 	// Test that errors are properly handled
 	_, err = client.GetAuthOrder()

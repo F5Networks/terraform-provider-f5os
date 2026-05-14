@@ -152,10 +152,10 @@ func (p *F5os) CheckPartitionState(partitionName string, timeOut int) ([]byte, e
 			return []byte(""), fmt.Errorf("partition deployment still in in progress with timeout period, please increase timeout")
 		}
 		if check {
-			time.Sleep(20 * time.Second)
+			time.Sleep(p.pollInterval(20 * time.Second))
 			continue
 		} else {
-			time.Sleep(20 * time.Second)
+			time.Sleep(p.pollInterval(20 * time.Second))
 			return []byte("Partition Deployment Success."), nil
 		}
 	}
