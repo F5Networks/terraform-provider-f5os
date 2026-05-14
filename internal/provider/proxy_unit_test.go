@@ -259,9 +259,9 @@ func TestTransportProxy_CustomProxyFuncRoutes(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		w.WriteHeader(resp.StatusCode)
-		fmt.Fprint(w, "proxied")
+		_, _ = fmt.Fprint(w, "proxied")
 	}))
 	defer proxy.Close()
 
@@ -275,7 +275,7 @@ func TestTransportProxy_CustomProxyFuncRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET through proxy failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if proxyHitCount == 0 {
 		t.Fatal("expected request to hit the proxy, but it did not")
@@ -329,7 +329,7 @@ func TestTransportProxy_SelectiveProxyByHost(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		w.WriteHeader(resp.StatusCode)
 	}))
 	defer proxy.Close()
@@ -378,7 +378,7 @@ func TestTransportProxy_ReusedAfterNewSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET with session Transport failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", resp.StatusCode)

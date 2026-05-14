@@ -166,7 +166,7 @@ func (r *SystemResource) Create(ctx context.Context, req resource.CreateRequest,
 		tflog.Debug(ctx, fmt.Sprintf("[CREATE], Token Lifetime Resp:%+v", string(res)))
 	}
 
-	if (!data.CliTimeout.IsNull() && !data.CliTimeout.IsUnknown()) || (data.SshdIdleTimeout.IsNull() && data.SshdIdleTimeout.IsUnknown()) {
+	if (!data.CliTimeout.IsNull() && !data.CliTimeout.IsUnknown()) || (!data.SshdIdleTimeout.IsNull() && !data.SshdIdleTimeout.IsUnknown()) {
 		systemSettingsReq := getSystemSettingsConfig(ctx, data)
 
 		byteBody, err := json.Marshal(systemSettingsReq)
@@ -404,7 +404,10 @@ func (r *SystemResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 
-	r.SystemResourceModelToState(ctx, resSystemConfig, resClockConfig, resHttpdBlock, resSshdBlock, resSystemSettingsConfig, resTokenLifetime, data)
+	// Hostname is null only during import (ImportState sets id alone).
+	isImport := data.Hostname.IsNull()
+
+	r.SystemResourceModelToState(ctx, resSystemConfig, resClockConfig, resHttpdBlock, resSshdBlock, resSystemSettingsConfig, resTokenLifetime, data, isImport)
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -440,7 +443,7 @@ func (r *SystemResource) Update(ctx context.Context, req resource.UpdateRequest,
 		tflog.Debug(ctx, fmt.Sprintf("[UPDATE], Token Lifetime Resp:%+v", string(res)))
 	}
 
-	if (!data.CliTimeout.IsNull() && !data.CliTimeout.IsUnknown()) || (data.SshdIdleTimeout.IsNull() && data.SshdIdleTimeout.IsUnknown()) {
+	if (!data.CliTimeout.IsNull() && !data.CliTimeout.IsUnknown()) || (!data.SshdIdleTimeout.IsNull() && !data.SshdIdleTimeout.IsUnknown()) {
 		systemSettingsReq := getSystemSettingsConfig(ctx, data)
 
 		byteBody, err := json.Marshal(systemSettingsReq)
@@ -586,6 +589,9 @@ func (r *SystemResource) Update(ctx context.Context, req resource.UpdateRequest,
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
+// Delete only guards optional fields with IsNull() (not IsUnknown()) because
+// state values in Delete are never Unknown — Unknown only appears during planning.
+// Create/Update use both IsNull() && IsUnknown() checks since plan values can be Unknown.
 func (r *SystemResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var data *SystemResourceModel
 
@@ -605,17 +611,25 @@ func (r *SystemResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		}
 	}
 
-	baseURL = "/openconfig-system:system/aaa/f5-aaa-confd-restconf-token:restconf-token/config/lifetime/lifetime"
-	err := r.client.DeleteRequest(baseURL)
-	if err != nil {
-		resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Token Lifetime, got error: %s", err))
-		return
+	if !data.TokenLifetime.IsNull() {
+		baseURL = "/openconfig-system:system/aaa/f5-aaa-confd-restconf-token:restconf-token/config/lifetime/lifetime"
+		err := r.client.DeleteRequest(baseURL)
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Token Lifetime, got error: %s", err))
+			return
+		}
 	}
 
 	baseURL = "/openconfig-system:system/f5-system-settings:settings"
-	paths = []string{"idle-timeout", "sshd-idle-timeout"}
-	for _, path := range paths {
-		err := r.client.DeleteRequest(fmt.Sprintf(`%s/%s`, baseURL, path))
+	if !data.CliTimeout.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s/%s`, baseURL, "idle-timeout"))
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting System Settings, got error: %s", err))
+			return
+		}
+	}
+	if !data.SshdIdleTimeout.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s/%s`, baseURL, "sshd-idle-timeout"))
 		if err != nil {
 			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting System Settings, got error: %s", err))
 			return
@@ -623,22 +637,39 @@ func (r *SystemResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	}
 
 	baseURL = "/openconfig-system:system/f5-security-ciphers:security/services/service"
-	paths = []string{"ssl-cipher-suite", "ciphers", "kexalgorithms", "macs", "host-key-algorithms"}
-	// services := []string{"httpd", "sshd"}
-
-	for _, path := range paths {
-		if path == "ssl-cipher-suite" {
-			err := r.client.DeleteRequest(fmt.Sprintf(`%s="httpd"/config/%s`, baseURL, path))
-			if err != nil {
-				resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting System Settings, got error: %s", err))
-				return
-			}
-		} else {
-			err := r.client.DeleteRequest(fmt.Sprintf(`%s="sshd"/config/%s`, baseURL, path))
-			if err != nil {
-				resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Ciphers Config, got error: %s", err))
-				return
-			}
+	if !data.HttpdCipherSuite.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s="httpd"/config/%s`, baseURL, "ssl-cipher-suite"))
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting System Settings, got error: %s", err))
+			return
+		}
+	}
+	if !data.SshdCiphers.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s="sshd"/config/%s`, baseURL, "ciphers"))
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Ciphers Config, got error: %s", err))
+			return
+		}
+	}
+	if !data.SshdKeyAlg.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s="sshd"/config/%s`, baseURL, "kexalgorithms"))
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Ciphers Config, got error: %s", err))
+			return
+		}
+	}
+	if !data.SshdMacAlg.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s="sshd"/config/%s`, baseURL, "macs"))
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Ciphers Config, got error: %s", err))
+			return
+		}
+	}
+	if !data.SshdHkeyAlg.IsNull() {
+		err := r.client.DeleteRequest(fmt.Sprintf(`%s="sshd"/config/%s`, baseURL, "host-key-algorithms"))
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("Failure while Deleting Ciphers Config, got error: %s", err))
+			return
 		}
 	}
 
@@ -651,7 +682,7 @@ func (r *SystemResource) ImportState(ctx context.Context, req resource.ImportSta
 
 func (r *SystemResource) SystemResourceModelToState(ctx context.Context, resSystemConfig *f5ossdk.F5ResSystemConfig, resClockConfig *f5ossdk.F5ResClockConfig,
 	resHttpdBlock *f5ossdk.HttpdBlock, resSshdBlock *f5ossdk.SshdBlock, resSystemSettingsConfig *f5ossdk.F5ResSettingsConfig,
-	resTokenLifetime *f5ossdk.F5ResTokenLifetime, data *SystemResourceModel) {
+	resTokenLifetime *f5ossdk.F5ResTokenLifetime, data *SystemResourceModel, isImport bool) {
 
 	data.Hostname = types.StringValue(resSystemConfig.OpenConfigSystem.Hostname)
 
@@ -660,28 +691,46 @@ func (r *SystemResource) SystemResourceModelToState(ctx context.Context, resSyst
 
 	data.Timezone = types.StringValue(resClockConfig.OpenConfigClock.Config.TimeZoneName)
 
-	data.HttpdCipherSuite = types.StringValue(resHttpdBlock.Config.SSLCipherSuite)
-
-	data.SshdCiphers.ElementsAs(ctx, &resSshdBlock.Config.Ciphers, false)
-	data.SshdMacAlg.ElementsAs(ctx, &resSshdBlock.Config.MACs, false)
-	data.SshdKeyAlg.ElementsAs(ctx, &resSshdBlock.Config.KexAlgorithms, false)
-	data.SshdHkeyAlg.ElementsAs(ctx, &resSshdBlock.Config.HostKeyAlgos, false)
-
-	switch v := resSystemSettingsConfig.Settings.Config.CliTimeout.(type) {
-	case string:
-		id, _ := strconv.Atoi(v)
-		data.CliTimeout = types.Int64Value(int64(id))
-	case int:
-		id := int(v)
-		data.CliTimeout = types.Int64Value(int64(id))
-	default:
-		// Use id
+	if !data.HttpdCipherSuite.IsNull() || isImport {
+		data.HttpdCipherSuite = types.StringValue(resHttpdBlock.Config.SSLCipherSuite)
 	}
 
-	// data.CliTimeout = types.Int64Value(int64(resSystemSettingsConfig.Settings.Config.CliTimeout.(int)))
-	data.SshdIdleTimeout = types.StringValue(resSystemSettingsConfig.Settings.Config.SshdIdleTimeout.(string))
+	if !data.SshdCiphers.IsNull() || isImport {
+		data.SshdCiphers, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.Ciphers)
+	}
+	if !data.SshdMacAlg.IsNull() || isImport {
+		data.SshdMacAlg, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.MACs)
+	}
+	if !data.SshdKeyAlg.IsNull() || isImport {
+		data.SshdKeyAlg, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.KexAlgorithms)
+	}
+	if !data.SshdHkeyAlg.IsNull() || isImport {
+		data.SshdHkeyAlg, _ = types.ListValueFrom(ctx, types.StringType, resSshdBlock.Config.HostKeyAlgos)
+	}
 
-	data.TokenLifetime = types.Int64Value(int64(resTokenLifetime.Lifetime))
+	if !data.CliTimeout.IsNull() || isImport {
+		switch v := resSystemSettingsConfig.Settings.Config.CliTimeout.(type) {
+		case string:
+			id, _ := strconv.Atoi(v)
+			data.CliTimeout = types.Int64Value(int64(id))
+		case int:
+			data.CliTimeout = types.Int64Value(int64(v))
+		case float64:
+			data.CliTimeout = types.Int64Value(int64(v))
+		default:
+			// Unrecognized type; leave CliTimeout unchanged
+		}
+	}
+
+	if !data.SshdIdleTimeout.IsNull() || isImport {
+		if s, ok := resSystemSettingsConfig.Settings.Config.SshdIdleTimeout.(string); ok {
+			data.SshdIdleTimeout = types.StringValue(s)
+		}
+	}
+
+	if !data.TokenLifetime.IsNull() || isImport {
+		data.TokenLifetime = types.Int64Value(int64(resTokenLifetime.Lifetime))
+	}
 
 }
 

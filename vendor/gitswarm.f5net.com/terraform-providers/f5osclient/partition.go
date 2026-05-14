@@ -152,10 +152,10 @@ func (p *F5os) CheckPartitionState(partitionName string, timeOut int) ([]byte, e
 			return []byte(""), fmt.Errorf("partition deployment still in in progress with timeout period, please increase timeout")
 		}
 		if check {
-			time.Sleep(20 * time.Second)
+			time.Sleep(p.pollInterval(20 * time.Second))
 			continue
 		} else {
-			time.Sleep(20 * time.Second)
+			time.Sleep(p.pollInterval(20 * time.Second))
 			return []byte("Partition Deployment Success."), nil
 		}
 	}
@@ -390,9 +390,16 @@ func (p *F5os) DeleteTlsCertKey(certKeyName string) error {
 
 // PatchDNSConfig sets DNS config using PATCH to /system/dns
 func (c *F5os) PatchDNSConfig(dnsServers []string, searchDomains []string) error {
-	var servers []DNSServer
+	// Pre-allocate so json.Marshal produces "server":[] not "server":null
+	// when dnsServers is empty.
+	servers := make([]DNSServer, 0, len(dnsServers))
 	for _, s := range dnsServers {
 		servers = append(servers, DNSServer{Address: s})
+	}
+
+	// Ensure non-nil so json.Marshal produces "search":[] not "search":null
+	if searchDomains == nil {
+		searchDomains = []string{}
 	}
 
 	payload := DNSConfigPayload{
@@ -447,6 +454,12 @@ func (c *F5os) ReadDNSConfig() (*DNSConfigPayload, error) {
 	resp, err := c.GetRequest(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to GET DNS config: %w", err)
+	}
+
+	// When no DNS config exists on the device, the API may return an
+	// empty body. Return an empty struct so callers can proceed.
+	if len(resp) == 0 {
+		return &DNSConfigPayload{}, nil
 	}
 
 	var config DNSConfigPayload
@@ -521,9 +534,9 @@ const (
 
 type ntpServerConfig struct {
 	Address string `json:"address"`
-	KeyID   int64  `json:"f5-openconfig-system-ntp:key-id,omitempty"`
-	Prefer  bool   `json:"prefer,omitempty"`
-	Iburst  bool   `json:"iburst,omitempty"`
+	KeyID   *int64 `json:"f5-openconfig-system-ntp:key-id,omitempty"`
+	Prefer  bool   `json:"prefer"`
+	Iburst  bool   `json:"iburst"`
 }
 
 type ntpServerPayload struct {
@@ -553,6 +566,18 @@ func (c *F5os) CreateNTPServer(server string, payload []byte) error {
 }
 
 func (c *F5os) CreateNTPServerPayload(server string, plan NTPServerModel) ([]byte, error) {
+	cfg := ntpServerConfig{
+		Address: server,
+		Prefer:  plan.Prefer.ValueBool(),
+		Iburst:  plan.IBurst.ValueBool(),
+	}
+	// Only include key-id when explicitly set (not null/unknown) so that
+	// omitempty correctly omits the field when the user did not configure it,
+	// while still sending key_id=0 when the user explicitly sets it to zero.
+	if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() {
+		v := plan.KeyID.ValueInt64()
+		cfg.KeyID = &v
+	}
 	payload := ntpServerPayload{
 		Server: []struct {
 			Address string          `json:"address"`
@@ -560,12 +585,7 @@ func (c *F5os) CreateNTPServerPayload(server string, plan NTPServerModel) ([]byt
 		}{
 			{
 				Address: server,
-				Config: ntpServerConfig{
-					Address: server,
-					KeyID:   plan.KeyID.ValueInt64(),
-					Prefer:  plan.Prefer.ValueBool(),
-					Iburst:  plan.IBurst.ValueBool(),
-				},
+				Config:  cfg,
 			},
 		},
 	}
@@ -578,11 +598,64 @@ func (c *F5os) GetNTPServer(server string) (*NTPServerStruct, error) {
 	if err != nil {
 		return nil, fmt.Errorf("GET NTP server failed: %w", err)
 	}
-	var ntpResp NTPServerStruct
-	if err := json.Unmarshal(resp, &ntpResp); err != nil {
+
+	var envelope ntpServerResponse
+	if err := json.Unmarshal(resp, &envelope); err != nil {
 		return nil, fmt.Errorf("invalid JSON for NTP server: %w", err)
 	}
-	return &ntpResp, nil
+	if len(envelope.Server) == 0 {
+		return nil, fmt.Errorf("NTP server %s not found in response", server)
+	}
+
+	entry := envelope.Server[0]
+	return &NTPServerStruct{
+		Address: entry.Config.Address,
+		KeyID:   entry.Config.KeyID,
+		Prefer:  entry.Config.Prefer,
+		IBurst:  entry.Config.IBurst,
+	}, nil
+}
+
+// GetNTPGlobalConfig reads the global NTP service and authentication settings
+// from /openconfig-system:system/ntp/config.
+func (c *F5os) GetNTPGlobalConfig() (service bool, auth bool, err error) {
+	resp, err := c.GetRequest(uriNTPConfigPatch)
+	if err != nil {
+		return false, false, fmt.Errorf("GET NTP global config failed: %w", err)
+	}
+
+	var envelope ntpGlobalConfigResponse
+	if err := json.Unmarshal(resp, &envelope); err != nil {
+		return false, false, fmt.Errorf("invalid JSON for NTP global config: %w", err)
+	}
+	return envelope.Config.Enabled, envelope.Config.EnableNTPAuth, nil
+}
+
+// UpdateNTPServerPayload builds a PATCH-appropriate payload for an individual
+// NTP server endpoint. Unlike CreateNTPServerPayload (which builds a POST
+// collection-level payload with "server":[...]), this wraps the entry in
+// "openconfig-system:server":[...] which is what PATCH on
+// /ntp/servers/server={addr} expects.
+func (c *F5os) UpdateNTPServerPayload(server string, plan NTPServerModel) ([]byte, error) {
+	cfg := ntpServerConfig{
+		Address: server,
+		Prefer:  plan.Prefer.ValueBool(),
+		Iburst:  plan.IBurst.ValueBool(),
+	}
+	if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() {
+		v := plan.KeyID.ValueInt64()
+		cfg.KeyID = &v
+	}
+	// PATCH on /server={addr} expects "openconfig-system:server" key
+	payload := map[string]interface{}{
+		"openconfig-system:server": []map[string]interface{}{
+			{
+				"address": server,
+				"config":  cfg,
+			},
+		},
+	}
+	return json.Marshal(payload)
 }
 
 func (c *F5os) UpdateNTPServer(server string, payload []byte) error {
@@ -771,7 +844,7 @@ func (c *F5os) UpdateSnmpMib(payload []byte) error {
 	return nil
 }
 
-// SNMP Read method
+// SNMP Read methods
 func (c *F5os) GetSnmpConfig() ([]byte, error) {
 	resp, err := c.GetRequest(uriSnmpBase)
 	if err != nil {
@@ -780,13 +853,23 @@ func (c *F5os) GetSnmpConfig() ([]byte, error) {
 	return resp, nil
 }
 
+func (c *F5os) GetSnmpMib() ([]byte, error) {
+	resp, err := c.GetRequest(uriSnmpMib)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get SNMP MIB: %w", err)
+	}
+	return resp, nil
+}
+
 // Auth/AAA related constants and methods
 const (
-	uriAAA           = "/openconfig-system:system/aaa/authentication"
-	uriAAAConfig     = "/openconfig-system:system/aaa/authentication/config"
-	uriAAAAuthMethod = "/openconfig-system:system/aaa/authentication/config/authentication-method"
-	uriAAARoles      = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles"
-	uriAAARoleConfig = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config"
+	uriAAA               = "/openconfig-system:system/aaa/authentication"
+	uriAAAConfig         = "/openconfig-system:system/aaa/authentication/config"
+	uriAAAAuthMethod     = "/openconfig-system:system/aaa/authentication/config/authentication-method"
+	uriAAARoles          = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles"
+	uriAAARoleConfig     = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config"
+	uriAAARoleRemoteGID  = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config/f5-system-aaa:remote-gid"
+	uriAAAPasswordPolicy = "/openconfig-system:system/aaa/f5-openconfig-aaa-password-policy:password-policy/config"
 )
 
 type authOrderPayload struct {
@@ -797,7 +880,7 @@ type authOrderPayload struct {
 
 type authRoleConfig struct {
 	Rolename string `json:"f5-system-aaa:rolename"`
-	GID      *int64 `json:"f5-system-aaa:gid,omitempty"`
+	GID      *int64 `json:"f5-system-aaa:remote-gid,omitempty"`
 }
 
 type authRolePayload struct {
@@ -900,14 +983,26 @@ func (c *F5os) SetRoleConfig(rolename string, gid *int64) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal role config payload: %w", err)
 	}
-	_, err = c.PutRequest(uri, body)
+	_, err = c.PatchRequest(uri, body)
 	if err != nil {
-		return fmt.Errorf("PUT role config failed: %w", err)
+		return fmt.Errorf("PATCH role config failed: %w", err)
 	}
 	return nil
 }
 
-// GetRoles returns map[rolename]gid
+// ClearRoleRemoteGID deletes the remote-gid leaf for a role, returning it
+// to the device default (unset / "-").
+func (c *F5os) ClearRoleRemoteGID(rolename string) error {
+	uri := fmt.Sprintf(uriAAARoleRemoteGID, rolename)
+	err := c.DeleteRequest(uri)
+	if err != nil {
+		return fmt.Errorf("DELETE role remote-gid failed: %w", err)
+	}
+	return nil
+}
+
+// GetRoles returns map[rolename]remote-gid for all roles on the device.
+// Roles without a remote-gid configured will have a value of 0.
 func (c *F5os) GetRoles() (map[string]int, error) {
 	resp, err := c.GetRequest(uriAAARoles)
 	if err != nil {
@@ -939,9 +1034,15 @@ func (c *F5os) GetRoles() (map[string]int, error) {
 			}
 			if configRaw, ok := roleMap["config"]; ok {
 				if configMap, ok := configRaw.(map[string]any); ok {
-					if gidRaw, ok := configMap["gid"]; ok {
-						if gidFloat, ok := gidRaw.(float64); ok {
-							gid = int(gidFloat)
+					// Read remote-gid, the group ID used for remote
+					// authentication mapping. This is distinct from gid
+					// (the built-in system group ID for the role).
+					// Roles without a remote-gid configured return "-"
+					// (a string), which won't parse as float64, so gid
+					// stays at the zero value.
+					if rgidRaw, ok := configMap["remote-gid"]; ok {
+						if rgidFloat, ok := rgidRaw.(float64); ok {
+							gid = int(rgidFloat)
 						}
 					}
 				}
@@ -952,4 +1053,68 @@ func (c *F5os) GetRoles() (map[string]int, error) {
 		}
 	}
 	return result, nil
+}
+
+// PasswordPolicyConfig represents the password policy settings.
+// Pointer fields allow distinguishing "not set" from zero values.
+type PasswordPolicyConfig struct {
+	MinLength           *int64 `json:"min-length,omitempty"`
+	RequiredNumeric     *int64 `json:"required-numeric,omitempty"`
+	RequiredUppercase   *int64 `json:"required-uppercase,omitempty"`
+	RequiredLowercase   *int64 `json:"required-lowercase,omitempty"`
+	RequiredSpecial     *int64 `json:"required-special,omitempty"`
+	RequiredDifferences *int64 `json:"required-differences,omitempty"`
+	RejectUsername      *bool  `json:"reject-username,omitempty"`
+	ApplyToRoot         *bool  `json:"apply-to-root,omitempty"`
+	Retries             *int64 `json:"retries,omitempty"`
+	MaxLoginFailures    *int64 `json:"max-login-failures,omitempty"`
+	UnlockTime          *int64 `json:"unlock-time,omitempty"`
+	RootLockout         *bool  `json:"root-lockout,omitempty"`
+	RootUnlockTime      *int64 `json:"root-unlock-time,omitempty"`
+	MaxAge              *int64 `json:"max-age,omitempty"`
+	// v1.7+ only fields
+	MaxLetterRepeat   *int64 `json:"max-letter-repeat,omitempty"`
+	MaxSequenceRepeat *int64 `json:"max-sequence-repeat,omitempty"`
+	MaxClassRepeat    *int64 `json:"max-class-repeat,omitempty"`
+}
+
+// passwordPolicyResponse is the API response wrapper for password policy.
+type passwordPolicyResponse struct {
+	Config PasswordPolicyConfig `json:"f5-openconfig-aaa-password-policy:config"`
+}
+
+// passwordPolicyPayload is the API request wrapper for password policy.
+type passwordPolicyPayload struct {
+	Config PasswordPolicyConfig `json:"f5-openconfig-aaa-password-policy:config"`
+}
+
+// GetPasswordPolicy reads the current password policy config from the device.
+func (c *F5os) GetPasswordPolicy() (*PasswordPolicyConfig, error) {
+	resp, err := c.GetRequest(uriAAAPasswordPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("GET password policy failed: %w", err)
+	}
+
+	var parsed passwordPolicyResponse
+	if err := json.Unmarshal(resp, &parsed); err != nil {
+		return nil, fmt.Errorf("invalid JSON for password policy: %w", err)
+	}
+
+	return &parsed.Config, nil
+}
+
+// SetPasswordPolicy updates password policy config on the device using PATCH.
+// Only fields with non-nil values are sent.
+func (c *F5os) SetPasswordPolicy(config *PasswordPolicyConfig) error {
+	payload := passwordPolicyPayload{Config: *config}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal password policy payload: %w", err)
+	}
+
+	_, err = c.PatchRequest(uriAAAPasswordPolicy, body)
+	if err != nil {
+		return fmt.Errorf("PATCH password policy failed: %w", err)
+	}
+	return nil
 }

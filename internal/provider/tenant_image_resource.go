@@ -12,7 +12,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -45,6 +48,7 @@ type TenantImageResourceModel struct {
 	RemotePassword types.String `tfsdk:"remote_password"`
 	RemotePath     types.String `tfsdk:"remote_path"`
 	RemotePort     types.Int64  `tfsdk:"remote_port"`
+	Insecure       types.Bool   `tfsdk:"insecure"`
 	Timeout        types.Int64  `tfsdk:"timeout"`
 	Id             types.String `tfsdk:"id"`
 	Status         types.String `tfsdk:"status"`
@@ -63,12 +67,18 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 			"image_name": schema.StringAttribute{
 				MarkdownDescription: "Name of the tenant image.",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"local_path": schema.StringAttribute{
 				MarkdownDescription: "The path on the F5OS where the the tenant image is to be imported to.",
 				Optional:            true,
 				Validators: []validator.String{
 					stringvalidator.OneOf([]string{"images/tenant", "images", "images/staging", "images/import/iso"}...),
+				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"upload_from_path": schema.StringAttribute{
@@ -80,32 +90,71 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 					stringvalidator.ConflictsWith(path.MatchRoot("remote_port")),
 					stringvalidator.ConflictsWith(path.MatchRoot("remote_user")),
 					stringvalidator.ConflictsWith(path.MatchRoot("remote_password")),
+					stringvalidator.ConflictsWith(path.MatchRoot("protocol")),
+					stringvalidator.ConflictsWith(path.MatchRoot("remote_path")),
+					stringvalidator.ConflictsWith(path.MatchRoot("insecure")),
+				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"protocol": schema.StringAttribute{
-				MarkdownDescription: "Protocol for image transfer.",
+				MarkdownDescription: "Protocol for image transfer. Supported values: `scp`, `sftp`, `https`.",
 				Optional:            true,
+				Validators: []validator.String{
+					stringvalidator.OneOf("scp", "sftp", "https"),
+				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"remote_host": schema.StringAttribute{
 				MarkdownDescription: "The hostname or IP address of the remote server on which the tenant image is stored.\nThe server must make the image accessible via the specified protocol.",
 				Optional:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"remote_user": schema.StringAttribute{
 				MarkdownDescription: "User name for the remote server on which the tenant image is stored.",
 				Optional:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"remote_password": schema.StringAttribute{
 				MarkdownDescription: "Password for the user on the remote server on which the tenant image is stored.",
 				Optional:            true,
 				Sensitive:           true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"remote_path": schema.StringAttribute{
 				MarkdownDescription: "The path to the tenant image on the remote server.",
 				Optional:            true,
+				Validators: []validator.String{
+					stringvalidator.ConflictsWith(path.MatchRoot("upload_from_path")),
+				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"remote_port": schema.Int64Attribute{
 				MarkdownDescription: "The port on the remote host to which you want to connect.\nIf the port is not provided, a default port for the selected protocol is used.",
 				Optional:            true,
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.RequiresReplace(),
+				},
+			},
+			"insecure": schema.BoolAttribute{
+				MarkdownDescription: "When set to `true`, the image transfer skips TLS certificate verification on the remote host.\nUseful when importing images over HTTPS from servers with self-signed certificates.",
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.RequiresReplace(),
+				},
 			},
 			"timeout": schema.Int64Attribute{
 				MarkdownDescription: "The number of seconds to wait for image import to finish.",
@@ -149,14 +198,12 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	resp1Byte, _ := r.client.GetImage(data.ImageName.ValueString())
+	resp1Byte, getErr := r.client.GetImage(data.ImageName.ValueString())
+	if getErr != nil {
+		resp.Diagnostics.AddWarning("Client Warning", fmt.Sprintf("Unable to check if image already exists, will attempt import: %s", getErr))
+	}
 
-	// if err != nil {
-	// 	resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to Import Image, got error: %s", err))
-	// 	return
-	// }
-
-	if resp1Byte == nil || len(resp1Byte.TenantImages) == 0 {
+	if getErr != nil || resp1Byte == nil || len(resp1Byte.TenantImages) == 0 {
 		if data.UploadFromPath.IsNull() {
 			respByte, err := r.importImage(ctx, data)
 			if err != nil {
@@ -212,11 +259,29 @@ func (r *TenantImageResource) importImage(ctx context.Context, data *TenantImage
 	timeout := int(data.Timeout.ValueInt64())
 	tflog.Info(ctx, fmt.Sprintf("timeout data :%+v", timeout))
 	importConfig := &f5ossdk.F5ReqTenantImage{}
-	importConfig.Insecure = ""
+	if data.Insecure.ValueBool() {
+		// The F5OS RESTCONF API models "insecure" as a YANG empty leaf.
+		// Per RFC 7951 the JSON encoding of an empty leaf is [null].
+		// When the field is nil it is omitted by omitempty (insecure disabled).
+		importConfig.Insecure = []interface{}{nil}
+	}
 	importConfig.RemoteHost = data.RemoteHost.ValueString()
 	importConfig.RemoteFile = fmt.Sprintf("%s/%s", data.RemotePath.ValueString(), data.ImageName.ValueString())
 	importConfig.LocalFile = data.LocalPath.ValueString()
-	tflog.Info(ctx, fmt.Sprintf("Create Data:%+v", importConfig))
+	if !data.Protocol.IsNull() && !data.Protocol.IsUnknown() {
+		importConfig.Protocol = data.Protocol.ValueString()
+	}
+	if !data.RemoteUser.IsNull() && !data.RemoteUser.IsUnknown() {
+		importConfig.Username = data.RemoteUser.ValueString()
+	}
+	if !data.RemotePassword.IsNull() && !data.RemotePassword.IsUnknown() {
+		importConfig.Password = data.RemotePassword.ValueString()
+	}
+	if !data.RemotePort.IsNull() && !data.RemotePort.IsUnknown() {
+		importConfig.RemotePort = int(data.RemotePort.ValueInt64())
+	}
+	tflog.Info(ctx, fmt.Sprintf("Create Data: RemoteHost=%s, RemoteFile=%s, LocalFile=%s, Protocol=%s, Username=%s, RemotePort=%d",
+		importConfig.RemoteHost, importConfig.RemoteFile, importConfig.LocalFile, importConfig.Protocol, importConfig.Username, importConfig.RemotePort))
 	return r.client.ImportImage(importConfig, timeout)
 }
 
@@ -227,7 +292,7 @@ func (r *TenantImageResource) uploadImage(ctx context.Context, data *TenantImage
 	imageName := data.ImageName.ValueString()
 	filePath := go_path.Join(imageDir, imageName)
 	tflog.Info(ctx, "Uploading image")
-	r.client.ConfigOptions.APICallTimeout = time.Duration(time.Duration(timeout).Seconds())
+	r.client.ConfigOptions.APICallTimeout = time.Duration(timeout) * time.Second
 	return r.client.UploadImage(filePath)
 }
 
@@ -298,11 +363,14 @@ func (r *TenantImageResource) Delete(ctx context.Context, req resource.DeleteReq
 }
 
 func (r *TenantImageResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	// The import ID is the image name, which maps to both "id" and "image_name"
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("image_name"), req.ID)...)
 }
 
 func (r *TenantImageResource) tenantImageResourceModeltoState(ctx context.Context, respData *f5ossdk.F5RespTenantImagesStatus, data *TenantImageResourceModel) {
 	tflog.Info(ctx, fmt.Sprintf("respData :%+v", respData))
 	data.ImageName = types.StringValue(respData.TenantImages[0].Name)
 	data.Status = types.StringValue(respData.TenantImages[0].Status)
+	data.Id = types.StringValue(respData.TenantImages[0].Name)
 }
