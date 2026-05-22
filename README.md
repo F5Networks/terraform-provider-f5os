@@ -102,6 +102,17 @@ In order to test the provider, you can run
 It's important to note that acceptance tests (`testacc`) will actually spawn real resources, and often cost money to run. Read more about they work on the
 [official page](https://www.terraform.io/plugin/sdkv2/testing/acceptance-tests).
 
+#### Running acceptance tests in CI/CD
+
+The `acceptance-tests` pipeline job runs when all of the following are set:
+
+| Variable | Where to set | Description |
+|---|---|---|
+| `RUN_ACC_TESTS` | Pipeline variable (manual trigger or schedule) | Any value; enables the job |
+| `F5OS_HOST` | GitLab CI/CD Settings > Variables (masked/protected) | F5OS device URL, e.g. `https://10.x.x.x:8888` |
+| `F5OS_USERNAME` | GitLab CI/CD Settings > Variables (masked/protected) | Device username |
+| `F5OS_PASSWORD` | GitLab CI/CD Settings > Variables (masked/protected) | Device password |
+
 ### Schema diff
 
 The `schemadiff` tool crawls two F5OS devices (different versions) via RESTCONF, compares their YANG module lists and API response structures, then writes a Markdown report highlighting breaking changes, new APIs, and new properties.

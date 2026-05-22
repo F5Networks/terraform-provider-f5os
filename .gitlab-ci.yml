@@ -111,6 +111,23 @@ unit-tests:
       - coverage_report.txt
     expire_in: 30 days
 
+acceptance-tests:
+  rules:
+    - if: $RUN_ACC_TESTS && $F5OS_HOST && $F5OS_USERNAME && $F5OS_PASSWORD
+  stage: unittest
+  variables:
+    GOFLAGS: "-mod=vendor"
+    TF_ACC: "1"
+  script:
+    - make testacc
+  artifacts:
+    when: always
+    paths:
+      - cover.out
+    expire_in: 30 days
+  allow_failure: true
+  timeout: 2h
+
 # ── Schema Diff ────────────────────────────────────────────────────────
 # Compares the RESTCONF/YANG schemas of two F5OS devices running different
 # versions and generates a Markdown report highlighting breaking changes,
