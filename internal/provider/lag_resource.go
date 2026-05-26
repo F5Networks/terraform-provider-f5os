@@ -299,7 +299,7 @@ func (r *LagResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 
 	err3 := r.client.RemoveLagInterface(data.Id.ValueString())
 	if err3 != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to delete LAG interface, got error: %s", err2))
+		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to delete LAG interface, got error: %s", err3))
 		return
 	}
 
