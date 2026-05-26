@@ -197,8 +197,12 @@ func TestUnitUserPasswordChangeCreate(t *testing.T) {
 
 	// Mock the password change endpoint
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" {
+		switch r.Method {
+		case "POST":
 			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
 
@@ -227,8 +231,12 @@ func TestUnitUserPasswordChangeRead(t *testing.T) {
 
 	// Mock the password change endpoint (needed for Create)
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" {
+		switch r.Method {
+		case "POST":
 			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
 
@@ -262,8 +270,12 @@ func TestUnitUserPasswordChangeUpdate(t *testing.T) {
 
 	// Mock the password change endpoint
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" {
+		switch r.Method {
+		case "POST":
 			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
 
@@ -298,8 +310,12 @@ func TestUnitUserPasswordChangeUpdateSamePassword(t *testing.T) {
 
 	// Mock the password change endpoint for initial create
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" {
+		switch r.Method {
+		case "POST":
 			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
 
@@ -324,14 +340,18 @@ func TestUnitUserPasswordChangeUpdateSamePassword(t *testing.T) {
 	})
 }
 
-// TestUnitUserPasswordChangeDelete tests that Delete removes from state
+// TestUnitUserPasswordChangeDelete tests that Delete removes resource from state
 func TestUnitUserPasswordChangeDelete(t *testing.T) {
 	testAccPreUnitCheck(t)
 
 	// Mock the password change endpoint
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" {
+		switch r.Method {
+		case "POST":
 			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
 
@@ -347,7 +367,10 @@ func TestUnitUserPasswordChangeDelete(t *testing.T) {
 					resource.TestCheckResourceAttr("f5os_user_password_change.test", "id", "testuser"),
 				),
 			},
-			// Delete is tested by the framework automatically when Config is removed
+			// Step 2: Remove config to trigger Delete
+			{
+				Config: `# Empty config to trigger resource deletion`,
+			},
 		},
 	})
 }
@@ -358,9 +381,13 @@ func TestUnitUserPasswordChangePolicyViolation(t *testing.T) {
 
 	// Mock the password change endpoint to return policy violation error
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" {
+		switch r.Method {
+		case "POST":
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"invalid-value","error-message":"password does not meet minimum length requirements"}]}}`))
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
 
@@ -383,10 +410,15 @@ func TestUnitUserPasswordChangeIncorrectOldPassword(t *testing.T) {
 	testAccPreUnitCheck(t)
 
 	// Mock the password change endpoint to return incorrect password error
+	// Using 400 instead of 401 to avoid triggering SDK retry logic
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"access-denied","error-message":"Incorrect old password"}]}}`))
+		switch r.Method {
+		case "POST":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"invalid-value","error-message":"Old password is incorrect"}]}}`))
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
 
@@ -410,9 +442,13 @@ func TestUnitUserPasswordChangeGenericAPIError(t *testing.T) {
 
 	// Mock the password change endpoint to return generic error
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" {
+		switch r.Method {
+		case "POST":
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"Internal server error"}]}}`))
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
 
