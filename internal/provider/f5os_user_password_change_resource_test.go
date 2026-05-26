@@ -3,6 +3,7 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
 	"testing"
 
@@ -184,4 +185,283 @@ resource "f5os_user_password_change" "test" {
   new_password = %[3]q
 }
 `, userName, oldPassword, newPassword)
+}
+
+// ---------------------------------------------------------------------------
+// Unit Tests
+// ---------------------------------------------------------------------------
+
+// TestUnitUserPasswordChangeCreate tests the Create operation with mock server
+func TestUnitUserPasswordChangeCreate(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	// Mock the password change endpoint
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "POST":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccUserPasswordChangeResourceConfig("testuser", "OldPass123!", "NewPass456!"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_user_password_change.test", "user_name", "testuser"),
+					resource.TestCheckResourceAttr("f5os_user_password_change.test", "old_password", "OldPass123!"),
+					resource.TestCheckResourceAttr("f5os_user_password_change.test", "new_password", "NewPass456!"),
+					resource.TestCheckResourceAttr("f5os_user_password_change.test", "id", "testuser"),
+				),
+			},
+		},
+	})
+}
+
+// TestUnitUserPasswordChangeRead tests that Read preserves state
+func TestUnitUserPasswordChangeRead(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	// Mock the password change endpoint (needed for Create)
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "POST":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccUserPasswordChangeResourceConfig("testuser", "OldPass123!", "NewPass456!"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_user_password_change.test", "id", "testuser"),
+				),
+			},
+			// Refresh should preserve state (Read operation)
+			{
+				RefreshState: true,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_user_password_change.test", "user_name", "testuser"),
+					resource.TestCheckResourceAttr("f5os_user_password_change.test", "id", "testuser"),
+				),
+			},
+		},
+	})
+}
+
+// TestUnitUserPasswordChangeUpdate tests the Update operation
+func TestUnitUserPasswordChangeUpdate(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	// Mock the password change endpoint
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "POST":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccUserPasswordChangeResourceConfig("testuser", "OldPass123!", "NewPass456!"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_user_password_change.test", "new_password", "NewPass456!"),
+				),
+			},
+			// Update to a different new password
+			{
+				Config: testAccUserPasswordChangeResourceConfig("testuser", "NewPass456!", "AnotherPass789!"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_user_password_change.test", "old_password", "NewPass456!"),
+					resource.TestCheckResourceAttr("f5os_user_password_change.test", "new_password", "AnotherPass789!"),
+					resource.TestCheckResourceAttr("f5os_user_password_change.test", "id", "testuser"),
+				),
+			},
+		},
+	})
+}
+
+// TestUnitUserPasswordChangeUpdateSamePassword tests validation in Update
+func TestUnitUserPasswordChangeUpdateSamePassword(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	// Mock the password change endpoint for initial create
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "POST":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccUserPasswordChangeResourceConfig("testuser", "OldPass123!", "NewPass456!"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_user_password_change.test", "id", "testuser"),
+				),
+			},
+			// Try to update with same old and new password - should fail
+			{
+				Config:      testAccUserPasswordChangeResourceConfig("testuser", "SamePass!", "SamePass!"),
+				ExpectError: regexp.MustCompile("Old and new password cannot be the same"),
+			},
+		},
+	})
+}
+
+// TestUnitUserPasswordChangeDelete tests that Delete removes resource from state
+func TestUnitUserPasswordChangeDelete(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	// Mock the password change endpoint
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "POST":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccUserPasswordChangeResourceConfig("testuser", "OldPass123!", "NewPass456!"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_user_password_change.test", "id", "testuser"),
+				),
+			},
+			// Step 2: Remove config to trigger Delete
+			{
+				Config: `# Empty config to trigger resource deletion`,
+			},
+		},
+	})
+}
+
+// TestUnitUserPasswordChangePolicyViolation tests password policy error handling
+func TestUnitUserPasswordChangePolicyViolation(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	// Mock the password change endpoint to return policy violation error
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "POST":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"invalid-value","error-message":"password does not meet minimum length requirements"}]}}`))
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccUserPasswordChangeResourceConfig("testuser", "OldPass123!", "weak"),
+				ExpectError: regexp.MustCompile("(?i)(password does not meet|policy requirements)"),
+			},
+		},
+	})
+}
+
+// TestUnitUserPasswordChangeIncorrectOldPassword tests incorrect old password error
+func TestUnitUserPasswordChangeIncorrectOldPassword(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	// Mock the password change endpoint to return incorrect password error
+	// Using 400 instead of 401 to avoid triggering SDK retry logic
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "POST":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"invalid-value","error-message":"Old password is incorrect"}]}}`))
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccUserPasswordChangeResourceConfig("testuser", "WrongOldPass!", "NewPass456!"),
+				ExpectError: regexp.MustCompile("(?i)(old password is incorrect|incorrect)"),
+			},
+		},
+	})
+}
+
+// TestUnitUserPasswordChangeGenericAPIError tests generic API error handling
+func TestUnitUserPasswordChangeGenericAPIError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	// Mock the password change endpoint to return generic error
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "POST":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"Internal server error"}]}}`))
+		default:
+			t.Errorf("Unexpected HTTP method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccUserPasswordChangeResourceConfig("testuser", "OldPass123!", "NewPass456!"),
+				ExpectError: regexp.MustCompile("(?i)(API request failed|User password change failed)"),
+			},
+		},
+	})
 }
