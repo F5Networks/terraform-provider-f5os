@@ -360,7 +360,7 @@ func TestUnitUserPasswordChangePolicyViolation(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
 			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"invalid-value","error-message":"password does not meet minimum length requirements"}]}}`))
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"invalid-value","error-message":"password does not meet minimum length requirements"}]}}`))
 		}
 	})
 
@@ -386,7 +386,7 @@ func TestUnitUserPasswordChangeIncorrectOldPassword(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"access-denied","error-message":"Incorrect old password"}]}}`))
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"access-denied","error-message":"Incorrect old password"}]}}`))
 		}
 	})
 
@@ -412,7 +412,7 @@ func TestUnitUserPasswordChangeGenericAPIError(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=testuser/f5-system-aaa:config/f5-system-aaa:change-password", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"Internal server error"}]}}`))
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"Internal server error"}]}}`))
 		}
 	})
 
