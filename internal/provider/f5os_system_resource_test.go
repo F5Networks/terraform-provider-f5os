@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"strconv"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -386,30 +384,7 @@ resource "f5os_system" "system_settings" {
 // Acceptance test helpers
 // ---------------------------------------------------------------------------
 
-// newSystemClientFromEnv creates a fresh f5osclient session from environment
-// variables. Port defaults to 8888 to match the provider.
-func newSystemClientFromEnv() (*f5ossdk.F5os, error) {
-	host := os.Getenv("F5OS_HOST")
-	user := os.Getenv("F5OS_USERNAME")
-	if user == "" {
-		user = os.Getenv("F5OS_USER")
-	}
-	pass := os.Getenv("F5OS_PASSWORD")
-	port := 8888
-	if p := os.Getenv("F5OS_PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
-	cfg := &f5ossdk.F5osConfig{
-		Host:             host,
-		User:             user,
-		Password:         pass,
-		Port:             port,
-		DisableSSLVerify: true,
-	}
-	return f5ossdk.NewSession(cfg)
-}
+
 
 // testAccCheckSystemSSHListsOnDevice queries the device cipher service
 // endpoints directly and verifies the sshd ciphers, kex, macs, and hkey
@@ -421,7 +396,7 @@ func testAccCheckSystemSSHListsOnDevice(
 	expectedHkey []string,
 ) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newSystemClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -491,7 +466,7 @@ func compareStringList(cfg map[string]any, key string, expected []string) error 
 // testAccCheckSystemHostnameOnDevice verifies the hostname on the device.
 func testAccCheckSystemHostnameOnDevice(expected string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newSystemClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}

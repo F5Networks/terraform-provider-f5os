@@ -4,15 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"regexp"
-	"strconv"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/stretchr/testify/assert"
-	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
 func TestAccLagInterfaceCreateTC1Resource(t *testing.T) {
@@ -994,37 +991,14 @@ const testAccLagEmptyConfig = `
 // Acceptance test helpers — direct device API verification
 // ---------------------------------------------------------------------------
 
-// newLagClientFromEnv creates a fresh f5osclient session from environment
-// variables. Port defaults to 8888 to match the provider.
-func newLagClientFromEnv() (*f5ossdk.F5os, error) {
-	host := os.Getenv("F5OS_HOST")
-	user := os.Getenv("F5OS_USERNAME")
-	if user == "" {
-		user = os.Getenv("F5OS_USER")
-	}
-	pass := os.Getenv("F5OS_PASSWORD")
-	port := 8888
-	if p := os.Getenv("F5OS_PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
-	cfg := &f5ossdk.F5osConfig{
-		Host:             host,
-		User:             user,
-		Password:         pass,
-		Port:             port,
-		DisableSSLVerify: true,
-	}
-	return f5ossdk.NewSession(cfg)
-}
+
 
 // testAccCheckLagOnDevice queries the device directly and verifies that the
 // LAG interface exists with the expected native_vlan, trunk_vlans, members,
 // mode, and interval.
 func testAccCheckLagOnDevice(lagName string, expectedNativeVlan int, expectedTrunkVlans []int, expectedMembers []string, expectedMode, expectedInterval string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newLagClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -1094,7 +1068,7 @@ func testAccCheckLagOnDevice(lagName string, expectedNativeVlan int, expectedTru
 // testAccCheckLagDestroy verifies that the LAG interface has been removed
 // from the device after the test completes.
 func testAccCheckLagDestroy(s *terraform.State) error {
-	client, err := newLagClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		return nil // Cannot connect — treat as destroyed
 	}
@@ -1118,7 +1092,7 @@ func testAccCheckLagDestroy(s *terraform.State) error {
 // testAccCheckVlansDestroy verifies that VLANs in the 3940-3999 range have
 // been removed from the device.
 func testAccCheckVlansDestroy(s *terraform.State) error {
-	client, err := newLagClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		return nil
 	}

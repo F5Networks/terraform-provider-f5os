@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -633,7 +632,7 @@ func TestAuthResourceMocked_DeleteFallbackWhenNoSnapshot(t *testing.T) {
 func TestAccAuthResourceDeleteRestoresOriginal(t *testing.T) {
 	preExisting := []string{"local", "ldap"}
 
-	client, err := newAuthClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
 	}
@@ -653,7 +652,7 @@ func TestAccAuthResourceDeleteRestoresOriginal(t *testing.T) {
 
 	// Cleanup: restore the true baseline regardless of test outcome.
 	t.Cleanup(func() {
-		cleanupClient, err := newAuthClientFromEnv()
+		cleanupClient, err := newTestClientFromEnv()
 		if err != nil {
 			t.Logf("WARNING: cleanup failed to create client: %v", err)
 			return
@@ -680,7 +679,7 @@ func TestAccAuthResourceDeleteRestoresOriginal(t *testing.T) {
 		CheckDestroy: func(s *terraform.State) error {
 			// After destroy, the device should have the pre-existing auth
 			// order restored, NOT an empty/deleted auth-method array.
-			c, err := newAuthClientFromEnv()
+			c, err := newTestClientFromEnv()
 			if err != nil {
 				return fmt.Errorf("failed to create client for destroy check: %w", err)
 			}
@@ -1022,7 +1021,7 @@ func TestAuthResourceMocked_RoleGIDUpdateAddsNewRole(t *testing.T) {
 func TestAccAuthResourceDeleteRestoresRoleGIDs(t *testing.T) {
 	preExistingGID := int64(9050)
 
-	client, err := newAuthClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
 	}
@@ -1049,7 +1048,7 @@ func TestAccAuthResourceDeleteRestoresRoleGIDs(t *testing.T) {
 
 	// Cleanup: restore the true baseline regardless of test outcome.
 	t.Cleanup(func() {
-		cleanupClient, err := newAuthClientFromEnv()
+		cleanupClient, err := newTestClientFromEnv()
 		if err != nil {
 			t.Logf("WARNING: cleanup failed to create client: %v", err)
 			return
@@ -1076,7 +1075,7 @@ func TestAccAuthResourceDeleteRestoresRoleGIDs(t *testing.T) {
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy: func(s *terraform.State) error {
-			c, err := newAuthClientFromEnv()
+			c, err := newTestClientFromEnv()
 			if err != nil {
 				return fmt.Errorf("failed to create client for destroy check: %w", err)
 			}
@@ -1434,31 +1433,7 @@ func TestAuthResourceIntegration_HTTPMethods(t *testing.T) {
 // Acceptance Tests (require live F5OS device with TF_ACC=1)
 // ---------------------------------------------------------------------------
 
-// newAuthClientFromEnv creates a fresh f5osclient from environment variables.
-// Used by custom check functions to verify device state independently of the
-// resource's Read method.
-func newAuthClientFromEnv() (*f5os.F5os, error) {
-	host := os.Getenv("F5OS_HOST")
-	user := os.Getenv("F5OS_USERNAME")
-	if user == "" {
-		user = os.Getenv("F5OS_USER")
-	}
-	pass := os.Getenv("F5OS_PASSWORD")
-	port := 8888 // Default matches the provider
-	if p := os.Getenv("F5OS_PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
-	cfg := &f5os.F5osConfig{
-		Host:             host,
-		User:             user,
-		Password:         pass,
-		Port:             port,
-		DisableSSLVerify: true,
-	}
-	return f5os.NewSession(cfg)
-}
+
 
 // mapOpenConfigMethodsToFriendly converts OpenConfig auth method identifiers
 // to user-friendly names (same mapping as in the resource's getAuthOrder).
@@ -1484,7 +1459,7 @@ func mapOpenConfigMethodsToFriendly(methods []string) []string {
 // authentication order matches the expected methods (order-sensitive).
 func testAccCheckAuthOrderApplied(expectedMethods []string) tfresource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newAuthClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create f5os client: %w", err)
 		}
@@ -1511,7 +1486,7 @@ func testAccCheckAuthOrderApplied(expectedMethods []string) tfresource.TestCheck
 // terraform destroy. Note: Delete intentionally does NOT remove role GID
 // configurations, so we only check that auth_order was removed.
 func testAccCheckAuthDestroy(s *terraform.State) error {
-	client, err := newAuthClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		// Cannot connect — treat as destroyed
 		return nil
@@ -1630,7 +1605,7 @@ func TestAccAuthResourceDriftDetection(t *testing.T) {
 			{
 				PreConfig: func() {
 					// Mutate the device behind Terraform's back
-					client, err := newAuthClientFromEnv()
+					client, err := newTestClientFromEnv()
 					if err != nil {
 						t.Fatalf("drift injection: failed to create client: %v", err)
 					}
@@ -1661,7 +1636,7 @@ func TestAccAuthResourceDriftDetection(t *testing.T) {
 // GID matches the expected value.
 func testAccCheckRoleGIDApplied(rolename string, expectedGID int) tfresource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newAuthClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create f5os client: %w", err)
 		}
@@ -1695,7 +1670,7 @@ func testAccCheckRoleGIDApplied(rolename string, expectedGID int) tfresource.Tes
 //   - Pre-flight check skips gracefully if the device blocks role writes
 func TestAccAuthResourceWithRoles(t *testing.T) {
 	// Pre-flight: check if we can modify role config on this device
-	client, err := newAuthClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
 	}
@@ -1710,7 +1685,7 @@ func TestAccAuthResourceWithRoles(t *testing.T) {
 		t.Skip("Skipping: device has no 'operator' role to test with")
 	}
 	t.Cleanup(func() {
-		restoreClient, err := newAuthClientFromEnv()
+		restoreClient, err := newTestClientFromEnv()
 		if err != nil {
 			t.Logf("WARNING: failed to create client for operator GID restore: %v", err)
 			return
@@ -2297,17 +2272,13 @@ resource "f5os_auth" "test" {
 // Password Policy Acceptance Tests
 // ---------------------------------------------------------------------------
 
-// newPasswordPolicyClientFromEnv creates a fresh f5osclient from environment variables.
-// Used by password policy tests to verify device state independently.
-func newPasswordPolicyClientFromEnv() (*f5os.F5os, error) {
-	return newAuthClientFromEnv() // Reuse existing helper
-}
+
 
 // testAccCheckPasswordPolicyApplied queries the device directly to verify
 // password policy fields match expected values.
 func testAccCheckPasswordPolicyApplied(expected *f5os.PasswordPolicyConfig) tfresource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newPasswordPolicyClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create f5os client: %w", err)
 		}
@@ -2369,7 +2340,7 @@ func testAccCheckPasswordPolicyApplied(expected *f5os.PasswordPolicyConfig) tfre
 //   - Restores original password policy on destroy
 //   - Uses t.Cleanup to restore baseline even if test fails
 func TestAccAuthResourcePasswordPolicy(t *testing.T) {
-	client, err := newPasswordPolicyClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
 	}
@@ -2386,7 +2357,7 @@ func TestAccAuthResourcePasswordPolicy(t *testing.T) {
 
 	// Cleanup: restore the true baseline regardless of test outcome
 	t.Cleanup(func() {
-		cleanupClient, err := newPasswordPolicyClientFromEnv()
+		cleanupClient, err := newTestClientFromEnv()
 		if err != nil {
 			t.Logf("WARNING: cleanup failed to create client: %v", err)
 			return
@@ -3429,7 +3400,7 @@ resource "f5os_auth" "test" {
 //   - Uses safe password policy values (won't lock users out)
 //   - Restores the original password policy in t.Cleanup
 func TestAccAuthResourcePasswordPolicyAllFields(t *testing.T) {
-	client, err := newPasswordPolicyClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
 	}
@@ -3442,7 +3413,7 @@ func TestAccAuthResourcePasswordPolicyAllFields(t *testing.T) {
 	t.Logf("True device baseline min_length: %v", *trueBaseline.MinLength)
 
 	t.Cleanup(func() {
-		cleanupClient, err := newPasswordPolicyClientFromEnv()
+		cleanupClient, err := newTestClientFromEnv()
 		if err != nil {
 			t.Logf("WARNING: cleanup failed to create client: %v", err)
 			return
@@ -3563,7 +3534,7 @@ resource "f5os_auth" "test" {
 //   - Restores original GIDs in t.Cleanup
 //   - Pre-flight check skips if role writes are denied
 func TestAccAuthResourceWithRolesUpdateAddsRole(t *testing.T) {
-	client, err := newAuthClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
 	}
@@ -3593,7 +3564,7 @@ func TestAccAuthResourceWithRolesUpdateAddsRole(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		cleanupClient, err := newAuthClientFromEnv()
+		cleanupClient, err := newTestClientFromEnv()
 		if err != nil {
 			t.Logf("WARNING: cleanup failed to create client: %v", err)
 			return
@@ -3700,7 +3671,7 @@ resource "f5os_auth" "test" {
 //
 // Safety: uses safe password policy values; restores baseline on cleanup.
 func TestAccAuthResourcePasswordPolicyDriftDetection(t *testing.T) {
-	client, err := newPasswordPolicyClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
 	}
@@ -3711,7 +3682,7 @@ func TestAccAuthResourcePasswordPolicyDriftDetection(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		cleanupClient, err := newPasswordPolicyClientFromEnv()
+		cleanupClient, err := newTestClientFromEnv()
 		if err != nil {
 			t.Logf("WARNING: cleanup failed to create client: %v", err)
 			return
@@ -3741,7 +3712,7 @@ func TestAccAuthResourcePasswordPolicyDriftDetection(t *testing.T) {
 			// Step 2: Inject drift, then re-apply the SAME config
 			{
 				PreConfig: func() {
-					driftClient, err := newPasswordPolicyClientFromEnv()
+					driftClient, err := newTestClientFromEnv()
 					if err != nil {
 						t.Fatalf("drift injection: failed to create client: %v", err)
 					}

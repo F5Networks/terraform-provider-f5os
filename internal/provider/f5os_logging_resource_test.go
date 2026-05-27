@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,7 +19,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
-	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
 // ===========================================================================
@@ -38,7 +36,7 @@ import (
 // removed from config, so stale servers can persist across test runs).
 func testAccLoggingCleanup(t *testing.T) {
 	t.Helper()
-	client, err := newLoggingClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Logf("cleanup: could not create client, skipping: %v", err)
 		return
@@ -88,36 +86,13 @@ func getTestCABundle(t *testing.T) string {
 // Direct-API verification helpers
 // ---------------------------------------------------------------------------
 
-// newLoggingClientFromEnv creates a fresh f5osclient session from env vars.
-// Port defaults to 8888 to match the provider.
-func newLoggingClientFromEnv() (*f5ossdk.F5os, error) {
-	host := os.Getenv("F5OS_HOST")
-	user := os.Getenv("F5OS_USERNAME")
-	if user == "" {
-		user = os.Getenv("F5OS_USER")
-	}
-	pass := os.Getenv("F5OS_PASSWORD")
-	port := 8888
-	if p := os.Getenv("F5OS_PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
-	cfg := &f5ossdk.F5osConfig{
-		Host:             host,
-		User:             user,
-		Password:         pass,
-		Port:             port,
-		DisableSSLVerify: true,
-	}
-	return f5ossdk.NewSession(cfg)
-}
+
 
 // testAccCheckLoggingIncludeHostnameOnDevice queries the device directly
 // and verifies the include-hostname setting.
 func testAccCheckLoggingIncludeHostnameOnDevice(expected bool) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newLoggingClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -149,7 +124,7 @@ func testAccCheckLoggingIncludeHostnameOnDevice(expected bool) resource.TestChec
 // that a remote logging server with the given address is present.
 func testAccCheckLoggingServerOnDevice(address string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newLoggingClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -183,7 +158,7 @@ func testAccCheckLoggingServerOnDevice(address string) resource.TestCheckFunc {
 // and verifies the remote forwarding enabled state.
 func testAccCheckLoggingRemoteForwardingOnDevice(expectedEnabled bool) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newLoggingClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -221,7 +196,7 @@ func testAccCheckLoggingRemoteForwardingOnDevice(expectedEnabled bool) resource.
 // that TLS configuration is present.
 func testAccCheckLoggingTLSOnDevice() resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newLoggingClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -251,7 +226,7 @@ func testAccCheckLoggingTLSOnDevice() resource.TestCheckFunc {
 // cleaned up after destroy. It checks that test-created servers, TLS config,
 // remote forwarding, and include-hostname have been removed.
 func testAccCheckLoggingDestroy(s *terraform.State) error {
-	client, err := newLoggingClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		return nil // cannot connect — nothing to verify
 	}

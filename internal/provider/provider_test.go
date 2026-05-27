@@ -112,15 +112,18 @@ func loadFixtureString(path string) string {
 	return string(loadFixtureBytes(path))
 }
 
-// testAccPreCheckPlatformRSeries creates a throwaway f5osclient session to
-// detect the device's platform type and skips the test if it is not rSeries.
-// Use this in PreCheck for acceptance tests that assume an rSeries target.
-func testAccPreCheckPlatformRSeries(t *testing.T) {
-	t.Helper()
-	testAccPreCheck(t)
-
+// newTestClientFromEnv creates a fresh f5osclient session from the standard
+// F5OS_HOST / F5OS_USERNAME (or F5OS_USER) / F5OS_PASSWORD / F5OS_PORT
+// environment variables. Port defaults to 8888 to match the provider.
+//
+// Use this in acceptance-test check functions that need an independent client
+// to verify device state outside of the Terraform resource lifecycle.
+func newTestClientFromEnv() (*f5ossdk.F5os, error) {
 	host := os.Getenv("F5OS_HOST")
 	user := os.Getenv("F5OS_USERNAME")
+	if user == "" {
+		user = os.Getenv("F5OS_USER")
+	}
 	pass := os.Getenv("F5OS_PASSWORD")
 	port := 8888
 	if p := os.Getenv("F5OS_PORT"); p != "" {
@@ -128,13 +131,24 @@ func testAccPreCheckPlatformRSeries(t *testing.T) {
 			port = v
 		}
 	}
-	client, err := f5ossdk.NewSession(&f5ossdk.F5osConfig{
+	cfg := &f5ossdk.F5osConfig{
 		Host:             host,
 		User:             user,
 		Password:         pass,
 		Port:             port,
 		DisableSSLVerify: true,
-	})
+	}
+	return f5ossdk.NewSession(cfg)
+}
+
+// testAccPreCheckPlatformRSeries creates a throwaway f5osclient session to
+// detect the device's platform type and skips the test if it is not rSeries.
+// Use this in PreCheck for acceptance tests that assume an rSeries target.
+func testAccPreCheckPlatformRSeries(t *testing.T) {
+	t.Helper()
+	testAccPreCheck(t)
+
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Fatalf("testAccPreCheckPlatformRSeries: failed to create session: %s", err)
 	}

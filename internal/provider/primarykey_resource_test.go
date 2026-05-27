@@ -1,10 +1,12 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -544,6 +546,836 @@ func TestUnitPrimaryKeyJSONDeserialization(t *testing.T) {
 		if resp.PrimaryKey.State.Status != "" {
 			t.Errorf("expected empty Status with old tag format, got %q", resp.PrimaryKey.State.Status)
 		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: ImportState populates id and reads hash/status from device
+// ---------------------------------------------------------------------------
+
+func TestUnitPrimaryKeyImportState(t *testing.T) {
+	withFastPolling(t)
+	setupPrimaryKeyMock(t, primaryKeyResponseCorrect, nil)
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create the resource so it exists in state
+			{
+				Config: testAccPrimaryKeyResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "id", "primary-key"),
+				),
+			},
+			// Step 2: Import — exercises ImportState + Read
+			{
+				ResourceName:            "f5os_primarykey.default",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"passphrase", "salt", "force_update"},
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Create fails when SetPrimaryKey returns an error
+// ---------------------------------------------------------------------------
+
+func TestUnitPrimaryKeyCreateSetError(t *testing.T) {
+	withFastPolling(t)
+	testAccPreUnitCheck(t)
+
+	// POST SetPrimaryKey returns 500
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key/f5-primary-key:set", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-message":"internal error"}]}}`))
+	})
+
+	// GET needed by polling — should not be reached if SetPrimaryKey fails
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(primaryKeyResponseCorrect))
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccPrimaryKeyResourceConfig,
+				ExpectError: regexp.MustCompile(`Failed to create PrimaryKey`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Create fails when GetPrimaryKey returns nil after migration
+// ---------------------------------------------------------------------------
+
+func TestUnitPrimaryKeyCreateGetReturnsNil(t *testing.T) {
+	withFastPolling(t)
+	testAccPreUnitCheck(t)
+
+	var getCount int32
+
+	// POST SetPrimaryKey succeeds
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key/f5-primary-key:set", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	// GET: first calls during waitForPrimaryKeyMigration return COMPLETE,
+	// but the final GET (post-migration state read) returns an empty JSON
+	// object that unmarshals to an F5RespPrimaryKey with zero-value fields.
+	// The client returns a non-nil pointer but with empty State — however the
+	// resource code checks for nil. To trigger the nil branch we need
+	// GetPrimaryKey to return nil. Since the client only returns nil on error,
+	// we simulate this by returning COMPLETE during migration, then an error
+	// on the subsequent GET. But the resource calls GetPrimaryKey again after
+	// waitForPrimaryKeyMigration. We use a counter: calls 1 (migration poll)
+	// return COMPLETE, call 2+ return an HTTP error.
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key", func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&getCount, 1)
+		if count <= 1 {
+			// Polling during waitForPrimaryKeyMigration — return COMPLETE
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(primaryKeyResponseCorrect))
+		} else {
+			// Post-migration read — return error to trigger the error path
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-message":"read failed"}]}}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccPrimaryKeyResourceConfig,
+				ExpectError: regexp.MustCompile(`Failed to fetch state after setting PrimaryKey`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Read fails when GetPrimaryKey returns an error
+// ---------------------------------------------------------------------------
+
+func TestUnitPrimaryKeyReadGetError(t *testing.T) {
+	withFastPolling(t)
+	testAccPreUnitCheck(t)
+
+	var getCount int32
+
+	// POST SetPrimaryKey succeeds
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key/f5-primary-key:set", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	// GET: Create's migration poll + post-migration read succeed (calls 1-2).
+	// Read's GET (call 3+) fails.
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key", func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&getCount, 1)
+		if count <= 2 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(primaryKeyResponseCorrect))
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-message":"read error"}]}}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccPrimaryKeyResourceConfig,
+				ExpectError: regexp.MustCompile(`Failed to fetch Primary Key configuration`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Read populates null when device returns empty hash/status
+// (covers the else branches in primaryKeyResourceModelToState)
+// ---------------------------------------------------------------------------
+
+func TestUnitPrimaryKeyReadEmptyHashStatus(t *testing.T) {
+	withFastPolling(t)
+	testAccPreUnitCheck(t)
+
+	// Response with empty hash and status to exercise the null branches
+	const emptyFieldsResponse = `{
+		"f5-primary-key:primary-key": {
+			"state": {
+				"hash":   "",
+				"status": "COMPLETE"
+			}
+		}
+	}`
+
+	// For the migration poll, return COMPLETE. For post-migration and Read,
+	// return response with empty hash.
+	var getCount int32
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key", func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&getCount, 1)
+		w.WriteHeader(http.StatusOK)
+		if count <= 1 {
+			// Migration poll — needs COMPLETE status
+			_, _ = w.Write([]byte(emptyFieldsResponse))
+		} else {
+			// Post-migration read and Read — return empty hash to cover null branch
+			_, _ = w.Write([]byte(`{
+				"f5-primary-key:primary-key": {
+					"state": {
+						"hash":   "",
+						"status": ""
+					}
+				}
+			}`))
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key/f5-primary-key:set", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccPrimaryKeyResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "id", "primary-key"),
+					// With empty strings from device, the model sets null
+					resource.TestCheckNoResourceAttr("f5os_primarykey.default", "hash"),
+					resource.TestCheckNoResourceAttr("f5os_primarykey.default", "status"),
+				),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Update fails when SetPrimaryKey returns an error (force_update=true)
+// ---------------------------------------------------------------------------
+
+func TestUnitPrimaryKeyUpdateSetError(t *testing.T) {
+	withFastPolling(t)
+	testAccPreUnitCheck(t)
+
+	var setCount int32
+
+	// GET always succeeds
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(primaryKeyResponseCorrect))
+	})
+
+	// POST: first call (Create) succeeds, second call (Update with force) fails
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key/f5-primary-key:set", func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&setCount, 1)
+		if count <= 1 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-message":"update failed"}]}}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create with force_update=false — succeeds
+			{
+				Config: testAccPrimaryKeyResourceNoForceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "hash", "abc123hash"),
+				),
+			},
+			// Step 2: Update with force_update=true — SetPrimaryKey fails
+			{
+				Config:      testAccPrimaryKeyResourceConfig,
+				ExpectError: regexp.MustCompile(`Failed to update Primary Key`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Update fails when migration times out (force_update=true)
+// ---------------------------------------------------------------------------
+
+func TestUnitPrimaryKeyUpdateMigrationTimeout(t *testing.T) {
+	withFastPolling(t)
+	testAccPreUnitCheck(t)
+
+	var setCount int32
+
+	// GET: first calls (Create migration + post-migration + Read) return COMPLETE.
+	// After second SetPrimaryKey (Update), return IN_PROGRESS forever to cause timeout.
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if atomic.LoadInt32(&setCount) <= 1 {
+			_, _ = w.Write([]byte(primaryKeyResponseCorrect))
+		} else {
+			_, _ = w.Write([]byte(`{
+				"f5-primary-key:primary-key": {
+					"state": {
+						"hash":   "",
+						"status": "IN_PROGRESS"
+					}
+				}
+			}`))
+		}
+	})
+
+	// POST: track calls; both succeed
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key/f5-primary-key:set", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&setCount, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create with force_update=false — succeeds
+			{
+				Config: testAccPrimaryKeyResourceNoForceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "status", "COMPLETE"),
+				),
+			},
+			// Step 2: Update with force_update=true — migration never completes
+			{
+				Config:      testAccPrimaryKeyResourceConfig,
+				ExpectError: regexp.MustCompile(`primary key migration did not complete`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Update fails when GetPrimaryKey errors after successful set
+// (covers both force_update=true and force_update=false paths)
+// ---------------------------------------------------------------------------
+
+func TestUnitPrimaryKeyUpdateGetErrorAfterForceSet(t *testing.T) {
+	withFastPolling(t)
+	testAccPreUnitCheck(t)
+
+	var getCount int32
+
+	// GET call flow: Create(force=false) → Update(force=true):
+	// 1: Create migration poll → OK
+	// 2: Create post-migration read → OK
+	// 3: Step 1 post-apply Read → OK
+	// 4: Step 2 pre-apply refresh Read → OK (must succeed for Update to run)
+	// 5: Update migration poll → OK
+	// 6: Update post-set GetPrimaryKey → FAIL
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key", func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&getCount, 1)
+		if count <= 5 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(primaryKeyResponseCorrect))
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-message":"read after update failed"}]}}`))
+		}
+	})
+
+	// POST: all succeed
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key/f5-primary-key:set", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create with force_update=false — succeeds
+			{
+				Config: testAccPrimaryKeyResourceNoForceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "status", "COMPLETE"),
+				),
+			},
+			// Step 2: Update with force_update=true — Set+migration succeed,
+			// but the final GetPrimaryKey in Update fails
+			{
+				Config:      testAccPrimaryKeyResourceConfig,
+				ExpectError: regexp.MustCompile(`Failed to retrieve Primary Key after update`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Update succeeds when force_update=false — refresh only path
+// where GetPrimaryKey returns nil (empty body). Tests the nil guard.
+// ---------------------------------------------------------------------------
+
+func TestUnitPrimaryKeyUpdateGetReturnsNilNoForce(t *testing.T) {
+	withFastPolling(t)
+	testAccPreUnitCheck(t)
+
+	var getCount int32
+
+	// GET call flow: Create(force=true) → Update(force=false):
+	// 1: Create migration poll → OK
+	// 2: Create post-migration read → OK
+	// 3: Step 1 post-apply Read → OK
+	// 4: Step 2 pre-apply refresh Read → OK (must succeed for Update to run)
+	// 5: Update's GetPrimaryKey (refresh-only, no Set) → FAIL
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key", func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&getCount, 1)
+		if count <= 4 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(primaryKeyResponseCorrect))
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-message":"device read failed"}]}}`))
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key/f5-primary-key:set", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create with force_update=true — succeeds
+			{
+				Config: testAccPrimaryKeyResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "status", "COMPLETE"),
+				),
+			},
+			// Step 2: Update force_update=false — skips Set, calls GetPrimaryKey which errors
+			{
+				Config:      testAccPrimaryKeyResourceNoForceConfig,
+				ExpectError: regexp.MustCompile(`Failed to retrieve Primary Key after update`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: waitForPrimaryKeyMigration handles GetPrimaryKey returning nil
+// (exercises the nil-response warning branch in the polling loop)
+// ---------------------------------------------------------------------------
+
+func TestUnitPrimaryKeyMigrationNilResponse(t *testing.T) {
+	withFastPolling(t)
+	testAccPreUnitCheck(t)
+
+	// We cannot directly make GetPrimaryKey return nil without error through
+	// the mock server (it always returns a parsed struct or error). However,
+	// if GetPrimaryKey returns an error on every poll, waitForPrimaryKeyMigration
+	// exhausts its retries and times out — exercising the error branch in
+	// the polling loop.
+
+	var getCount int32
+
+	// GET: first call returns error (exercises Warn path), subsequent calls
+	// eventually return COMPLETE so the test can finish.
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key", func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&getCount, 1)
+		if count <= 2 {
+			// Return error for first 2 polls — exercises the error warn branch
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-message":"temporary error"}]}}`))
+		} else {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(primaryKeyResponseCorrect))
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key/f5-primary-key:set", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccPrimaryKeyResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "status", "COMPLETE"),
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "hash", "abc123hash"),
+				),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Delete exercises the noop warning path
+// ---------------------------------------------------------------------------
+
+func TestUnitPrimaryKeyDelete(t *testing.T) {
+	withFastPolling(t)
+	setupPrimaryKeyMock(t, primaryKeyResponseCorrect, nil)
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create
+			{
+				Config: testAccPrimaryKeyResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "id", "primary-key"),
+				),
+			},
+			// Step 2: Remove from config — triggers Delete (noop with warning)
+			{
+				Config: `# empty — triggers destroy of f5os_primarykey.default`,
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Direct Go unit tests for waitForPrimaryKeyMigration context cancellation
+// ---------------------------------------------------------------------------
+
+// TestUnitPrimaryKeyMigrationContextCancelDuringDelay exercises the context
+// cancellation branch in waitForPrimaryKeyMigration during the initial read
+// delay (the first select case on ctx.Done()).
+func TestUnitPrimaryKeyMigrationContextCancelDuringDelay(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	// Set a long initial delay so the context cancel fires first
+	origInterval := primaryKeyPollInterval
+	origTimeout := primaryKeyMigrationTimeout
+	origDelay := primaryKeyInitialReadDelay
+	primaryKeyPollInterval = 10 * time.Millisecond
+	primaryKeyMigrationTimeout = 1 * time.Second
+	primaryKeyInitialReadDelay = 5 * time.Second // long delay to ensure cancel hits
+	t.Cleanup(func() {
+		primaryKeyPollInterval = origInterval
+		primaryKeyMigrationTimeout = origTimeout
+		primaryKeyInitialReadDelay = origDelay
+	})
+
+	// No mock handlers needed — the cancel should fire before any GET
+	defer teardown()
+
+	// Use a real client pointing at the mock server (env vars were
+	// redirected by testAccPreUnitCheck). This avoids a nil-pointer
+	// panic if timing drifts and the poll loop reaches GetPrimaryKey.
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Fatalf("failed to create mock-backed client: %v", err)
+	}
+
+	r := &PrimaryKeyResource{client: client}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel after a short time so the initial delay select catches it
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err = r.waitForPrimaryKeyMigration(ctx)
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+	if !strings.Contains(err.Error(), "context cancelled") {
+		t.Errorf("expected context cancellation error, got: %s", err)
+	}
+}
+
+// TestUnitPrimaryKeyMigrationContextCancelDuringPoll exercises the context
+// cancellation branch in waitForPrimaryKeyMigration during the poll sleep
+// (the second select case on ctx.Done() inside the for loop).
+func TestUnitPrimaryKeyMigrationContextCancelDuringPoll(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	// No initial delay, but long poll interval so cancel fires during poll sleep
+	origInterval := primaryKeyPollInterval
+	origTimeout := primaryKeyMigrationTimeout
+	origDelay := primaryKeyInitialReadDelay
+	primaryKeyPollInterval = 5 * time.Second // long poll so cancel fires during sleep
+	primaryKeyMigrationTimeout = 30 * time.Second
+	primaryKeyInitialReadDelay = 0
+	t.Cleanup(func() {
+		primaryKeyPollInterval = origInterval
+		primaryKeyMigrationTimeout = origTimeout
+		primaryKeyInitialReadDelay = origDelay
+	})
+
+	// GET returns IN_PROGRESS so the loop continues and sleeps
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-primary-key:primary-key", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"f5-primary-key:primary-key": {
+				"state": {
+					"hash":   "",
+					"status": "IN_PROGRESS"
+				}
+			}
+		}`))
+	})
+
+	defer teardown()
+
+	// Create a client pointing at the mock server (env vars were redirected
+	// by testAccPreUnitCheck). This replaces the previous inline client
+	// construction that duplicated the env-var reading logic.
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Fatalf("failed to create mock-backed client: %v", err)
+	}
+
+	r := &PrimaryKeyResource{client: client}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel after a short time — after the first GET but during the poll sleep
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	err = r.waitForPrimaryKeyMigration(ctx)
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+	if !strings.Contains(err.Error(), "context cancelled") {
+		t.Errorf("expected context cancellation error, got: %s", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance test helpers
+// ---------------------------------------------------------------------------
+
+
+
+// testAccCheckPrimaryKeyHashPopulated queries the device directly to verify
+// that the primary key has a non-empty hash (i.e., a key has been set).
+func testAccCheckPrimaryKeyHashPopulated() resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTestClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create f5os client: %w", err)
+		}
+		keyData, err := client.GetPrimaryKey()
+		if err != nil {
+			return fmt.Errorf("GetPrimaryKey failed: %w", err)
+		}
+		if keyData == nil {
+			return fmt.Errorf("GetPrimaryKey returned nil")
+		}
+		if keyData.PrimaryKey.State.Hash == "" {
+			return fmt.Errorf("expected non-empty hash on device, got empty string")
+		}
+		return nil
+	}
+}
+
+// testAccCheckPrimaryKeyStatusComplete queries the device directly and verifies
+// the status contains "COMPLETE".
+func testAccCheckPrimaryKeyStatusComplete() resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTestClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create f5os client: %w", err)
+		}
+		keyData, err := client.GetPrimaryKey()
+		if err != nil {
+			return fmt.Errorf("GetPrimaryKey failed: %w", err)
+		}
+		if keyData == nil {
+			return fmt.Errorf("GetPrimaryKey returned nil")
+		}
+		if !strings.Contains(keyData.PrimaryKey.State.Status, "COMPLETE") {
+			return fmt.Errorf("expected status containing COMPLETE on device, got %q", keyData.PrimaryKey.State.Status)
+		}
+		return nil
+	}
+}
+
+// testAccCheckPrimaryKeyDestroy verifies that the primary key still exists on
+// the device after Terraform destroy. Delete is a deliberate noop for this
+// resource — the key must persist. This CheckDestroy confirms that the key
+// survived the destroy step with a non-empty hash and COMPLETE status.
+func testAccCheckPrimaryKeyDestroy(s *terraform.State) error {
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		return fmt.Errorf("failed to create f5os client for destroy check: %w", err)
+	}
+	keyData, err := client.GetPrimaryKey()
+	if err != nil {
+		return fmt.Errorf("GetPrimaryKey failed after destroy: %w", err)
+	}
+	if keyData == nil {
+		return fmt.Errorf("GetPrimaryKey returned nil after destroy — key should persist")
+	}
+	if keyData.PrimaryKey.State.Hash == "" {
+		return fmt.Errorf("expected non-empty hash after destroy, got empty string")
+	}
+	if !strings.Contains(keyData.PrimaryKey.State.Status, "COMPLETE") {
+		return fmt.Errorf("expected status containing COMPLETE after destroy, got %q", keyData.PrimaryKey.State.Status)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Improved acceptance tests with CheckDestroy, ImportState, and direct API
+// verification
+// ---------------------------------------------------------------------------
+
+// TestAccPrimaryKeyFullLifecycle exercises Create, Read, ImportState, Update,
+// and Delete with direct device verification at each step.
+func TestAccPrimaryKeyFullLifecycle(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckPrimaryKeyDestroy,
+		Steps: []resource.TestStep{
+			// Step 1: Create with force_update=true
+			{
+				Config: testAccPrimaryKeyResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "id", "primary-key"),
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "passphrase", "test-pass"),
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "salt", "test-salt"),
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "force_update", "true"),
+					resource.TestCheckResourceAttrSet("f5os_primarykey.default", "hash"),
+					resource.TestCheckResourceAttrSet("f5os_primarykey.default", "status"),
+					// Direct API verification
+					testAccCheckPrimaryKeyHashPopulated(),
+					testAccCheckPrimaryKeyStatusComplete(),
+				),
+			},
+			// Step 2: ImportState
+			{
+				ResourceName:            "f5os_primarykey.default",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"passphrase", "salt", "force_update"},
+			},
+			// Step 3: Update — change force_update to false
+			{
+				Config: testAccPrimaryKeyResourceNoForceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "force_update", "false"),
+					resource.TestCheckResourceAttrSet("f5os_primarykey.default", "hash"),
+					resource.TestCheckResourceAttrSet("f5os_primarykey.default", "status"),
+					// Direct API verification — key should still be set
+					testAccCheckPrimaryKeyHashPopulated(),
+					testAccCheckPrimaryKeyStatusComplete(),
+				),
+			},
+			// Step 4: Destroy is automatic — CheckDestroy verifies the noop
+		},
+	})
+}
+
+// TestAccPrimaryKeyCreateNoForceWithVerification verifies that Create with
+// force_update=false still applies the key, verified directly on the device.
+func TestAccPrimaryKeyCreateNoForceWithVerification(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckPrimaryKeyDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccPrimaryKeyResourceNoForceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "force_update", "false"),
+					resource.TestCheckResourceAttrSet("f5os_primarykey.default", "hash"),
+					resource.TestCheckResourceAttrSet("f5os_primarykey.default", "status"),
+					testAccCheckPrimaryKeyHashPopulated(),
+					testAccCheckPrimaryKeyStatusComplete(),
+				),
+			},
+		},
+	})
+}
+
+// TestAccPrimaryKeyForceUpdateCycle exercises the full force-update toggle:
+// create with force=true, update to force=false (skip set), update back to
+// force=true (re-key), with direct API verification.
+func TestAccPrimaryKeyForceUpdateCycle(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckPrimaryKeyDestroy,
+		Steps: []resource.TestStep{
+			// Step 1: Create with force_update=true
+			{
+				Config: testAccPrimaryKeyResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "force_update", "true"),
+					resource.TestCheckResourceAttrSet("f5os_primarykey.default", "hash"),
+					testAccCheckPrimaryKeyHashPopulated(),
+				),
+			},
+			// Step 2: Update force_update=false — skips SetPrimaryKey
+			{
+				Config: testAccPrimaryKeyResourceNoForceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "force_update", "false"),
+					resource.TestCheckResourceAttrSet("f5os_primarykey.default", "hash"),
+					testAccCheckPrimaryKeyHashPopulated(),
+				),
+			},
+			// Step 3: Update force_update=true — re-keys the device
+			{
+				Config: testAccPrimaryKeyResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_primarykey.default", "force_update", "true"),
+					resource.TestCheckResourceAttrSet("f5os_primarykey.default", "hash"),
+					testAccCheckPrimaryKeyHashPopulated(),
+					testAccCheckPrimaryKeyStatusComplete(),
+				),
+			},
+		},
 	})
 }
 

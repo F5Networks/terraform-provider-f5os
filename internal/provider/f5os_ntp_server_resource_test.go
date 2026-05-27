@@ -5,15 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"regexp"
-	"strconv"
 	"sync/atomic"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
-	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
 // ---------------------------------------------------------------------------
@@ -55,32 +52,7 @@ resource "f5os_ntp_server" "test" {
 }
 `
 
-// ---------------------------------------------------------------------------
-// Helper: create a fresh F5OS client from env vars (port defaults to 8888)
-// ---------------------------------------------------------------------------
 
-func newNtpClientFromEnv() (*f5ossdk.F5os, error) {
-	host := os.Getenv("F5OS_HOST")
-	user := os.Getenv("F5OS_USERNAME")
-	if user == "" {
-		user = os.Getenv("F5OS_USER")
-	}
-	pass := os.Getenv("F5OS_PASSWORD")
-	port := 8888 // Must default to 8888 to match the provider
-	if p := os.Getenv("F5OS_PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
-	cfg := &f5ossdk.F5osConfig{
-		Host:             host,
-		User:             user,
-		Password:         pass,
-		Port:             port,
-		DisableSSLVerify: true,
-	}
-	return f5ossdk.NewSession(cfg)
-}
 
 // ---------------------------------------------------------------------------
 // Direct API verification: check NTP server exists on device with expected values
@@ -88,7 +60,7 @@ func newNtpClientFromEnv() (*f5ossdk.F5os, error) {
 
 func testAccCheckNTPServerOnDevice(server string, expectKeyID int64, expectPrefer, expectIBurst bool) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newNtpClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create F5OS client: %w", err)
 		}
@@ -122,7 +94,7 @@ func testAccCheckNTPServerOnDevice(server string, expectKeyID int64, expectPrefe
 
 func testAccCheckNTPGlobalConfigOnDevice(expectService, expectAuth bool) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newNtpClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create F5OS client: %w", err)
 		}
@@ -145,7 +117,7 @@ func testAccCheckNTPGlobalConfigOnDevice(expectService, expectAuth bool) resourc
 // ---------------------------------------------------------------------------
 
 func testAccCheckNTPServerDestroy(s *terraform.State) error {
-	client, err := newNtpClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		// Cannot connect — treat as destroyed
 		return nil
