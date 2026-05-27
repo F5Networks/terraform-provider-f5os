@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -697,30 +695,7 @@ func TestUnitDNSDeletePreservesDeviceConfig(t *testing.T) {
 // Acceptance test helpers
 // ---------------------------------------------------------------------------
 
-// newDNSClientFromEnv creates a fresh f5osclient session from env vars.
-// Port defaults to 8888 to match the provider.
-func newDNSClientFromEnv() (*f5ossdk.F5os, error) {
-	host := os.Getenv("F5OS_HOST")
-	user := os.Getenv("F5OS_USERNAME")
-	if user == "" {
-		user = os.Getenv("F5OS_USER")
-	}
-	pass := os.Getenv("F5OS_PASSWORD")
-	port := 8888
-	if p := os.Getenv("F5OS_PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
-	cfg := &f5ossdk.F5osConfig{
-		Host:             host,
-		User:             user,
-		Password:         pass,
-		Port:             port,
-		DisableSSLVerify: true,
-	}
-	return f5ossdk.NewSession(cfg)
-}
+
 
 // testAccCheckDNSServerPresentOnDevice queries the device directly and
 // verifies that the given server address is present in the DNS config.
@@ -728,7 +703,7 @@ func newDNSClientFromEnv() (*f5ossdk.F5os, error) {
 // is additive (PATCH, not PUT).
 func testAccCheckDNSServerPresentOnDevice(server string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newDNSClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -753,7 +728,7 @@ func testAccCheckDNSServerPresentOnDevice(server string) resource.TestCheckFunc 
 // verifies that the given search domain is present in the DNS config.
 func testAccCheckDNSDomainPresentOnDevice(domain string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newDNSClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -774,7 +749,7 @@ func testAccCheckDNSDomainPresentOnDevice(domain string) resource.TestCheckFunc 
 // Delete is a no-op on the device (DNS config is preserved), so we only
 // confirm the device is still reachable and DNS config still exists.
 func testAccCheckDNSDestroy(s *terraform.State) error {
-	client, err := newDNSClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		return nil // cannot connect — nothing to verify
 	}
@@ -1146,7 +1121,7 @@ func TestUnitRemovedEntriesNilInputs(t *testing.T) {
 // be present.
 func testAccCheckDNSDomainAbsentOnDevice(domain string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newDNSClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}

@@ -12,7 +12,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/stretchr/testify/assert"
-	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
 func TestAccTenantDeployResource(t *testing.T) {
@@ -556,7 +555,7 @@ func TestUnitTenantDeployResourceUnitTC3(t *testing.T) {
 // the tenant type field matches the expected value.
 func testAccCheckTenantTypeOnDevice(tenantName, expectedType string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newTenantClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -575,36 +574,14 @@ func testAccCheckTenantTypeOnDevice(tenantName, expectedType string) resource.Te
 	}
 }
 
-// newTenantClientFromEnv creates a fresh f5osclient session from env vars.
-func newTenantClientFromEnv() (*f5ossdk.F5os, error) {
-	host := os.Getenv("F5OS_HOST")
-	user := os.Getenv("F5OS_USERNAME")
-	if user == "" {
-		user = os.Getenv("F5OS_USER")
-	}
-	pass := os.Getenv("F5OS_PASSWORD")
-	port := 8888
-	if p := os.Getenv("F5OS_PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
-	cfg := &f5ossdk.F5osConfig{
-		Host:             host,
-		User:             user,
-		Password:         pass,
-		Port:             port,
-		DisableSSLVerify: true,
-	}
-	return f5ossdk.NewSession(cfg)
-}
+
 
 // testAccCheckTenantDestroy verifies the test tenant no longer exists.
 func testAccCheckTenantDestroy(s *terraform.State) error {
 	if os.Getenv("F5OS_HOST") == "" {
 		return nil
 	}
-	client, err := newTenantClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		return nil // treat connection failure as destroyed
 	}
@@ -680,7 +657,7 @@ func TestAccTenantDeployResourceTypeField(t *testing.T) {
 // the tenant config vlans match the expected values.
 func testAccCheckTenantVlansOnDevice(tenantName string, expectedVlans []int) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newTenantClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -709,7 +686,7 @@ func testAccCheckTenantVlansOnDevice(tenantName string, expectedVlans []int) res
 // and empty array cases since len(nil) == 0 and len([]int{}) == 0.
 func testAccCheckTenantNoVlansOnDevice(tenantName string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newTenantClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -815,7 +792,7 @@ func TestAccTenantNoVlansInState(t *testing.T) {
 // verifies Config.DeploymentFile is empty for a standard BIG-IP tenant.
 func testAccCheckTenantNoDeploymentFileOnDevice(tenantName string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newTenantClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -2380,7 +2357,7 @@ func TestUnitTenantGetImageError(t *testing.T) {
 // verifies the tenant mac_block_size matches the expected value.
 func testAccCheckTenantMacBlockSizeOnDevice(tenantName, expectedSize string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newTenantClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -2417,7 +2394,7 @@ func testAccCheckTenantMacBlockSizeOnDevice(tenantName, expectedSize string) res
 // the tenant memory matches the expected value in MB.
 func testAccCheckTenantMemoryOnDevice(tenantName string, expectedMemory int) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newTenantClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}

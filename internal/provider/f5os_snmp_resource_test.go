@@ -34,29 +34,11 @@ var (
 )
 
 // newSnmpClientFromEnv returns a cached f5osclient session, creating it on
-// first call. Port defaults to 8888 to match the provider (provider.go:104).
+// first call via newTestClientFromEnv. NewSession is expensive (~6s for
+// setPlatformType), so reusing one session avoids creating dozens per test run.
 func newSnmpClientFromEnv() (*f5ossdk.F5os, error) {
 	snmpTestClientOnce.Do(func() {
-		host := os.Getenv("F5OS_HOST")
-		user := os.Getenv("F5OS_USERNAME")
-		if user == "" {
-			user = os.Getenv("F5OS_USER")
-		}
-		pass := os.Getenv("F5OS_PASSWORD")
-		port := 8888
-		if p := os.Getenv("F5OS_PORT"); p != "" {
-			if v, err := strconv.Atoi(p); err == nil {
-				port = v
-			}
-		}
-		cfg := &f5ossdk.F5osConfig{
-			Host:             host,
-			User:             user,
-			Password:         pass,
-			Port:             port,
-			DisableSSLVerify: true,
-		}
-		snmpTestClient, snmpTestClientErr = f5ossdk.NewSession(cfg)
+		snmpTestClient, snmpTestClientErr = newTestClientFromEnv()
 	})
 	return snmpTestClient, snmpTestClientErr
 }

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -48,7 +47,7 @@ func testAccEnsureDNSServer(t *testing.T) {
 		return // Only run during acceptance tests
 	}
 
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Logf("Warning: cannot create client to check DNS: %v", err)
 		return
@@ -86,7 +85,7 @@ func testAccEnsureTestImage(t *testing.T) {
 		return // Only run during acceptance tests
 	}
 
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Fatalf("Cannot create client to check test image: %v", err)
 	}
@@ -529,36 +528,13 @@ func TestUnitTenantImageTimeoutChangeNoReplace(t *testing.T) {
 // Acceptance test helpers
 // ---------------------------------------------------------------------------
 
-// newTenantImageClientFromEnv creates a fresh f5osclient session from env vars.
-// Port defaults to 8888 to match the provider.
-func newTenantImageClientFromEnv() (*f5ossdk.F5os, error) {
-	host := os.Getenv("F5OS_HOST")
-	user := os.Getenv("F5OS_USERNAME")
-	if user == "" {
-		user = os.Getenv("F5OS_USER")
-	}
-	pass := os.Getenv("F5OS_PASSWORD")
-	port := 8888
-	if p := os.Getenv("F5OS_PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
-	cfg := &f5ossdk.F5osConfig{
-		Host:             host,
-		User:             user,
-		Password:         pass,
-		Port:             port,
-		DisableSSLVerify: true,
-	}
-	return f5ossdk.NewSession(cfg)
-}
+
 
 // testAccCheckTenantImageExistsOnDevice queries the device directly and verifies
 // the named image is present (any status).
 func testAccCheckTenantImageExistsOnDevice(imageName string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newTenantImageClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -578,7 +554,7 @@ func testAccCheckTenantImageExistsOnDevice(imageName string) resource.TestCheckF
 // the F5OS API refuses to delete in-use images and the test framework
 // always runs a final destroy.
 func testAccCheckTenantImageDestroy(s *terraform.State) error {
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		return nil // cannot connect — treat as destroyed
 	}
@@ -1771,7 +1747,7 @@ func TestUnitTenantImageInsecurePayloadSerialization(t *testing.T) {
 // different images.
 func testAccGetExistingImageName(t *testing.T) string {
 	t.Helper()
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create client to discover images: %v", err)
 	}
@@ -1796,7 +1772,7 @@ func testAccGetExistingImageName(t *testing.T) string {
 // verifies that the named image has the expected status.
 func testAccCheckTenantImageStatusOnDevice(imageName, expectedStatus string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newTenantImageClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -1928,7 +1904,7 @@ func TestAccTenantImageStatusFromDevice(t *testing.T) {
 	imageName := testAccGetExistingImageName(t)
 
 	// Pre-query the device to get the expected status.
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create client: %v", err)
 	}
@@ -2154,7 +2130,7 @@ func TestAccTenantImageCreateExistingImageSkipsImport(t *testing.T) {
 	imageName := testAccGetExistingImageName(t)
 
 	// Pre-query the device to get the expected status for verification.
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create client: %v", err)
 	}
@@ -2341,7 +2317,7 @@ func TestAccTenantImageImportWaitSuccess(t *testing.T) {
 	imageName := testAccGetExistingImageName(t)
 
 	// Pre-query the device to get the expected status for verification.
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create client: %v", err)
 	}
@@ -2471,7 +2447,7 @@ func TestAccTenantImageInsecureDirectAPIImport(t *testing.T) {
 	}
 	testAccPreCheck(t)
 
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Fatalf("Cannot create client: %v", err)
 	}
@@ -2552,7 +2528,7 @@ func TestAccTenantImageTransferStatusShape(t *testing.T) {
 	}
 	testAccPreCheckWithSetup(t)
 
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Fatalf("Cannot create client: %v", err)
 	}

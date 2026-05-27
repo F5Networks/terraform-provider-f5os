@@ -6,17 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
-	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
 func TestAccUserResource(t *testing.T) {
@@ -324,37 +321,14 @@ func TestAccUserResourceSecondaryRoleOnly(t *testing.T) {
 // Acceptance test helpers for direct device verification
 // ---------------------------------------------------------------------------
 
-// newUserClientFromEnv creates a fresh f5osclient session from environment
-// variables. Port defaults to 8888 to match the provider.
-func newUserClientFromEnv() (*f5ossdk.F5os, error) {
-	host := os.Getenv("F5OS_HOST")
-	user := os.Getenv("F5OS_USERNAME")
-	if user == "" {
-		user = os.Getenv("F5OS_USER")
-	}
-	pass := os.Getenv("F5OS_PASSWORD")
-	port := 8888
-	if p := os.Getenv("F5OS_PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
-	cfg := &f5ossdk.F5osConfig{
-		Host:             host,
-		User:             user,
-		Password:         pass,
-		Port:             port,
-		DisableSSLVerify: true,
-	}
-	return f5ossdk.NewSession(cfg)
-}
+
 
 // testAccCheckUserRolesOnDevice queries the device's roles endpoint directly
 // and verifies that the given user has exactly the expected roles — no more,
 // no less. This bypasses the resource's Read method.
 func testAccCheckUserRolesOnDevice(username string, expectedRoles []string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newUserClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -413,7 +387,7 @@ func testAccCheckUserRolesOnDevice(username string, expectedRoles []string) reso
 // testAccCheckUserDestroy verifies all f5os_user resources in the state have
 // been deleted from the device.
 func testAccCheckUserDestroy(s *terraform.State) error {
-	client, err := newUserClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		return nil // cannot connect — treat as destroyed
 	}
@@ -544,7 +518,7 @@ func TestAccUserResourceWithAuthorizedKeys(t *testing.T) {
 // string inside the config object, not as an array.
 func testAccCheckUserAuthorizedKeyOnDevice(username, expectedKey string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newUserClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("cannot create client: %w", err)
 		}

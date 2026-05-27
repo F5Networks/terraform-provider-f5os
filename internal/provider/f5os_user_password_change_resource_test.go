@@ -67,7 +67,7 @@ func TestAccUserPasswordChangeResource_StandardUser(t *testing.T) {
 // setup errors.
 func testAccCreateEphemeralUser(t *testing.T, username, password string) {
 	t.Helper()
-	client, err := newUserClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot connect to device: %v", err)
 		return
