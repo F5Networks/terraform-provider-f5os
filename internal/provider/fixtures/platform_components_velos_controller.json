@@ -4,7 +4,7 @@
       "name": "chassis",
       "config": { "name": "chassis" },
       "state": {
-        "description": "Velos System",
+        "description": "Velos System Chassis",
         "serial-no": "mock-chassis-serial",
         "empty": false
       }
@@ -13,7 +13,7 @@
       "name": "blade-1",
       "config": { "name": "blade-1" },
       "state": {
-        "description": "blade-1",
+        "description": "Blade 1",
         "empty": false
       }
     }
