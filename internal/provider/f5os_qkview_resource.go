@@ -299,6 +299,35 @@ func (r *QkviewResource) validateQkviewParams(data *QkviewResourceModel) error {
 	return nil
 }
 
+// normalizeQkviewFilename strips any prefix (e.g. "slot:" or "controller-1:")
+// and known suffixes (.tar, .timedout, .canceled and their combinations) from a
+// qkview filename, returning the bare base name suitable for comparison.
+func normalizeQkviewFilename(name string) string {
+	// Remove any prefix (slot:, controller-1:, etc.)
+	if strings.Contains(name, ":") {
+		parts := strings.Split(name, ":")
+		if len(parts) > 1 {
+			name = parts[len(parts)-1] // Take the last part after ":"
+		}
+	}
+
+	// Remove compound suffixes in the correct order using a switch statement
+	switch {
+	case strings.HasSuffix(name, ".tar.timedout"):
+		name = strings.TrimSuffix(name, ".tar.timedout")
+	case strings.HasSuffix(name, ".tar.canceled"):
+		name = strings.TrimSuffix(name, ".tar.canceled")
+	case strings.HasSuffix(name, ".timedout"):
+		name = strings.TrimSuffix(name, ".timedout")
+	case strings.HasSuffix(name, ".canceled"):
+		name = strings.TrimSuffix(name, ".canceled")
+	case strings.HasSuffix(name, ".tar"):
+		name = strings.TrimSuffix(name, ".tar")
+	}
+
+	return name
+}
+
 // qkviewExists checks if a qkview file exists on the F5OS device
 func (r *QkviewResource) qkviewExists(ctx context.Context, filename string) (bool, string, error) {
 	uri := "/openconfig-system:system/f5-system-diagnostics-qkview:diagnostics/qkview/list"
@@ -322,40 +351,12 @@ func (r *QkviewResource) qkviewExists(ctx context.Context, filename string) (boo
 		return false, "", nil
 	}
 
-	// Check if our filename exists (with or without .tar extension)
-	targetBase := filename
-
-	// Normalize target filename - remove .tar if present to get base name
-	targetBase = strings.TrimSuffix(targetBase, ".tar")
+	targetBase := normalizeQkviewFilename(filename)
 
 	tflog.Debug(ctx, fmt.Sprintf("Looking for qkview with base name: %s", targetBase))
 
 	for _, item := range qkviewList.Qkviews {
-		// Handle filenames that may have path prefixes (like "slot:filename" or "controller-1:filename")
-		existingFilename := item.Filename
-		existingBase := existingFilename
-
-		// Remove any prefix (slot:, controller-1:, etc.)
-		if strings.Contains(existingBase, ":") {
-			parts := strings.Split(existingBase, ":")
-			if len(parts) > 1 {
-				existingBase = parts[len(parts)-1] // Take the last part after ":"
-			}
-		}
-
-		// Remove compound suffixes in the correct order using a switch statement
-		switch {
-		case strings.HasSuffix(existingBase, ".tar.timedout"):
-			existingBase = strings.TrimSuffix(existingBase, ".tar.timedout")
-		case strings.HasSuffix(existingBase, ".tar.canceled"):
-			existingBase = strings.TrimSuffix(existingBase, ".tar.canceled")
-		case strings.HasSuffix(existingBase, ".timedout"):
-			existingBase = strings.TrimSuffix(existingBase, ".timedout")
-		case strings.HasSuffix(existingBase, ".canceled"):
-			existingBase = strings.TrimSuffix(existingBase, ".canceled")
-		case strings.HasSuffix(existingBase, ".tar"):
-			existingBase = strings.TrimSuffix(existingBase, ".tar")
-		}
+		existingBase := normalizeQkviewFilename(item.Filename)
 
 		tflog.Debug(ctx, fmt.Sprintf("Comparing target '%s' with existing '%s' (original: %s)", targetBase, existingBase, item.Filename))
 
@@ -402,9 +403,14 @@ func (r *QkviewResource) waitForCompletion(ctx context.Context, filename string)
 	statuses := []string{"collating", "collecting"}
 	messages := []string{"Collecting Data", "Collating data"}
 
-	// Poll for up to 30 minutes (180 attempts * 10 seconds)
+	// Poll for up to 30 minutes (180 attempts * 10 seconds default).
+	// Use the client's PollInterval when set (e.g. 1ms in unit tests)
+	// to avoid slow test suites.
 	maxAttempts := 180
-	pollInterval := 10 * time.Second
+	pollInterval := r.client.PollInterval
+	if pollInterval <= 0 {
+		pollInterval = 10 * time.Second
+	}
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		response, err := r.client.PostRequest(uri, nil)
@@ -462,7 +468,9 @@ func (r *QkviewResource) waitForCompletion(ctx context.Context, filename string)
 				tflog.Warn(ctx, fmt.Sprintf("Failed to check if qkview exists: %v", err))
 				// For timeout scenarios, wait a bit longer for file system to catch up
 				if status.Status == "time-out" || strings.Contains(strings.ToLower(status.Message), "timed out") {
-					time.Sleep(5 * time.Second) // Wait 5 seconds for file to appear
+					// In production this defaults to 10s; in unit tests the
+					// client's PollInterval is set to 1ms so tests stay fast.
+					time.Sleep(pollInterval)
 					exists, generatedFile, err = r.qkviewExists(ctx, filename)
 					if err == nil && exists {
 						tflog.Info(ctx, fmt.Sprintf("Timeout qkview file found after delay: %s", generatedFile))
