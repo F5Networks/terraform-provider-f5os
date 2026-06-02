@@ -15,9 +15,9 @@
             "gateway": "10.144.140.253"
           },
           "ipv6": {
-            "address": "2001:db8:3333:4444:5555:6666:7777:8888",
-            "prefix-length": 64,
-            "gateway": "2001:db8:3333:4444::"
+            "address": "",
+            "prefix-length": 0,
+            "gateway": ""
           }
         }
       },
