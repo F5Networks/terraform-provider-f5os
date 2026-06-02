@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
-	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
 // ---------------------------------------------------------------------------
@@ -2031,32 +2029,6 @@ func TestUnitQkviewWaitForCompletionCollectInStatus(t *testing.T) {
 // Acceptance Test Helpers (direct device verification)
 // ---------------------------------------------------------------------------
 
-// newQkviewClientFromEnv creates a fresh f5osclient session from environment
-// variables for direct API verification in acceptance tests. Port defaults to
-// 8888 (RESTCONF API).
-func newQkviewClientFromEnv() (*f5ossdk.F5os, error) {
-	host := os.Getenv("F5OS_HOST")
-	user := os.Getenv("F5OS_USERNAME")
-	if user == "" {
-		user = os.Getenv("F5OS_USER")
-	}
-	pass := os.Getenv("F5OS_PASSWORD")
-	port := 8888
-	if p := os.Getenv("F5OS_PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
-	cfg := &f5ossdk.F5osConfig{
-		Host:             host,
-		User:             user,
-		Password:         pass,
-		Port:             port,
-		DisableSSLVerify: true,
-	}
-	return f5ossdk.NewSession(cfg)
-}
-
 // testAccCheckQkviewExists is a TestCheckFunc that queries the device
 // directly to verify a qkview file exists on it.
 func testAccCheckQkviewExists(resourceName string) resource.TestCheckFunc {
@@ -2070,7 +2042,7 @@ func testAccCheckQkviewExists(resourceName string) resource.TestCheckFunc {
 			return fmt.Errorf("filename attribute is empty for %s", resourceName)
 		}
 
-		client, err := newQkviewClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create f5os client: %w", err)
 		}
@@ -2105,7 +2077,7 @@ func testAccCheckQkviewExists(resourceName string) resource.TestCheckFunc {
 // testAccCheckQkviewDestroy is a CheckDestroy function that verifies the
 // qkview file was deleted from the device after Terraform destroy.
 func testAccCheckQkviewDestroy(s *terraform.State) error {
-	client, err := newQkviewClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		// Cannot connect — nothing to verify.
 		return nil
