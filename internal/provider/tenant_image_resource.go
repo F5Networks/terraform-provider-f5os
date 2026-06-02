@@ -27,6 +27,7 @@ import (
 // Ensure provider defined types fully satisfy framework interfaces.
 var _ resource.Resource = &TenantImageResource{}
 var _ resource.ResourceWithImportState = &TenantImageResource{}
+var _ resource.ResourceWithValidateConfig = &TenantImageResource{}
 
 func NewTenantImageResource() resource.Resource {
 	return &TenantImageResource{}
@@ -91,7 +92,6 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 					stringvalidator.ConflictsWith(path.MatchRoot("remote_user")),
 					stringvalidator.ConflictsWith(path.MatchRoot("remote_password")),
 					stringvalidator.ConflictsWith(path.MatchRoot("protocol")),
-					stringvalidator.ConflictsWith(path.MatchRoot("remote_path")),
 					stringvalidator.ConflictsWith(path.MatchRoot("insecure")),
 				},
 				PlanModifiers: []planmodifier.String{
@@ -101,9 +101,6 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 			"protocol": schema.StringAttribute{
 				MarkdownDescription: "Protocol for image transfer. Supported values: `scp`, `sftp`, `https`.",
 				Optional:            true,
-				Validators: []validator.String{
-					stringvalidator.OneOf("scp", "sftp", "https"),
-				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -133,9 +130,6 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 			"remote_path": schema.StringAttribute{
 				MarkdownDescription: "The path to the tenant image on the remote server.",
 				Optional:            true,
-				Validators: []validator.String{
-					stringvalidator.ConflictsWith(path.MatchRoot("upload_from_path")),
-				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -179,6 +173,36 @@ func (r *TenantImageResource) Schema(ctx context.Context, req resource.SchemaReq
 
 func (r *TenantImageResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	r.client, resp.Diagnostics = toF5osProvider(req.ProviderData)
+}
+
+func (r *TenantImageResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var data TenantImageResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Validate protocol is one of the supported values.
+	if !data.Protocol.IsNull() && !data.Protocol.IsUnknown() {
+		proto := data.Protocol.ValueString()
+		if proto != "scp" && proto != "sftp" && proto != "https" {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("protocol"),
+				"Invalid Protocol",
+				fmt.Sprintf("Protocol must be one of: scp, sftp, https. Got: %q", proto),
+			)
+		}
+	}
+
+	// Validate that remote_path and upload_from_path are not both set.
+	if !data.RemotePath.IsNull() && !data.RemotePath.IsUnknown() &&
+		!data.UploadFromPath.IsNull() && !data.UploadFromPath.IsUnknown() {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("remote_path"),
+			"Conflicting Attributes",
+			"Cannot specify both remote_path and upload_from_path. Use remote_path for remote imports or upload_from_path for local uploads.",
+		)
+	}
 }
 
 func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -248,7 +272,9 @@ func (r *TenantImageResource) Create(ctx context.Context, req resource.CreateReq
 	if len(respByte.TenantImages) > 0 {
 		r.tenantImageResourceModeltoState(ctx, respByte, data)
 	} else {
-		data.Id = types.StringValue("")
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("Image %q was imported successfully but is not present in the image list", data.ImageName.ValueString()))
+		return
 	}
 	// Save data into Terraform state
 	data.Id = types.StringValue(data.ImageName.ValueString())
