@@ -69,6 +69,17 @@ func (d *ImageInfoDataSource) Configure(ctx context.Context, req datasource.Conf
 	d.client, resp.Diagnostics = toF5osProvider(req.ProviderData)
 }
 
+// dsPollInterval returns the client's PollInterval if set, otherwise
+// returns the provided default. This mirrors the unexported
+// (*F5os).pollInterval helper so that unit tests can set
+// F5OS_POLL_INTERVAL to speed up the polling loop.
+func (d *ImageInfoDataSource) dsPollInterval(defaultInterval time.Duration) time.Duration {
+	if d.client != nil && d.client.PollInterval > 0 {
+		return d.client.PollInterval
+	}
+	return defaultInterval
+}
+
 func (d *ImageInfoDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	var data ImageInfoDataSourceModel
 
@@ -79,7 +90,16 @@ func (d *ImageInfoDataSource) Read(ctx context.Context, req datasource.ReadReque
 		return
 	}
 	var availableFlag = true
-	timeBefore := time.Now().Add(6 * time.Minute)
+	pollSleep := d.dsPollInterval(2 * time.Minute)
+	// Overall timeout is 3× the poll sleep: 6 min in production (3×2 min),
+	// or a few milliseconds in unit tests when F5OS_POLL_INTERVAL is set.
+	// Use a minimum of 1 second to avoid races with HTTP round-trip time
+	// in unit tests.
+	overallTimeout := 3 * pollSleep
+	if overallTimeout < 1*time.Second {
+		overallTimeout = 1 * time.Second
+	}
+	timeBefore := time.Now().Add(overallTimeout)
 	for time.Now().Before(timeBefore) {
 		availableFlag = false
 		imageObj, err := d.client.GetImage(data.ImageName.ValueString())
@@ -94,10 +114,6 @@ func (d *ImageInfoDataSource) Read(ctx context.Context, req datasource.ReadReque
 					availableFlag = false
 				}
 				if val.Status == "replicated" || val.Status == "processed" || val.Status == "verified" {
-					diff := time.Until(timeBefore)
-					if diff <= 2*time.Minute {
-						time.Sleep(2 * time.Minute)
-					}
 					availableFlag = true
 					data.ImageName = types.StringValue(val.Name)
 					data.ImageStatus = types.StringValue(val.Status)
@@ -108,7 +124,7 @@ func (d *ImageInfoDataSource) Read(ctx context.Context, req datasource.ReadReque
 		if availableFlag {
 			break
 		}
-		time.Sleep(2 * time.Minute)
+		time.Sleep(pollSleep)
 	}
 	if !availableFlag {
 		resp.Diagnostics.AddError("Unable to Get Image Details", fmt.Sprintf("Get Image: %s failed with error:%s", data.ImageName.ValueString(), "not-present"))
