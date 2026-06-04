@@ -10,6 +10,7 @@ stages:
   - build
   - Mend
   - unittest
+  - acctest
   - schema-diff
   - release
   - publish
@@ -36,6 +37,10 @@ cache:
 makelint:
   needs: []
   stage: lint
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: on_success
   script:
     - go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.5
     - golangci-lint --version
@@ -47,6 +52,8 @@ makelint:
           - lint
 go:build:
   rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: $CI_MERGE_REQUEST_IID
       changes:
         - "**/*.go"
@@ -55,7 +62,6 @@ go:build:
         - .gitlab-ci.yml
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
-    - if: $CI_PIPELINE_SOURCE == "schedule"
   needs: []
   stage: build
   script:
@@ -66,6 +72,10 @@ go:build:
 run-Mend:
   stage: Mend
   image: artifactory.f5net.com/f5-cedi-docker/sst/tc-mend
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: on_success
   script:
     - java -jar /opt/mend/wss-unified-agent.jar -noConfig true -wss.url https://f5.whitesourcesoftware.com/agent -apiKey ${WS_APIKEY_SANDBOX} -product "Eco - Terraform-Ansible" -project ${CI_PROJECT_PATH} -d .
   allow_failure: true
@@ -82,6 +92,8 @@ run-Mend:
 
 unit-tests:
   rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: $CI_MERGE_REQUEST_IID
       changes:
         - "**/*.go"
@@ -90,7 +102,6 @@ unit-tests:
         - .gitlab-ci.yml
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
-    - if: $CI_PIPELINE_SOURCE == "schedule"
   stage: unittest
   script:
     - make test
@@ -111,22 +122,389 @@ unit-tests:
       - coverage_report.txt
     expire_in: 30 days
 
-acceptance-tests:
+# ── Acceptance tests ───────────────────────────────────────────────────
+# Acceptance tests hit a REAL, SHARED F5OS device (the DUT). They are slow,
+# so they are split into one job per resource group and run STRICTLY
+# SEQUENTIALLY — never in parallel — to avoid two jobs mutating the same
+# device at once and colliding.
+#
+# Two mechanisms guarantee serial execution:
+#   1. resource_group: f5os_acc_dut — a GitLab mutex. Only one job in this
+#      group runs at a time, even across overlapping/concurrent pipelines.
+#   2. needs: chain — each job needs the previous one, giving a deterministic
+#      order within a single pipeline. Jobs are allow_failure:true, and a
+#      failed-but-allowed job still counts as "completed" for needs, so a
+#      flaky group does NOT block the groups after it.
+#
+# Triggering: scheduled pipelines only, and only when the DUT credentials
+# (F5OS_HOST / F5OS_USERNAME / F5OS_PASSWORD) are present. Set these and a
+# cron schedule under Settings > CI/CD > Pipeline schedules.
+#
+# To run a single group ad-hoc, trigger a pipeline with RUN_ACC_TESTS=true
+# (and the F5OS_* creds) — the same rule allows manual scheduled-style runs.
+.acc_test:
+  stage: acctest
+  resource_group: f5os_acc_dut
   rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $F5OS_HOST && $F5OS_USERNAME && $F5OS_PASSWORD
     - if: $RUN_ACC_TESTS && $F5OS_HOST && $F5OS_USERNAME && $F5OS_PASSWORD
-  stage: unittest
   variables:
     GOFLAGS: "-mod=vendor"
     TF_ACC: "1"
+    # ACC_RUN is the -run regex selecting this group's TestAcc* functions.
+    # Per-job timeout in minutes (Go test -timeout). Override per job as needed.
+    ACC_TIMEOUT: "60m"
   script:
-    - make testacc
+    - |
+      if [ -z "${ACC_RUN}" ]; then
+        echo "ERROR: ACC_RUN is not set. Each acc job must define it."
+        exit 1
+      fi
+    - echo "Running acceptance group -run='${ACC_RUN}' (timeout ${ACC_TIMEOUT})"
+    - go test -v -parallel=1 -cover -timeout "${ACC_TIMEOUT}" \
+      -coverprofile "cover_${CI_JOB_NAME_SLUG}.out" \
+      -run "${ACC_RUN}" ./internal/provider/
+    - |
+      if [ -f "cover_${CI_JOB_NAME_SLUG}.out" ]; then
+        go tool cover -func="cover_${CI_JOB_NAME_SLUG}.out" > "coverage_report_${CI_JOB_NAME_SLUG}.txt"
+        COVERAGE=$(go tool cover -func="cover_${CI_JOB_NAME_SLUG}.out" | tail -1 | awk '{print $NF}' | tr -d '%')
+        echo "coverage: ${COVERAGE}%"
+      else
+        echo "No coverage profile produced"
+      fi
+  coverage: '/coverage: \d+\.\d+/'
   artifacts:
     when: always
     paths:
-      - cover.out
+      - cover_*.out
+      - coverage_report_*.txt
     expire_in: 30 days
   allow_failure: true
-  timeout: 2h
+  timeout: 75m  # 15m buffer over default ACC_TIMEOUT (60m); override in jobs with longer ACC_TIMEOUT
+
+# The jobs below are ordered least-disruptive first, most-disruptive last.
+# Each `needs` the previous job so they run one after another. The shared
+# resource_group enforces the mutex even if ordering is bypassed.
+
+acc:device_info:
+  extends: .acc_test
+  needs: []
+  variables:
+    ACC_RUN: "^TestAccDeviceInfo"
+    ACC_TIMEOUT: "30m"
+
+acc:vlan:
+  extends: .acc_test
+  needs:
+    - job: acc:device_info
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccVlan"
+    ACC_TIMEOUT: "30m"
+
+acc:interface:
+  extends: .acc_test
+  needs:
+    - job: acc:vlan
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccInterface"
+    ACC_TIMEOUT: "30m"
+
+acc:lag:
+  extends: .acc_test
+  needs:
+    - job: acc:interface
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccLag"
+    ACC_TIMEOUT: "30m"
+
+acc:dns:
+  extends: .acc_test
+  needs:
+    - job: acc:lag
+      optional: true
+  variables:
+    ACC_RUN: "^TestAcc(F5osDNS|DNS)"
+    ACC_TIMEOUT: "30m"
+
+acc:ntp:
+  extends: .acc_test
+  needs:
+    - job: acc:dns
+      optional: true
+  variables:
+    ACC_RUN: "^TestAcc(F5osNTP|NTP)"
+    ACC_TIMEOUT: "30m"
+
+acc:snmp:
+  extends: .acc_test
+  needs:
+    - job: acc:ntp
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccSnmp"
+    ACC_TIMEOUT: "45m"
+
+acc:logging:
+  extends: .acc_test
+  needs:
+    - job: acc:snmp
+      optional: true
+  variables:
+    ACC_RUN: "^TestAcc(F5osLogging|Logging)"
+    ACC_TIMEOUT: "60m"
+
+acc:tls_cert_key:
+  extends: .acc_test
+  needs:
+    - job: acc:logging
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccTlsCertKey"
+    ACC_TIMEOUT: "30m"
+
+acc:primarykey:
+  extends: .acc_test
+  needs:
+    - job: acc:tls_cert_key
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccPrimaryKey"
+    ACC_TIMEOUT: "45m"
+
+acc:config_backup:
+  extends: .acc_test
+  needs:
+    - job: acc:primarykey
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccCfgBackup"
+    ACC_TIMEOUT: "30m"
+
+acc:license:
+  extends: .acc_test
+  needs:
+    - job: acc:config_backup
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccLicense"
+    ACC_TIMEOUT: "30m"
+
+acc:qkview:
+  extends: .acc_test
+  needs:
+    - job: acc:license
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccQkview"
+    ACC_TIMEOUT: "60m"
+
+acc:system:
+  extends: .acc_test
+  needs:
+    - job: acc:qkview
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccSystem"
+    ACC_TIMEOUT: "45m"
+
+acc:tenant_image:
+  extends: .acc_test
+  needs:
+    - job: acc:system
+      optional: true
+  variables:
+    # Covers tenant_image resource AND data source (both TestAccTenantImage*).
+    ACC_RUN: "^TestAccTenantImage"
+    ACC_TIMEOUT: "120m"
+  timeout: 135m
+
+acc:tenant:
+  extends: .acc_test
+  needs:
+    - job: acc:tenant_image
+      optional: true
+  variables:
+    # Tenant deploy tests only — explicitly excludes TestAccTenantImage*
+    # (RE2 has no negative lookahead, so the prefixes are enumerated).
+    ACC_RUN: "^TestAccTenant(Deploy|Vlans|NoVlans|DeploymentFile|MacBlockSize|ExplicitMemory)"
+    ACC_TIMEOUT: "90m"
+  timeout: 105m
+
+acc:partition:
+  extends: .acc_test
+  needs:
+    - job: acc:tenant
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccPartitionCreate"
+    ACC_TIMEOUT: "30m"
+
+acc:partition_change_password:
+  extends: .acc_test
+  needs:
+    - job: acc:partition
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccPartitionChangePassword"
+    ACC_TIMEOUT: "30m"
+
+acc:user:
+  extends: .acc_test
+  needs:
+    - job: acc:partition_change_password
+      optional: true
+  variables:
+    # User resource tests only — excludes TestAccUserPasswordChange*.
+    ACC_RUN: "^TestAccUser(Resource|Role)"
+    ACC_TIMEOUT: "60m"
+
+acc:user_password_change:
+  extends: .acc_test
+  needs:
+    - job: acc:user
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccUserPasswordChange"
+    ACC_TIMEOUT: "30m"
+
+# auth is the most disruptive (touches auth_order / role GIDs); run it near
+# the end so a failure mid-run leaves the rest already completed.
+acc:auth:
+  extends: .acc_test
+  needs:
+    - job: acc:user_password_change
+      optional: true
+  variables:
+    ACC_RUN: "^TestAccAuth"
+    ACC_TIMEOUT: "45m"
+
+acc:proxy:
+  extends: .acc_test
+  needs:
+    - job: acc:auth
+      optional: true
+  variables:
+    ACC_RUN: "^TestAcc(Proxy|NoProxy)"
+    ACC_TIMEOUT: "30m"
+
+# Aggregates all per-job coverage profiles into a single combined report.
+# Runs after all acceptance jobs, regardless of individual job success/failure.
+acc:coverage_report:
+  stage: acctest
+  variables:
+    GOFLAGS: "-mod=vendor"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $F5OS_HOST && $F5OS_USERNAME && $F5OS_PASSWORD
+    - if: $RUN_ACC_TESTS && $F5OS_HOST && $F5OS_USERNAME && $F5OS_PASSWORD
+  needs:
+    - job: acc:device_info
+      optional: true
+      artifacts: true
+    - job: acc:vlan
+      optional: true
+      artifacts: true
+    - job: acc:interface
+      optional: true
+      artifacts: true
+    - job: acc:lag
+      optional: true
+      artifacts: true
+    - job: acc:dns
+      optional: true
+      artifacts: true
+    - job: acc:ntp
+      optional: true
+      artifacts: true
+    - job: acc:snmp
+      optional: true
+      artifacts: true
+    - job: acc:logging
+      optional: true
+      artifacts: true
+    - job: acc:tls_cert_key
+      optional: true
+      artifacts: true
+    - job: acc:primarykey
+      optional: true
+      artifacts: true
+    - job: acc:config_backup
+      optional: true
+      artifacts: true
+    - job: acc:license
+      optional: true
+      artifacts: true
+    - job: acc:qkview
+      optional: true
+      artifacts: true
+    - job: acc:system
+      optional: true
+      artifacts: true
+    - job: acc:tenant_image
+      optional: true
+      artifacts: true
+    - job: acc:tenant
+      optional: true
+      artifacts: true
+    - job: acc:partition
+      optional: true
+      artifacts: true
+    - job: acc:partition_change_password
+      optional: true
+      artifacts: true
+    - job: acc:user
+      optional: true
+      artifacts: true
+    - job: acc:user_password_change
+      optional: true
+      artifacts: true
+    - job: acc:auth
+      optional: true
+      artifacts: true
+    - job: acc:proxy
+      optional: true
+      artifacts: true
+  script:
+    - |
+      # Find all coverage profiles from the acceptance jobs
+      profiles=$(ls cover_*.out 2>/dev/null || true)
+      if [ -z "$profiles" ]; then
+        echo "No coverage profiles found. All acceptance jobs may have failed."
+        exit 0
+      fi
+      echo "Found coverage profiles:"
+      ls -la cover_*.out
+    - |
+      # Merge all coverage profiles into a single combined profile.
+      # Go coverage profiles are text: a "mode:" header line followed by
+      # coverage blocks.  We emit the header once then concatenate all
+      # data lines, avoiding an external dependency on gocovmerge.
+      head -1 $(ls cover_*.out | head -1) > acc_cover_combined.out
+      for f in cover_*.out; do
+        tail -n +2 "$f" >> acc_cover_combined.out
+      done
+      echo "Combined coverage profile created: acc_cover_combined.out"
+    - |
+      # Generate human-readable coverage report
+      go tool cover -func=acc_cover_combined.out > acc_coverage_report.txt
+      echo ""
+      echo "=== Acceptance Test Coverage Report ==="
+      cat acc_coverage_report.txt
+      echo ""
+    - |
+      # Extract and display total coverage
+      COVERAGE=$(go tool cover -func=acc_cover_combined.out | tail -1 | awk '{print $NF}' | tr -d '%')
+      echo "coverage: ${COVERAGE}%"
+  coverage: '/coverage: \d+\.\d+/'
+  artifacts:
+    when: always
+    paths:
+      - acc_cover_combined.out
+      - acc_coverage_report.txt
+    expire_in: 30 days
+  allow_failure: true
 
 # ── Schema Diff ────────────────────────────────────────────────────────
 # Compares the RESTCONF/YANG schemas of two F5OS devices running different
@@ -154,7 +532,6 @@ schema-diff:
   stage: schema-diff
   needs: []
   rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $SCHEMA_DIFF_RUN == "true"
   script:
     - export GOFLAGS=-mod=vendor
