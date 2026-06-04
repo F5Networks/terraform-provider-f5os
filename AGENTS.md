@@ -60,6 +60,28 @@ TF_ACC=1 go test -v -run TestAccTenantImageCreateTC1Resource -timeout 5m ./inter
 - `go generate ./...` drift is checked in CI. Run `make generate` before
   committing if you change schemas, examples, or templates.
 
+### Coverage enforcement
+
+Both CI pipelines enforce a minimum unit test coverage threshold using the
+shared script `scripts/check-coverage.sh`. The current threshold is **75%**.
+
+- The script parses `cover.out` (produced by `make test`), extracts the total
+  coverage, and fails the build if it falls below the threshold. The 75%
+  threshold provides a 5% grace margin below the 80% coverage target.
+- On GitHub Actions it writes a Markdown summary to the job summary page and
+  uploads `cover.out` as an artifact.
+- On GitLab CI the `coverage:` keyword extracts the percentage for the
+  pipeline badge.
+- To change the threshold, update the `46` argument in both
+  `.github/workflows/test.yml` and `.gitlab-ci.yml`, or set the
+  `COVERAGE_THRESHOLD` environment variable.
+
+```bash
+# Check coverage locally
+make test
+./scripts/check-coverage.sh cover.out 75
+```
+
 ## Vendoring
 
 Dependencies are vendored. After changing `go.mod`:
