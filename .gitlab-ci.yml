@@ -7,7 +7,6 @@ default:
 
 stages:
   - lint
-  - build
   - Mend
   - unittest
   - acctest
@@ -27,7 +26,6 @@ workflow:
     - if: $CI_MERGE_REQUEST_IID
     - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_PIPELINE_SOURCE == "schedule"
 
 cache:
   key:
@@ -38,7 +36,7 @@ makelint:
   needs: []
   stage: lint
   rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $RUN_ACC_TESTS == "only"
       when: never
     - when: on_success
   script:
@@ -50,30 +48,13 @@ makelint:
     matrix:
       - TARGET:
           - lint
-go:build:
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-      when: never
-    - if: $CI_MERGE_REQUEST_IID
-      changes:
-        - "**/*.go"
-        - go.mod
-        - go.sum
-        - .gitlab-ci.yml
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_COMMIT_TAG
-  needs: []
-  stage: build
-  script:
-    - export GOFLAGS=-mod=vendor
-    - make build
 
 # Run any dependency tasks before this to ensure you have installed all your dependencies
 run-Mend:
   stage: Mend
   image: artifactory.f5net.com/f5-cedi-docker/sst/tc-mend
   rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $RUN_ACC_TESTS == "only"
       when: never
     - when: on_success
   script:
@@ -92,7 +73,7 @@ run-Mend:
 
 unit-tests:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $RUN_ACC_TESTS == "only"
       when: never
     - if: $CI_MERGE_REQUEST_IID
       changes:
@@ -107,14 +88,8 @@ unit-tests:
     - make test
     - go tool cover -func=cover.out > coverage_report.txt
     - tail -1 coverage_report.txt
-    - |
-      COVERAGE=$(go tool cover -func=cover.out | tail -1 | awk '{print $NF}' | tr -d '%')
-      echo "coverage: ${COVERAGE}%"
-      if awk "BEGIN {exit !(${COVERAGE} < 46)}"; then
-        echo "FAIL: coverage ${COVERAGE}% is below minimum threshold of 46%"
-        exit 1
-      fi
-  coverage: '/coverage: \d+\.\d+/'
+    - ./scripts/check-coverage.sh cover.out 75
+  coverage: '/Coverage: \d+\.\d+%/'
   artifacts:
     when: always
     paths:

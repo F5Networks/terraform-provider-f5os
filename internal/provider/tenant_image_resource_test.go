@@ -528,8 +528,6 @@ func TestUnitTenantImageTimeoutChangeNoReplace(t *testing.T) {
 // Acceptance test helpers
 // ---------------------------------------------------------------------------
 
-
-
 // testAccCheckTenantImageExistsOnDevice queries the device directly and verifies
 // the named image is present (any status).
 func testAccCheckTenantImageExistsOnDevice(imageName string) resource.TestCheckFunc {

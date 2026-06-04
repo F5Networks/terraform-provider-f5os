@@ -72,7 +72,15 @@ jobs:
         with:
           terraform_version: ${{ matrix.terraform }}
           terraform_wrapper: false
-      # - env:
-      #     TF_ACC: "1"
-      - run: go test -v -cover -timeout 60m ./internal/provider/
+      - name: Run unit tests
+        run: make test
         timeout-minutes: 65
+      - name: Enforce coverage threshold
+        run: ./scripts/check-coverage.sh cover.out 75
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-${{ matrix.terraform }}
+          path: cover.out
+          retention-days: 30
