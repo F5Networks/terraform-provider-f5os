@@ -161,9 +161,10 @@ unit-tests:
         exit 1
       fi
     - echo "Running acceptance group -run='${ACC_RUN}' (timeout ${ACC_TIMEOUT})"
-    - go test -v -parallel=1 -cover -timeout "${ACC_TIMEOUT}" \
-      -coverprofile "cover_${CI_JOB_NAME_SLUG}.out" \
-      -run "${ACC_RUN}" ./internal/provider/
+    - |
+      go test -v -parallel=1 -cover -timeout "${ACC_TIMEOUT}" \
+        -coverprofile "cover_${CI_JOB_NAME_SLUG}.out" \
+        -run "${ACC_RUN}" ./internal/provider/
     - |
       if [ -f "cover_${CI_JOB_NAME_SLUG}.out" ]; then
         go tool cover -func="cover_${CI_JOB_NAME_SLUG}.out" > "coverage_report_${CI_JOB_NAME_SLUG}.txt"
