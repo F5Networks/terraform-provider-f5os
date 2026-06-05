@@ -27,14 +27,6 @@ const (
 	// Create/Update/Delete operations that modify SSHD settings.
 	deviceStabilizeTimeout = 120 * time.Second
 
-	// devicePreCheckTimeout is how long testAccPreCheckWithRetry and
-	// testAccCheckSystemDestroy wait for the device before giving up.
-	devicePreCheckTimeout = 90 * time.Second
-
-	// deviceStepTimeout is how long PreConfig closures between test steps
-	// wait for the device before giving up.
-	deviceStepTimeout = 60 * time.Second
-
 	// devicePollInterval is the sleep between consecutive availability checks.
 	devicePollInterval = 5 * time.Second
 
