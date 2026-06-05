@@ -10,6 +10,7 @@ FEATURES:
 * CI/CD: Added `cve-scan` job using `govulncheck` — runs on every MR, push to default branch, tag, and schedule; failures block the pipeline
 
 BUG FIXES:
+* `f5os_user`: Password update now uses admin set-password endpoint, fixing failures when provider does not have the user's old password
 
 IMPROVEMENTS:
 * Removed redundant `go:build` CI job (compilation already covered by lint and unit test jobs)
@@ -34,13 +35,14 @@ IMPROVEMENTS:
   - `primarykey_resource`: 2.7% → 80%
   - `tenant_resource`: 1.4% → 80%
   - `tenant_image_resource`: 2.8% → 80%
+  - `user_resource`: expanded coverage
   - `user_password_change_resource`: added coverage
   - `vlan_resource`: 3.3% → 80%
 
 SECURITY:
 * Upgraded Go from 1.23.6 to 1.25.10
 * Upgraded `golang.org/x/net` from v0.39.0 to v0.55.0 to remediate CVE vulnerabilities
-* Upgraded `golang.org/x/sys` from v0.28.0 to v0.44.0 to remediate CVE vulnerabilities
+* Upgraded `golang.org/x/sys` from v0.32.0 to v0.44.0 to remediate CVE vulnerabilities
 * Upgraded `google.golang.org/grpc` from v1.65.0 to v1.79.3 to remediate CVE vulnerabilities
 
 ## 1.11.1
