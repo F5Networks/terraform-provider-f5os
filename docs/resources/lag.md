@@ -13,15 +13,24 @@ Resource to Manage network Link Aggregation Group (LAG) interfaces on F5OS syste
 ## Example Usage
 
 ```terraform
-resource "f5os_lag" "test_lag" {
-  name        = "test_lag"
-  members     = ["1.0"]
+# LACP LAG (default when lag_type is omitted)
+resource "f5os_lag" "lacp_lag" {
+  name        = "lacp_lag"
+  lag_type    = "LACP"
+  members     = ["1.0", "2.0"]
   native_vlan = 5
-  trunk_vlans = [
-    1,
-    2,
-    3
-  ]
+  trunk_vlans = [1, 2, 3]
+  mode        = "ACTIVE"
+  interval    = "SLOW"
+}
+
+# Static LAG (no LACP negotiation)
+resource "f5os_lag" "static_lag" {
+  name        = "static_lag"
+  lag_type    = "STATIC"
+  members     = ["1.0", "2.0"]
+  native_vlan = 5
+  trunk_vlans = [1, 2, 3]
 }
 ```
 
@@ -34,9 +43,10 @@ resource "f5os_lag" "test_lag" {
 
 ### Optional
 
-- `interval` (String) The LACP interval of the interface to be created.
+- `interval` (String) The LACP interval of the interface to be created. Only applicable when `lag_type` is `LACP`.
+- `lag_type` (String) The type of the LAG interface: `LACP` for Link Aggregation Control Protocol or `STATIC` for a static LAG without LACP. Defaults to `LACP` if not specified, preserving backward compatibility. Set to `STATIC` to create a static LAG. Changing this value forces recreation of the resource.
 - `members` (Set of String) List of physical interfaces that are members of the LAG. The members should be present on F5 platform and they shouldn't have any VLANs attached to it
-- `mode` (String) The LACP mode of the interface to be created.
+- `mode` (String) The LACP mode of the interface to be created. Only applicable when `lag_type` is `LACP`.
 - `native_vlan` (Number) Configures the VLAN ID to associate with LAG interface.
 The `native_vlan` parameter is used for untagged traffic.
 - `trunk_vlans` (Set of Number) Configures multiple VLAN IDs to associate with the LAG interface.

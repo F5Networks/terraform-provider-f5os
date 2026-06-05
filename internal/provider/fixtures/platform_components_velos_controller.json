@@ -1,0 +1,21 @@
+{
+  "openconfig-platform:component": [
+    {
+      "name": "chassis",
+      "config": { "name": "chassis" },
+      "state": {
+        "description": "Velos System Chassis",
+        "serial-no": "mock-chassis-serial",
+        "empty": false
+      }
+    },
+    {
+      "name": "blade-1",
+      "config": { "name": "blade-1" },
+      "state": {
+        "description": "Blade 1",
+        "empty": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "f5-system-partition:partition": [
+    {
+      "name": "TerraformPartition",
+      "config": {
+        "enabled": true,
+        "iso-version": "1.5.0-1234",
+        "configuration-volume": 12,
+        "images-volume": 20,
+        "shared-volume": 12,
+        "mgmt-ip": {
+          "ipv4": {
+            "address": "10.144.140.130",
+            "prefix-length": 24,
+            "gateway": "10.144.140.1"
+          },
+          "ipv6": {
+            "address": "2001:db8:3333:4444:5555:6666:7777:9999",
+            "prefix-length": 64,
+            "gateway": "2001:db8:3333:4444::"
+          }
+        }
+      },
+      "state": {
+        "id": 2,
+        "os-version": "1.5.0-1234",
+        "service-version": "1.5.0-1234",
+        "install-status": "none",
+        "controllers": {
+          "controller": [
+            {
+              "controller": 1,
+              "partition-id": 2,
+              "partition-status": "running-active",
+              "running-service-version": "1.5.0-1234",
+              "status-seconds": "100",
+              "status-age": "1m"
+            },
+            {
+              "controller": 2,
+              "partition-id": 2,
+              "partition-status": "running-standby",
+              "running-service-version": "1.5.0-1234",
+              "status-seconds": "100",
+              "status-age": "1m"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

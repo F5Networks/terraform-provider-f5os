@@ -244,7 +244,7 @@ func (r *TenantResource) Create(ctx context.Context, req resource.CreateRequest,
 	}
 	if !availableFlag {
 		stop <- true
-		resp.Diagnostics.AddError(fmt.Sprintf("%v", err), "")
+		resp.Diagnostics.AddError(fmt.Sprintf("image %q has status \"not-present\" on the device", data.ImageName.ValueString()), "Upload or import the tenant image before creating a tenant that references it.")
 		return
 	}
 
