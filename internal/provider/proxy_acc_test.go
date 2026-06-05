@@ -3,13 +3,11 @@ package provider
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
-	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
 // =============================================================================
@@ -85,42 +83,14 @@ func testAccProxyPreCheck(t *testing.T) {
 	}
 }
 
-// newProxyTestClientFromEnv creates an F5OS client using environment variables.
-// This is used by custom check functions to verify state on the device.
-// The client inherits proxy settings from HTTPS_PROXY/HTTP_PROXY via
-// http.ProxyFromEnvironment which is set on the Transport in NewSession.
-func newProxyTestClientFromEnv() (*f5ossdk.F5os, error) {
-	host := os.Getenv("F5OS_HOST")
-	user := os.Getenv("F5OS_USERNAME")
-	if user == "" {
-		user = os.Getenv("F5OS_USER")
-	}
-	pass := os.Getenv("F5OS_PASSWORD")
 
-	port := 8888 // Default port matching provider.go:104
-	if p := os.Getenv("F5OS_PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
-
-	cfg := &f5ossdk.F5osConfig{
-		Host:             host,
-		User:             user,
-		Password:         pass,
-		Port:             port,
-		DisableSSLVerify: true, // Match provider default
-	}
-
-	return f5ossdk.NewSession(cfg)
-}
 
 // testAccCheckProxyClientConnects verifies that an F5OS client can successfully
 // connect to the device through the proxy by creating a session and verifying
 // it obtained an auth token.
 func testAccCheckProxyClientConnects() resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newProxyTestClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create F5OS client through proxy: %w", err)
 		}
@@ -146,7 +116,7 @@ func testAccCheckProxyClientConnects() resource.TestCheckFunc {
 // device by querying the API directly (through the proxy).
 func testAccCheckProxyDNSApplied(expectedServer string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newProxyTestClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client for DNS verification: %w", err)
 		}
@@ -179,7 +149,7 @@ func testAccCheckProxyDNSApplied(expectedServer string) resource.TestCheckFunc {
 // testAccCheckProxyDNSDestroy verifies DNS test entries are removed after
 // the test completes.
 func testAccCheckProxyDNSDestroy(s *terraform.State) error {
-	client, err := newProxyTestClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		// Cannot connect - treat as destroyed (or proxy no longer available)
 		return nil
@@ -215,7 +185,7 @@ func TestAccProxyConnectivity(t *testing.T) {
 	testAccProxyPreCheck(t)
 
 	// Direct client test - verify we can connect through proxy
-	client, err := newProxyTestClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Fatalf("Failed to connect to F5OS device through proxy: %v", err)
 	}
@@ -313,7 +283,7 @@ func TestAccProxyTransportPreservation(t *testing.T) {
 	testAccProxyPreCheck(t)
 
 	// Create initial session
-	client1, err := newProxyTestClientFromEnv()
+	client1, err := newTestClientFromEnv()
 	if err != nil {
 		t.Fatalf("First connection failed: %v", err)
 	}
@@ -339,7 +309,7 @@ func TestAccProxyTransportPreservation(t *testing.T) {
 	}
 
 	// Create a second session to verify proxy config is consistent
-	client2, err := newProxyTestClientFromEnv()
+	client2, err := newTestClientFromEnv()
 	if err != nil {
 		t.Fatalf("Second connection failed: %v", err)
 	}
@@ -406,7 +376,7 @@ func TestAccNoProxyBypass(t *testing.T) {
 	host := os.Getenv("F5OS_HOST")
 	t.Logf("Testing NO_PROXY bypass with NO_PROXY=%s, F5OS_HOST=%s", noProxy, host)
 
-	client, err := newProxyTestClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Fatalf("Connection failed: %v", err)
 	}

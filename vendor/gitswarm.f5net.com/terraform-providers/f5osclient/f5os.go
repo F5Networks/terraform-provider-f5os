@@ -735,25 +735,28 @@ func (p *F5os) CreateLagInterface(body *F5ReqLagInterfaces, members *F5ReqLagInt
 		return resp, err
 	}
 
-	data, err := p.addLagModeInterval(lagModeInterval)
-	if err != nil {
+	// Skip LACP mode/interval configuration for static LAGs (lagModeInterval is nil).
+	if lagModeInterval != nil {
+		data, err := p.addLagModeInterval(lagModeInterval)
+		if err != nil {
 
-		var haveMembers []string
-		for _, member := range members.OpenconfigInterfacesInterfaces.Interface {
-			haveMembers = append(haveMembers, member.Name)
+			var haveMembers []string
+			for _, member := range members.OpenconfigInterfacesInterfaces.Interface {
+				haveMembers = append(haveMembers, member.Name)
+			}
+
+			err1 := p.RemoveLagMembers(haveMembers)
+			if err1 != nil {
+				return nil, err
+			}
+
+			err2 := p.RemoveLagInterface(body.OpenconfigInterfacesInterfaces.Interface[0].Config.Name)
+			if err2 != nil {
+				return nil, err
+			}
+
+			return data, err
 		}
-
-		err1 := p.RemoveLagMembers(haveMembers)
-		if err1 != nil {
-			return nil, err
-		}
-
-		err2 := p.RemoveLagInterface(body.OpenconfigInterfacesInterfaces.Interface[0].Config.Name)
-		if err2 != nil {
-			return nil, err
-		}
-
-		return data, err
 	}
 
 	return resp, nil
@@ -789,9 +792,12 @@ func (p *F5os) UpdateLagInterface(intf string, body *F5ReqLagInterfaces, lagMode
 	}
 	f5osLogger.Debug("[UpdateLagInterface]", "Resp:", hclog.Fmt("%+v", string(resp)))
 
-	data, err := p.addLagModeInterval(lagModeIntervalData)
-	if err != nil {
-		return data, err
+	// Skip LACP mode/interval configuration for static LAGs (lagModeIntervalData is nil).
+	if lagModeIntervalData != nil {
+		data, err := p.addLagModeInterval(lagModeIntervalData)
+		if err != nil {
+			return data, err
+		}
 	}
 
 	return resp, nil

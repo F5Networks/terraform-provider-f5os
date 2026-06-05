@@ -23,7 +23,7 @@ func TestAccTenantImageDataSourceTC1Resource(t *testing.T) {
 	imageName := testAccGetExistingImageName(t)
 
 	// Pre-query the device to get the expected status for verification.
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create client: %v", err)
 	}

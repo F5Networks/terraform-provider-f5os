@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -48,7 +47,7 @@ func testAccEnsureDNSServer(t *testing.T) {
 		return // Only run during acceptance tests
 	}
 
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Logf("Warning: cannot create client to check DNS: %v", err)
 		return
@@ -86,7 +85,7 @@ func testAccEnsureTestImage(t *testing.T) {
 		return // Only run during acceptance tests
 	}
 
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Fatalf("Cannot create client to check test image: %v", err)
 	}
@@ -529,36 +528,11 @@ func TestUnitTenantImageTimeoutChangeNoReplace(t *testing.T) {
 // Acceptance test helpers
 // ---------------------------------------------------------------------------
 
-// newTenantImageClientFromEnv creates a fresh f5osclient session from env vars.
-// Port defaults to 8888 to match the provider.
-func newTenantImageClientFromEnv() (*f5ossdk.F5os, error) {
-	host := os.Getenv("F5OS_HOST")
-	user := os.Getenv("F5OS_USERNAME")
-	if user == "" {
-		user = os.Getenv("F5OS_USER")
-	}
-	pass := os.Getenv("F5OS_PASSWORD")
-	port := 8888
-	if p := os.Getenv("F5OS_PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
-	cfg := &f5ossdk.F5osConfig{
-		Host:             host,
-		User:             user,
-		Password:         pass,
-		Port:             port,
-		DisableSSLVerify: true,
-	}
-	return f5ossdk.NewSession(cfg)
-}
-
 // testAccCheckTenantImageExistsOnDevice queries the device directly and verifies
 // the named image is present (any status).
 func testAccCheckTenantImageExistsOnDevice(imageName string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newTenantImageClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -578,7 +552,7 @@ func testAccCheckTenantImageExistsOnDevice(imageName string) resource.TestCheckF
 // the F5OS API refuses to delete in-use images and the test framework
 // always runs a final destroy.
 func testAccCheckTenantImageDestroy(s *terraform.State) error {
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		return nil // cannot connect — treat as destroyed
 	}
@@ -1686,7 +1660,7 @@ resource "f5os_tenant_image" "test" {
 `, testAccImageRemoteHost)
 
 // TestUnitTenantImageHTTPProtocolRejected verifies that protocol="http"
-// is rejected at plan time by the schema validator. The F5OS RESTCONF API
+// is rejected at plan time by ValidateConfig. The F5OS RESTCONF API
 // does not support HTTP for file transfers so it was removed from the
 // allowed protocol list.
 func TestUnitTenantImageHTTPProtocolRejected(t *testing.T) {
@@ -1704,7 +1678,7 @@ resource "f5os_tenant_image" "http_test" {
   timeout     = 360
 }
 `,
-				ExpectError: regexp.MustCompile(`(?i)value must be one of`),
+				ExpectError: regexp.MustCompile(`Protocol must be one of`),
 			},
 		},
 	})
@@ -1771,7 +1745,7 @@ func TestUnitTenantImageInsecurePayloadSerialization(t *testing.T) {
 // different images.
 func testAccGetExistingImageName(t *testing.T) string {
 	t.Helper()
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create client to discover images: %v", err)
 	}
@@ -1796,7 +1770,7 @@ func testAccGetExistingImageName(t *testing.T) string {
 // verifies that the named image has the expected status.
 func testAccCheckTenantImageStatusOnDevice(imageName, expectedStatus string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newTenantImageClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
@@ -1928,7 +1902,7 @@ func TestAccTenantImageStatusFromDevice(t *testing.T) {
 	imageName := testAccGetExistingImageName(t)
 
 	// Pre-query the device to get the expected status.
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create client: %v", err)
 	}
@@ -2154,7 +2128,7 @@ func TestAccTenantImageCreateExistingImageSkipsImport(t *testing.T) {
 	imageName := testAccGetExistingImageName(t)
 
 	// Pre-query the device to get the expected status for verification.
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create client: %v", err)
 	}
@@ -2210,8 +2184,8 @@ resource "f5os_tenant_image" "existing_test" {
 }
 
 // TestUnitTenantImageRemotePathConflictsWithUploadFromPath verifies that
-// the remote_path attribute has a ConflictsWith validator for
-// upload_from_path. Setting both must produce a validation error.
+// setting both remote_path and upload_from_path produces a validation error
+// via the resource's ValidateConfig method.
 func TestUnitTenantImageRemotePathConflictsWithUploadFromPath(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
@@ -2224,7 +2198,829 @@ resource "f5os_tenant_image" "conflict_test" {
   upload_from_path = "/tmp/test.qcow2.zip.bundle"
 }
 `,
-				ExpectError: regexp.MustCompile(`(?i)conflict`),
+				ExpectError: regexp.MustCompile(`Cannot specify both remote_path and upload_from_path`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Coverage-boosting unit tests for uncovered branches
+// ---------------------------------------------------------------------------
+
+// TestUnitTenantImageCreateVelosControllerError verifies that Create returns
+// an error when running on a Velos Controller (unsupported platform). This
+// exercises the PlatformType == "Velos Controller" guard in Create.
+func TestUnitTenantImageCreateVelosControllerError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	// Mock: platform detection — returns multiple components with "chassis"
+	// so the SDK classifies this as "Velos Controller".
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_components_velos_controller.json"))
+	})
+
+	// Mock: version endpoint for Velos Controller
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-system-controller-image:image", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-system-controller-image:image":{"state":{"controllers":{"controller":[{"number":1,"os-version":"1.7.0-3518"}]}}}}`)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccTenantImageCreateTC2ResourceConfig,
+				ExpectError: regexp.MustCompile(`(?i)f5os_tenant_image.*supported with Velos Partition level`),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageCreateImportError verifies that when importImage returns
+// an error, Create surfaces it via diagnostics. The mock returns HTTP 500
+// from the import endpoint so the client returns an error.
+func TestUnitTenantImageCreateImportError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	// GetImage returns empty (image not present) so Create tries to import
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+	// Import endpoint returns an error that triggers importWait failure
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-message":"internal server error"}]}}`)
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccTenantImageCreateTC2ResourceConfig,
+				ExpectError: regexp.MustCompile(`(?i)Unable to Import Image`),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageCreateImportNonSuccess verifies that when importImage
+// returns a non-success response string (not "Import Image Transfer Success"),
+// Create adds an error diagnostic. The mock makes the transfer-status report
+// a failed status.
+func TestUnitTenantImageCreateImportNonSuccess(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+	// Import endpoint succeeds (HTTP 200)
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	// Transfer status reports an HTTP error — importWait will return an error
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{
+			"f5-utils-file-transfer:transfer-operation": [{
+				"local-file-path": "images/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+				"remote-host": %q,
+				"remote-file-path": "%s/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+				"operation": "Import file",
+				"protocol": "HTTPS   ",
+				"status": "    Couldn't connect to server",
+				"timestamp": "Mon Jun 26 16:05:22 2023"
+			}]
+		}`, testAccImageRemoteHost, testAccImageRemotePath)
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccTenantImageCreateTC2ResourceConfig,
+				ExpectError: regexp.MustCompile(`(?i)Unable to Import Image|Import Image failed`),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageCreateUploadSuccess verifies the upload_from_path code
+// path in Create: when upload_from_path is set, Create calls uploadImage
+// instead of importImage. The mock simulates a successful upload response
+// with {"result-tag": "uploaded-successfully"}.
+func TestUnitTenantImageCreateUploadSuccess(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	var getImageCount int
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=test-upload.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		getImageCount++
+		w.WriteHeader(http.StatusOK)
+		if getImageCount <= 1 {
+			// First call: image does not exist yet
+			_, _ = fmt.Fprintf(w, "%s", "")
+		} else {
+			// After upload: image exists
+			_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image": [{
+				"name": "test-upload.qcow2.zip.bundle",
+				"in-use": false,
+				"type": "vm-image",
+				"status": "replicated",
+				"date": "2024-1-1",
+				"size": "1.5 GB"}]}`)
+		}
+	})
+
+	// Upload start ID endpoint
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/f5-file-upload-meta-data:upload/start-upload", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-file-upload-meta-data:output":{"upload-id":"mock-upload-id-123"}}`)
+	})
+
+	// Upload image endpoint — returns success
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-image-upload:image/upload-image", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"result-tag": "uploaded-successfully"}`)
+	})
+
+	// Delete endpoint for cleanup
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:output":{"result":"Successful."}}`)
+	})
+
+	defer teardown()
+
+	// Create a temporary dummy file that uploadImage will open
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(tmpDir+"/test-upload.qcow2.zip.bundle", []byte("dummy image data"), 0644); err != nil {
+		t.Fatalf("Failed to create dummy file: %v", err)
+	}
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "f5os_tenant_image" "upload_test" {
+  image_name       = "test-upload.qcow2.zip.bundle"
+  upload_from_path = %q
+}
+`, tmpDir),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.upload_test", "id", "test-upload.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.upload_test", "status", "replicated"),
+				),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageCreateUploadError verifies that when uploadImage returns
+// an error (e.g. file not found), Create surfaces it via diagnostics.
+func TestUnitTenantImageCreateUploadError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=nonexistent.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				// upload_from_path points to a nonexistent directory so
+				// os.Open fails inside UploadImage
+				Config: `
+resource "f5os_tenant_image" "upload_err_test" {
+  image_name       = "nonexistent.qcow2.zip.bundle"
+  upload_from_path = "/nonexistent/path/does/not/exist"
+}
+`,
+				ExpectError: regexp.MustCompile(`(?i)unable to upload image`),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageCreateUploadBadJSON verifies that when the upload
+// endpoint returns invalid JSON, Create surfaces a parse error diagnostic.
+func TestUnitTenantImageCreateUploadBadJSON(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=bad-json.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/f5-file-upload-meta-data:upload/start-upload", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-file-upload-meta-data:output":{"upload-id":"mock-upload-id-123"}}`)
+	})
+	// Return invalid JSON from the upload endpoint
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-image-upload:image/upload-image", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `not valid json at all`)
+	})
+
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(tmpDir+"/bad-json.qcow2.zip.bundle", []byte("dummy"), 0644); err != nil {
+		t.Fatalf("Failed to create dummy file: %v", err)
+	}
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "f5os_tenant_image" "bad_json_test" {
+  image_name       = "bad-json.qcow2.zip.bundle"
+  upload_from_path = %q
+}
+`, tmpDir),
+				ExpectError: regexp.MustCompile(`(?i)could not parse the response|unable to get image upload status`),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageCreateUploadMissingResultTag verifies that when the
+// upload endpoint returns valid JSON but without the "result-tag" key,
+// Create adds an error diagnostic about missing upload status.
+func TestUnitTenantImageCreateUploadMissingResultTag(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=no-result-tag.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/f5-file-upload-meta-data:upload/start-upload", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-file-upload-meta-data:output":{"upload-id":"mock-upload-id-456"}}`)
+	})
+	// Return valid JSON without "result-tag" key
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-image-upload:image/upload-image", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"some-other-key": "value"}`)
+	})
+
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(tmpDir+"/no-result-tag.qcow2.zip.bundle", []byte("dummy"), 0644); err != nil {
+		t.Fatalf("Failed to create dummy file: %v", err)
+	}
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "f5os_tenant_image" "no_result_test" {
+  image_name       = "no-result-tag.qcow2.zip.bundle"
+  upload_from_path = %q
+}
+`, tmpDir),
+				ExpectError: regexp.MustCompile(`(?i)unable to get image upload status`),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageCreateUploadFailedStatus verifies that when the upload
+// endpoint returns {"result-tag": "upload-failed"} (not "uploaded-successfully"),
+// Create adds an error diagnostic about image upload failure.
+func TestUnitTenantImageCreateUploadFailedStatus(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=upload-fail.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", "")
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/f5-file-upload-meta-data:upload/start-upload", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-file-upload-meta-data:output":{"upload-id":"mock-upload-id-789"}}`)
+	})
+	// Return failed status
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-image-upload:image/upload-image", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"result-tag": "upload-failed"}`)
+	})
+
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(tmpDir+"/upload-fail.qcow2.zip.bundle", []byte("dummy"), 0644); err != nil {
+		t.Fatalf("Failed to create dummy file: %v", err)
+	}
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "f5os_tenant_image" "upload_fail_test" {
+  image_name       = "upload-fail.qcow2.zip.bundle"
+  upload_from_path = %q
+}
+`, tmpDir),
+				ExpectError: regexp.MustCompile(`(?i)image upload failed`),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageCreatePostImportGetImageError verifies that when the
+// post-import/upload GetImage call fails, Create surfaces the error.
+func TestUnitTenantImageCreatePostImportGetImageError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	var getImageCount int
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		getImageCount++
+		if getImageCount <= 1 {
+			// First GetImage: image does not exist
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "%s", "")
+		} else {
+			// Second GetImage (post-import): return error
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-message":"internal error"}]}}`)
+		}
+	})
+	// Import succeeds
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccTenantImageCreateTC2ResourceConfig,
+				ExpectError: regexp.MustCompile(`(?i)Unable to Read/Get Imported Image`),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageCreatePostImportEmptyImages verifies that when GetImage
+// returns successfully after import but with an empty TenantImages list,
+// Create returns an explicit error about the missing image. This exercises
+// the len(TenantImages) == 0 branch after import.
+func TestUnitTenantImageCreatePostImportEmptyImages(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	var getImageCount int
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		getImageCount++
+		w.WriteHeader(http.StatusOK)
+		if getImageCount <= 1 {
+			// First: image not present
+			_, _ = fmt.Fprintf(w, "%s", "")
+		} else {
+			// Post-import: return empty list to exercise the
+			// len(respByte.TenantImages) == 0 branch after import
+			_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image": []}`)
+		}
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:output":{"result":"Successful."}}`)
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageCreateTC2ResourceConfig,
+				// When GetImage returns empty after import, Create should
+				// return an explicit error about the missing image.
+				ExpectError: regexp.MustCompile(`imported\s+successfully but is not present`),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageReadGetImageError verifies that when Read's GetImage
+// call fails, it surfaces the error via diagnostics.
+func TestUnitTenantImageReadGetImageError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	var getImageCount int
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		getImageCount++
+		if getImageCount <= 2 {
+			// Create calls: first (image check), second (post-import verify)
+			w.WriteHeader(http.StatusOK)
+			if getImageCount == 1 {
+				_, _ = fmt.Fprintf(w, "%s", "")
+			} else {
+				_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image": [{
+					"name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+					"in-use": false, "type": "vm-image",
+					"status": "replicated", "date": "2023-3-27", "size": "2.27 GB"}]}`)
+			}
+		} else {
+			// Read call: return error
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-message":"read error"}]}}`)
+		}
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:output":{"result":"Successful."}}`)
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageCreateTC2ResourceConfig,
+				// After Create, the framework calls Read. The Read call
+				// gets an error, which prevents the test step from passing.
+				ExpectError: regexp.MustCompile(`(?i)Unable to Read/Get Imported Image`),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageReadEmptyImages verifies that when Read's GetImage
+// returns successfully but with an empty TenantImages list, the state is
+// written without calling tenantImageResourceModeltoState (preserving
+// whatever is in data from the prior state).
+func TestUnitTenantImageReadEmptyImages(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	var getImageCount int
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		getImageCount++
+		w.WriteHeader(http.StatusOK)
+		if getImageCount <= 2 {
+			if getImageCount == 1 {
+				// Create first check: not found
+				_, _ = fmt.Fprintf(w, "%s", "")
+			} else {
+				// Create post-import verify: found
+				_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image": [{
+					"name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+					"in-use": false, "type": "vm-image",
+					"status": "replicated", "date": "2023-3-27", "size": "2.27 GB"}]}`)
+			}
+		} else {
+			// Read call: return empty list to exercise the false branch
+			_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image": []}`)
+		}
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:output":{"result":"Successful."}}`)
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageCreateTC2ResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+				),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageUpdateGetImageError verifies that when Update's GetImage
+// call fails, it surfaces the error via diagnostics. This exercises the
+// error branch in Update.
+func TestUnitTenantImageUpdateGetImageError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Step 1 (Create): image exists on first check — no import needed
+	// Step 1 (Read after Create): succeeds
+	// Step 2 (Update): GetImage returns error
+	var getImageCount int
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		getImageCount++
+		// Step 1 Create calls: image already exists (skip import)
+		// Step 1 Read: succeeds
+		// Step 2 is an Update (timeout change) — triggers Update then Read
+		if getImageCount <= 3 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image": [{
+				"name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+				"in-use": false, "type": "vm-image",
+				"status": "replicated", "date": "2023-3-27", "size": "2.27 GB"}]}`)
+		} else {
+			// Update's GetImage call: return error
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-message":"update error"}]}}`)
+		}
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:output":{"result":"Successful."}}`)
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create (image already exists)
+			{
+				Config: testAccTenantImageCreateTC2ResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+				),
+			},
+			// Step 2: Change timeout → triggers Update which gets error
+			{
+				Config:      testAccTenantImageCreateTC2ModifyResourceConfig,
+				ExpectError: regexp.MustCompile(`(?i)Unable to Read/Get Imported Image`),
+			},
+		},
+	})
+}
+
+// TestUnitTenantImageDeleteError verifies that when Delete's
+// DeleteTenantImage call fails, it surfaces the error via diagnostics.
+// Step 1 creates the resource successfully; Step 2 removes the resource
+// from config, which triggers a destroy plan. The delete endpoint returns
+// HTTP 500 on the first call, exercising the error branch. The second call
+// (post-test cleanup) succeeds to allow the test framework to finish.
+func TestUnitTenantImageDeleteError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// GetImage always returns the image
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image": [{
+			"name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+			"in-use": false, "type": "vm-image",
+			"status": "replicated", "date": "2023-3-27", "size": "2.27 GB"}]}`)
+	})
+	// Delete fails on the first 3 calls (exhausting doRequest's retry loop)
+	// then succeeds on subsequent calls so post-test cleanup completes.
+	var deleteCallCount int
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
+		deleteCallCount++
+		if deleteCallCount <= 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-message":"delete failed: image in use"}]}}`)
+		} else {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"f5-tenant-images:output":{"result":"Successful."}}`)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create the resource (image already exists)
+			{
+				Config: testAccTenantImageCreateTC2ResourceConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+				),
+			},
+			// Step 2: Remove resource from config — triggers destroy.
+			// The first delete call returns 500 (exercising the error branch).
+			{
+				Config:      `# empty config - resource removed`,
+				ExpectError: regexp.MustCompile(`(?i)Unable to Delete Imported Image`),
 			},
 		},
 	})
@@ -2341,7 +3137,7 @@ func TestAccTenantImageImportWaitSuccess(t *testing.T) {
 	imageName := testAccGetExistingImageName(t)
 
 	// Pre-query the device to get the expected status for verification.
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create client: %v", err)
 	}
@@ -2471,7 +3267,7 @@ func TestAccTenantImageInsecureDirectAPIImport(t *testing.T) {
 	}
 	testAccPreCheck(t)
 
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Fatalf("Cannot create client: %v", err)
 	}
@@ -2552,7 +3348,7 @@ func TestAccTenantImageTransferStatusShape(t *testing.T) {
 	}
 	testAccPreCheckWithSetup(t)
 
-	client, err := newTenantImageClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Fatalf("Cannot create client: %v", err)
 	}

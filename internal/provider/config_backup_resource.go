@@ -168,7 +168,7 @@ func (r *CfgBackupResource) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 
 	if !exists {
-		req.State.RemoveResource(ctx)
+		resp.State.RemoveResource(ctx)
 	}
 }
 
@@ -180,6 +180,8 @@ func (r *CfgBackupResource) Update(ctx context.Context, req resource.UpdateReque
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
 func (r *CfgBackupResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {

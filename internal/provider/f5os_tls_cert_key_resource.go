@@ -2,6 +2,9 @@ package provider
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -167,6 +170,13 @@ func (r *PartitionCertKeyResource) Create(ctx context.Context, req resource.Crea
 		return
 	}
 
+	// Creating a self-signed cert restarts the F5OS HTTPS service. Wait
+	// briefly so subsequent API calls (e.g., Terraform's post-apply refresh)
+	// find the service available.
+	if err := waitForTLSService(ctx, r.client); err != nil {
+		resp.Diagnostics.AddWarning("RESTCONF service may still be restarting", err.Error())
+	}
+
 	data.Id = types.StringValue(tlsConfig.Name)
 	resp.Diagnostics.Append(resp.State.Set(ctx, data)...)
 }
@@ -209,6 +219,12 @@ func (r *PartitionCertKeyResource) Update(ctx context.Context, req resource.Upda
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update partition cert key", err.Error())
 		return
+	}
+
+	// Updating the cert restarts the F5OS HTTPS service. Wait briefly so
+	// subsequent API calls find the service available.
+	if err := waitForTLSService(ctx, r.client); err != nil {
+		resp.Diagnostics.AddWarning("RESTCONF service may still be restarting", err.Error())
 	}
 
 	data.Id = types.StringValue(tlsConfig.Name)
@@ -255,9 +271,52 @@ func getTLSConfig(data *PartitionCertKeyResourceModel) *f5ossdk.TlsCertKey {
 		StoreTls:             true,
 	}
 
-	if !data.SubjectAlternativeName.IsNull() || !data.SubjectAlternativeName.IsUnknown() {
+	if !data.SubjectAlternativeName.IsNull() && !data.SubjectAlternativeName.IsUnknown() {
 		certKeyConfig.SubjectAlternativeName = data.SubjectAlternativeName.ValueString()
 	}
 
 	return certKeyConfig
+}
+
+// waitForTLSService waits for the F5OS RESTCONF API to become available after a
+// TLS cert/key operation. Creating or updating a self-signed certificate
+// restarts the HTTPS service; this helper sleeps for an initial grace period,
+// then polls until the service responds with valid data or a timeout is reached.
+//
+// The wait is skipped when the client host is a loopback address (unit tests
+// with httptest.Server) to avoid adding unnecessary latency.
+func waitForTLSService(ctx context.Context, client *f5ossdk.F5os) error {
+	// Skip the wait for unit tests targeting localhost/127.0.0.1.
+	if strings.Contains(client.Host, "127.0.0.1") || strings.Contains(client.Host, "localhost") {
+		return nil
+	}
+
+	// Initial grace period to let the HTTPS service fully restart. The
+	// service typically takes 5-15s to come back; without this sleep the
+	// first poll might hit a partially-restarted service (TLS handshake
+	// failure) and confuse the retry logic.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(15 * time.Second):
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		resp, err := client.GetRequest("/openconfig-platform:components/component")
+		if err == nil && len(resp) > 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	return fmt.Errorf("RESTCONF API did not become available within 45 seconds after TLS cert/key operation")
 }

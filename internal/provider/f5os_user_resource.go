@@ -275,7 +275,8 @@ func (r *UserResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		// Only update password if it actually changed
 		if newPassword != oldPassword {
 			passwordChanged = true
-			err = r.changeUserPassword(ctx, username, oldPassword, newPassword)
+			// Use setUserPassword (admin set-password endpoint) since the provider runs as admin
+			err = r.setUserPassword(ctx, username, newPassword)
 			if err != nil {
 				resp.Diagnostics.AddError(
 					"Error Updating User Password",
@@ -410,12 +411,6 @@ type userPayload struct {
 // userResponseWrapper represents the API response structure
 type userResponseWrapper struct {
 	Users []UserStruct `json:"f5-system-aaa:user"`
-}
-
-// passwordChangePayload represents the password change API payload
-type passwordChangePayload struct {
-	OldPassword string `json:"f5-system-aaa:old-password,omitempty"`
-	NewPassword string `json:"f5-system-aaa:new-password"`
 }
 
 // createUserPayload creates the JSON payload for user creation/update (including password for new users)
@@ -567,59 +562,6 @@ func (r *UserResource) deleteUser(username string) error {
 	if err != nil {
 		return fmt.Errorf("API request failed: %w", err)
 	}
-
-	return nil
-}
-
-// changeUserPassword changes the password for an existing user using the change-password API
-func (r *UserResource) changeUserPassword(ctx context.Context, username, oldPassword, newPassword string) error {
-	tflog.Debug(ctx, "Changing User Password", map[string]any{
-		"username":   username,
-		"platform":   r.client.PlatformType,
-		"hasOldPass": oldPassword != "",
-	})
-
-	// Use the change-password endpoint for password changes
-	uri := fmt.Sprintf("/openconfig-system:system/aaa/authentication/f5-system-aaa:users/f5-system-aaa:user=%s/f5-system-aaa:config/f5-system-aaa:change-password", username)
-	passwordPayload := passwordChangePayload{
-		OldPassword: oldPassword,
-		NewPassword: newPassword,
-	}
-
-	payload, err := json.Marshal(passwordPayload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal password payload: %w", err)
-	}
-
-	tflog.Debug(ctx, "Password Change API Request", map[string]any{
-		"username": username,
-		"uri":      uri,
-		"payload":  string(payload),
-	})
-
-	respData, err := r.client.PostRequest(uri, payload)
-	if err != nil {
-		errStr := err.Error()
-		tflog.Debug(ctx, "Password Change API Error", map[string]any{
-			"error": errStr,
-		})
-
-		// Check for F5OS password policy violations
-		if strings.Contains(errStr, "password") &&
-			(strings.Contains(errStr, "length") ||
-				strings.Contains(errStr, "character") ||
-				strings.Contains(errStr, "dictionary check") ||
-				strings.Contains(errStr, "simplistic") ||
-				strings.Contains(errStr, "systematic")) {
-			return fmt.Errorf("password does not meet F5OS device policy requirements: %w", err)
-		}
-		return fmt.Errorf("API request failed: %w", err)
-	}
-
-	tflog.Debug(ctx, "Change User Password Response", map[string]any{
-		"username": username,
-		"response": string(respData),
-	})
 
 	return nil
 }

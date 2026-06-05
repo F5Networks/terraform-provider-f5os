@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"strconv"
+	"regexp"
 	"sync/atomic"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
-	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
 // ---------------------------------------------------------------------------
@@ -54,32 +52,7 @@ resource "f5os_ntp_server" "test" {
 }
 `
 
-// ---------------------------------------------------------------------------
-// Helper: create a fresh F5OS client from env vars (port defaults to 8888)
-// ---------------------------------------------------------------------------
 
-func newNtpClientFromEnv() (*f5ossdk.F5os, error) {
-	host := os.Getenv("F5OS_HOST")
-	user := os.Getenv("F5OS_USERNAME")
-	if user == "" {
-		user = os.Getenv("F5OS_USER")
-	}
-	pass := os.Getenv("F5OS_PASSWORD")
-	port := 8888 // Must default to 8888 to match the provider
-	if p := os.Getenv("F5OS_PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
-	cfg := &f5ossdk.F5osConfig{
-		Host:             host,
-		User:             user,
-		Password:         pass,
-		Port:             port,
-		DisableSSLVerify: true,
-	}
-	return f5ossdk.NewSession(cfg)
-}
 
 // ---------------------------------------------------------------------------
 // Direct API verification: check NTP server exists on device with expected values
@@ -87,7 +60,7 @@ func newNtpClientFromEnv() (*f5ossdk.F5os, error) {
 
 func testAccCheckNTPServerOnDevice(server string, expectKeyID int64, expectPrefer, expectIBurst bool) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newNtpClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create F5OS client: %w", err)
 		}
@@ -121,7 +94,7 @@ func testAccCheckNTPServerOnDevice(server string, expectKeyID int64, expectPrefe
 
 func testAccCheckNTPGlobalConfigOnDevice(expectService, expectAuth bool) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newNtpClientFromEnv()
+		client, err := newTestClientFromEnv()
 		if err != nil {
 			return fmt.Errorf("failed to create F5OS client: %w", err)
 		}
@@ -144,7 +117,7 @@ func testAccCheckNTPGlobalConfigOnDevice(expectService, expectAuth bool) resourc
 // ---------------------------------------------------------------------------
 
 func testAccCheckNTPServerDestroy(s *terraform.State) error {
-	client, err := newNtpClientFromEnv()
+	client, err := newTestClientFromEnv()
 	if err != nil {
 		// Cannot connect — treat as destroyed
 		return nil
@@ -959,6 +932,652 @@ func TestAccNTPServerKeyIDOmitted(t *testing.T) {
 		},
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Unit test: Create fails when CreateNTPServer returns an error
+// ---------------------------------------------------------------------------
+
+func TestUnitNTPCreateServerError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	// POST returns 500
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"NTP server creation failed"}]}}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testUnitNTPServerBasicConfig,
+				ExpectError: regexp.MustCompile(`NTP Create Error|NTP server creation failed`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Create fails when PatchNTPGlobalConfig returns an error
+// ---------------------------------------------------------------------------
+
+func TestUnitNTPCreatePatchGlobalConfigError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	// GET for specific server — needed after create attempt
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:server":[{"address":"10.20.30.40","config":{"address":"10.20.30.40","f5-openconfig-system-ntp:key-id":123,"prefer":true,"iburst":true}}]}`))
+		case "DELETE":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	// PATCH /ntp/config returns error
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"global config patch failed"}]}}`))
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:config":{"enabled":true,"enable-ntp-auth":true}}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testUnitNTPServerBasicConfig,
+				ExpectError: regexp.MustCompile(`NTP Global Config Error|global config patch failed`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Create resolves unknown ntp_service/ntp_authentication from device
+// when omitted, and fails when GetNTPGlobalConfig returns an error
+// ---------------------------------------------------------------------------
+
+func TestUnitNTPCreateGetGlobalConfigError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:server":[{"address":"10.20.30.40","config":{"address":"10.20.30.40","f5-openconfig-system-ntp:key-id":123,"prefer":true,"iburst":true}}]}`))
+		case "DELETE":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	// GET /ntp/config returns error — exercises the unknown-computed fallback path
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"global config read failed"}]}}`))
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				// ntp_service and ntp_authentication are omitted, so they arrive
+				// as Unknown. Create tries to resolve them via GetNTPGlobalConfig
+				// which fails.
+				Config:      testUnitNTPServerNoGlobalConfig,
+				ExpectError: regexp.MustCompile(`NTP Global Config Read Error|global config read failed`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Read fails when GetNTPServer returns an error
+// ---------------------------------------------------------------------------
+
+func TestUnitNTPReadGetServerError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "DELETE" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method == "GET" {
+			// Create does NOT call GetNTPServer, so all GETs come from Read.
+			// Return "not found" to exercise the Read error path.
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"invalid-value","error-message":"uri keypath not found"}]}}`))
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			w.WriteHeader(http.StatusNoContent)
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:config":{"enabled":true,"enable-ntp-auth":true}}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testUnitNTPServerBasicConfig,
+				ExpectError: regexp.MustCompile(`NTP Read Error|not found`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Read fails when GetNTPGlobalConfig returns an error
+// ---------------------------------------------------------------------------
+
+func TestUnitNTPReadGetGlobalConfigError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:server":[{"address":"10.20.30.40","config":{"address":"10.20.30.40","f5-openconfig-system-ntp:key-id":123,"prefer":true,"iburst":true}}]}`))
+		case "DELETE":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			// PATCH succeeds during Create (ntp_service and ntp_auth are set)
+			w.WriteHeader(http.StatusNoContent)
+		case "GET":
+			// Create does NOT call GetNTPGlobalConfig when ntp_service/ntp_auth
+			// are explicitly set (non-null, non-unknown). The first GET comes
+			// from Read, which should fail.
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"global config read failed"}]}}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testUnitNTPServerBasicConfig,
+				ExpectError: regexp.MustCompile(`NTP Global Config Read Error|global config read failed`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Update fails when UpdateNTPServer returns an error
+// ---------------------------------------------------------------------------
+
+func TestUnitNTPUpdateServerError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:server":[{"address":"10.20.30.40","config":{"address":"10.20.30.40","f5-openconfig-system-ntp:key-id":123,"prefer":true,"iburst":true}}]}`))
+		case "PATCH":
+			// Update fails
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"NTP server update failed"}]}}`))
+		case "DELETE":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			w.WriteHeader(http.StatusNoContent)
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:config":{"enabled":true,"enable-ntp-auth":true}}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create succeeds
+			{
+				Config: testUnitNTPServerBasicConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "server", "10.20.30.40"),
+				),
+			},
+			// Step 2: Update fails because PATCH returns 500
+			{
+				Config:      testUnitNTPServerUpdateNTPServiceConfig,
+				ExpectError: regexp.MustCompile(`NTP Update Error|NTP server update failed`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Update fails when PatchNTPGlobalConfig returns an error
+// ---------------------------------------------------------------------------
+
+func TestUnitNTPUpdatePatchGlobalConfigError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:server":[{"address":"10.20.30.40","config":{"address":"10.20.30.40","f5-openconfig-system-ntp:key-id":123,"prefer":true,"iburst":true}}]}`))
+		case "PATCH":
+			// Server-level PATCH succeeds (Update call)
+			w.WriteHeader(http.StatusNoContent)
+		case "DELETE":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	var ntpConfigPatchCount int32
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			count := atomic.AddInt32(&ntpConfigPatchCount, 1)
+			// First PATCH succeeds (Create), second PATCH fails (Update)
+			if count <= 1 {
+				w.WriteHeader(http.StatusNoContent)
+			} else {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"global config update failed"}]}}`))
+			}
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:config":{"enabled":true,"enable-ntp-auth":true}}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create succeeds
+			{
+				Config: testUnitNTPServerBasicConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "server", "10.20.30.40"),
+				),
+			},
+			// Step 2: Update — server PATCH succeeds but global config PATCH fails
+			{
+				Config:      testUnitNTPServerUpdateNTPServiceConfig,
+				ExpectError: regexp.MustCompile(`NTP Global Config Update Error|global config update failed`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Delete fails when DeleteNTPServer returns an error
+// ---------------------------------------------------------------------------
+
+func TestUnitNTPDeleteError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	var deleteAttempts int32
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:server":[{"address":"10.20.30.40","config":{"address":"10.20.30.40","f5-openconfig-system-ntp:key-id":123,"prefer":true,"iburst":true}}]}`))
+		case "DELETE":
+			count := atomic.AddInt32(&deleteAttempts, 1)
+			// doRequest retries 3 times. Fail the first 3 attempts
+			// (covering the error path), then let subsequent attempts
+			// succeed (post-test cleanup).
+			if count <= 3 {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"delete NTP server failed"}]}}`))
+			} else {
+				w.WriteHeader(http.StatusNoContent)
+			}
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			w.WriteHeader(http.StatusNoContent)
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:config":{"enabled":true,"enable-ntp-auth":true}}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create succeeds
+			{
+				Config: testUnitNTPServerBasicConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "server", "10.20.30.40"),
+				),
+			},
+			// Step 2: Remove resource from config — triggers destroy via plan diff.
+			// The DELETE handler returns 500 for the first 3 attempts
+			// (one full doRequest retry cycle), exercising the error path.
+			// Subsequent delete attempts succeed (for post-test cleanup).
+			{
+				Config:      `# empty config triggers destroy of f5os_ntp_server.test`,
+				ExpectError: regexp.MustCompile(`NTP Delete Error|delete NTP server failed`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Update resolves Unknown ntp_service/ntp_authentication from
+// device when they are omitted in the updated config, and fails when
+// GetNTPGlobalConfig returns an error during that resolution.
+// ---------------------------------------------------------------------------
+
+const testUnitNTPServerUpdateOmitGlobalConfig = `
+resource "f5os_ntp_server" "test" {
+  server = "10.20.30.40"
+  key_id = 123
+  prefer = false
+  iburst = false
+}
+`
+
+func TestUnitNTPUpdateGetGlobalConfigError(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:server":[{"address":"10.20.30.40","config":{"address":"10.20.30.40","f5-openconfig-system-ntp:key-id":123,"prefer":true,"iburst":true}}]}`))
+		case "PATCH":
+			w.WriteHeader(http.StatusNoContent)
+		case "DELETE":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	var ntpConfigGetCount int32
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			// PATCH succeeds during Create (ntp_service and ntp_auth are set)
+			w.WriteHeader(http.StatusNoContent)
+		case "GET":
+			count := atomic.AddInt32(&ntpConfigGetCount, 1)
+			// GETs during Read (after Create and during Update refresh) succeed.
+			// The GET during Update's unknown-computed resolution fails.
+			// Read GET #1 (post-Create), Read GET #2 (Update pre-apply refresh)
+			// succeed. The Update method itself calls GetNTPGlobalConfig when
+			// ntp_service/ntp_authentication become Unknown — that one fails.
+			// Since we can't predict exact count, fail all GETs after the first two.
+			if count <= 2 {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"openconfig-system:config":{"enabled":true,"enable-ntp-auth":true}}`))
+			} else {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"global config read failed during update"}]}}`))
+			}
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create with explicit ntp_service/ntp_authentication
+			{
+				Config: testUnitNTPServerBasicConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_service", "true"),
+				),
+			},
+			// Step 2: Update — omit ntp_service/ntp_authentication so they
+			// become Unknown (Computed). Update tries GetNTPGlobalConfig which fails.
+			{
+				Config:      testUnitNTPServerUpdateOmitGlobalConfig,
+				ExpectError: regexp.MustCompile(`NTP Global Config Read Error|global config read failed`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Update successfully resolves Unknown ntp_service/ntp_authentication
+// from device when they are omitted in the updated config.
+// ---------------------------------------------------------------------------
+
+func TestUnitNTPUpdateResolvesUnknownGlobalConfig(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	var patched int32
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			if atomic.LoadInt32(&patched) != 0 {
+				// After PATCH, return updated values matching the new config
+				_, _ = w.Write([]byte(`{"openconfig-system:server":[{"address":"10.20.30.40","config":{"address":"10.20.30.40","f5-openconfig-system-ntp:key-id":123,"prefer":false,"iburst":false}}]}`))
+			} else {
+				// Before PATCH, return values matching step 1 config
+				_, _ = w.Write([]byte(`{"openconfig-system:server":[{"address":"10.20.30.40","config":{"address":"10.20.30.40","f5-openconfig-system-ntp:key-id":123,"prefer":true,"iburst":true}}]}`))
+			}
+		case "PATCH":
+			atomic.StoreInt32(&patched, 1)
+			w.WriteHeader(http.StatusNoContent)
+		case "DELETE":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			w.WriteHeader(http.StatusNoContent)
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:config":{"enabled":true,"enable-ntp-auth":true}}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create with explicit ntp_service=true, ntp_authentication=true
+			{
+				Config: testUnitNTPServerBasicConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_service", "true"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_authentication", "true"),
+				),
+			},
+			// Step 2: Update — omit ntp_service/ntp_authentication so they
+			// become Unknown (Computed). Update resolves them from the device
+			// via GetNTPGlobalConfig. Both should remain true from device.
+			{
+				Config: testUnitNTPServerUpdateOmitGlobalConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "prefer", "false"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "iburst", "false"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_service", "true"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "ntp_authentication", "true"),
+				),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: Read populates KeyID as null when device returns no key-id
+// (covers the nil-pointer branch in Read when KeyID is nil)
+// ---------------------------------------------------------------------------
+
+func TestUnitNTPReadKeyIDNull(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	// Return response WITHOUT key-id field to exercise nil branch
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.42", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:server":[{"address":"10.20.30.42","config":{"address":"10.20.30.42","prefer":true,"iburst":true}}]}`))
+		case "DELETE":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PATCH":
+			w.WriteHeader(http.StatusNoContent)
+		case "GET":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:config":{"enabled":true,"enable-ntp-auth":true}}`))
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testUnitNTPServerKeyIDOmittedConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.nokey", "server", "10.20.30.42"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.nokey", "prefer", "true"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.nokey", "iburst", "true"),
+					// key_id should not be present when device doesn't return it
+					resource.TestCheckNoResourceAttr("f5os_ntp_server.nokey", "key_id"),
+				),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance test (real device)
+// ---------------------------------------------------------------------------
 
 func TestAccF5osNTPServerResource(t *testing.T) {
 	resource.Test(t, resource.TestCase{

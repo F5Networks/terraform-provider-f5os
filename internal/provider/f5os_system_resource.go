@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -14,6 +16,23 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
+)
+
+// Device stabilization timing constants. SSHD cipher/kex/mac/hkey changes
+// cause the RESTCONF service to restart asynchronously, sometimes more than
+// once. These values control the polling and cooldown behaviour used by
+// waitForDeviceReady (provider) and waitForDeviceAvailable (tests).
+const (
+	// deviceStabilizeTimeout is how long to wait for the device after
+	// Create/Update/Delete operations that modify SSHD settings.
+	deviceStabilizeTimeout = 120 * time.Second
+
+	// devicePollInterval is the sleep between consecutive availability checks.
+	devicePollInterval = 5 * time.Second
+
+	// deviceCooldown is the pause between two consecutive successful checks
+	// required to confirm the device has truly stabilized.
+	deviceCooldown = 30 * time.Second
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -289,6 +308,17 @@ func (r *SystemResource) Create(ctx context.Context, req resource.CreateRequest,
 
 		tflog.Debug(ctx, fmt.Sprintf("[CREATE], Ssh Host Key Algo Resp:%+v", string(res)))
 
+	}
+
+	// SSHD cipher/kex/mac/hkey changes cause the RESTCONF service to restart
+	// asynchronously. Wait for the device to stabilize before returning so
+	// the framework's automatic post-Create Read succeeds.
+	if sshdChanged := !data.SshdCiphers.IsNull() || !data.SshdKeyAlg.IsNull() ||
+		!data.SshdMacAlg.IsNull() || !data.SshdHkeyAlg.IsNull(); sshdChanged {
+		if err := r.waitForDeviceReady(ctx, deviceStabilizeTimeout); err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("device did not stabilize after SSHD changes: %s", err))
+			return
+		}
 	}
 
 	data.Id = data.Hostname
@@ -584,9 +614,37 @@ func (r *SystemResource) Update(ctx context.Context, req resource.UpdateRequest,
 
 	tflog.Debug(ctx, fmt.Sprintf("[CREATE], System Resp:%+v", string(res)))
 
+	// SSHD cipher/kex/mac/hkey changes cause the RESTCONF service to restart
+	// asynchronously. Wait for the device to stabilize before returning so
+	// the framework's automatic post-Update Read succeeds. Only wait when an
+	// SSHD attribute actually changed (plan differs from prior state), not
+	// merely when it is present — avoiding an unnecessary cooldown when only
+	// non-SSHD fields were updated.
+	var prior SystemResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if sshdAttributesChanged(data, &prior) {
+		if err := r.waitForDeviceReady(ctx, deviceStabilizeTimeout); err != nil {
+			resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("device did not stabilize after SSHD changes: %s", err))
+			return
+		}
+	}
+
 	data.Id = data.Hostname
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+}
+
+// sshdAttributesChanged returns true if any SSHD-related attribute differs
+// between the plan and the prior state, indicating a change that may trigger
+// a RESTCONF service restart.
+func sshdAttributesChanged(plan, prior *SystemResourceModel) bool {
+	return !plan.SshdCiphers.Equal(prior.SshdCiphers) ||
+		!plan.SshdKeyAlg.Equal(prior.SshdKeyAlg) ||
+		!plan.SshdMacAlg.Equal(prior.SshdMacAlg) ||
+		!plan.SshdHkeyAlg.Equal(prior.SshdHkeyAlg)
 }
 
 // Delete only guards optional fields with IsNull() (not IsUnknown()) because
@@ -673,11 +731,93 @@ func (r *SystemResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		}
 	}
 
+	// SSHD cipher/kex/mac/hkey deletions cause the RESTCONF service to restart
+	// asynchronously. Wait for the device to stabilize so that subsequent
+	// operations (e.g., a new test creating the resource) succeed.
+	// Note: For Delete, we log but don't fail if stabilization times out since
+	// the resource removal itself completed successfully.
+	if sshdChanged := !data.SshdCiphers.IsNull() || !data.SshdKeyAlg.IsNull() ||
+		!data.SshdMacAlg.IsNull() || !data.SshdHkeyAlg.IsNull(); sshdChanged {
+		if err := r.waitForDeviceReady(ctx, deviceStabilizeTimeout); err != nil {
+			tflog.Warn(ctx, fmt.Sprintf("[DELETE] %s", err))
+		}
+	}
+
 	resp.State.RemoveResource(ctx)
 }
 
 func (r *SystemResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
+// waitForDeviceReady polls the device RESTCONF API until it responds
+// successfully on both the system config and cipher service endpoints,
+// with a cooldown period to confirm stability. SSHD cipher/kex/mac/hkey
+// changes cause the RESTCONF service to restart asynchronously; this
+// method should be called after such changes to ensure the subsequent
+// Read succeeds.
+func (r *SystemResource) waitForDeviceReady(ctx context.Context, timeout time.Duration) error {
+	check := func() bool {
+		_, err := r.client.GetRequest("/openconfig-system:system/config")
+		if err != nil {
+			return false
+		}
+		_, err = r.client.GetRequest("/openconfig-system:system/f5-security-ciphers:security/services/service")
+		if err != nil {
+			return false
+		}
+		_, err = r.client.GetRequest("/openconfig-system:system/aaa")
+		return err == nil
+	}
+
+	if err := pollUntilStable(check, timeout); err != nil {
+		return err
+	}
+	tflog.Info(ctx, "[waitForDeviceReady] Device stabilized after SSHD changes")
+	return nil
+}
+
+// pollUntilStable is the shared polling/cooldown loop used by both the
+// provider (waitForDeviceReady) and tests (waitForDeviceAvailable).
+// It calls check repeatedly until two consecutive successes are separated
+// by a cooldown period, confirming the device has truly stabilized.
+// The cooldown is capped to the remaining deadline to prevent overshoot.
+//
+// When F5OS_POLL_INTERVAL is set (unit test mode), the cooldown and interval
+// are reduced to 1ms so that unit tests are not blocked by the 30-second
+// stabilization wait that real devices need.
+func pollUntilStable(check func() bool, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	interval := devicePollInterval
+	cooldown := deviceCooldown
+
+	// In unit tests, F5OS_POLL_INTERVAL is set to a short value (e.g. "1ms").
+	// Honor that for the cooldown and interval so tests run fast.
+	if v := os.Getenv("F5OS_POLL_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+			cooldown = d
+		}
+	}
+
+	for time.Now().Before(deadline) {
+		if check() {
+			// Cap cooldown to remaining time before deadline.
+			remaining := time.Until(deadline)
+			if remaining < cooldown {
+				cooldown = remaining
+			}
+			if cooldown <= 0 {
+				break
+			}
+			time.Sleep(cooldown)
+			if check() {
+				return nil
+			}
+		}
+		time.Sleep(interval)
+	}
+	return fmt.Errorf("device did not stabilize within %v", timeout)
 }
 
 func (r *SystemResource) SystemResourceModelToState(ctx context.Context, resSystemConfig *f5ossdk.F5ResSystemConfig, resClockConfig *f5ossdk.F5ResClockConfig,
