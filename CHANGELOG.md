@@ -1,4 +1,11 @@
-## 1.12.0 (Unreleased)
+## 1.13.0 (Unreleased)
+
+BREAKING CHANGES:
+FEATURES:
+BUG FIXES:
+IMPROVEMENTS:
+
+## 1.12.0
 
 BREAKING CHANGES:
 * Minimum Go version is now 1.25 (upgraded from 1.23). Contributors and CI environments must use Go 1.25+.
@@ -13,6 +20,7 @@ BUG FIXES:
 * `f5os_user`: Password update now uses admin set-password endpoint, fixing failures when provider does not have the user's old password
 
 IMPROVEMENTS:
+* Aligned GitHub Actions unit test job timeout with GitLab CI (30m to 65m)
 * Removed redundant `go:build` CI job (compilation already covered by lint and unit test jobs)
 * Added unit tests for `common.go` utility functions
 * Added unit tests for `f5os_tenant_image` data source
