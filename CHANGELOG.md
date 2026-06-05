@@ -21,6 +21,7 @@ BUG FIXES:
 
 IMPROVEMENTS:
 * Aligned GitHub Actions unit test job timeout with GitLab CI (30m to 65m)
+* CI/CD: Made GitHub Actions `govulncheck` job non-blocking (`continue-on-error`) pending Go toolchain upgrade to 1.25.11
 * Removed redundant `go:build` CI job (compilation already covered by lint and unit test jobs)
 * Added unit tests for `common.go` utility functions
 * Added unit tests for `f5os_tenant_image` data source
