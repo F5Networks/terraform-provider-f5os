@@ -14,6 +14,16 @@ import (
 	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
+const (
+	// devicePreCheckTimeout is how long testAccPreCheckWithRetry and
+	// testAccCheckSystemDestroy wait for the device before giving up.
+	devicePreCheckTimeout = 90 * time.Second
+
+	// deviceStepTimeout is how long PreConfig closures between test steps
+	// wait for the device before giving up.
+	deviceStepTimeout = 60 * time.Second
+)
+
 // ---------------------------------------------------------------------------
 // Unit test: verifies Read populates sshd_ciphers, sshd_kex_alg, sshd_mac_alg,
 // sshd_hkey_alg from the device API response (not from stale state).
