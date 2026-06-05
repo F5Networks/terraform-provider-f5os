@@ -1,0 +1,20 @@
+{
+    "f5-tenant-images:image": [
+        {
+            "name": "BIGIP-17.1.0.2-0.0.2.ALL-F5OS.qcow2.zip.bundle",
+            "in-use": true,
+            "type": "vm-image",
+            "status": "verified",
+            "date": "2024-01-15",
+            "size": "2.53 GB"
+        },
+        {
+            "name": "BIGIP-15.1.10.3-0.0.5.ALL-F5OS.qcow2.zip.bundle",
+            "in-use": false,
+            "type": "vm-image",
+            "status": "verified",
+            "date": "2024-02-20",
+            "size": "1.93 GB"
+        }
+    ]
+}

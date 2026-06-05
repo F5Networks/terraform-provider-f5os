@@ -1,0 +1,80 @@
+{
+    "openconfig-interfaces:interface": [
+        {
+            "name": "1.0",
+            "config": {
+                "name": "1.0",
+                "type": "iana-if-type:ethernetCsmacd",
+                "enabled": true
+            },
+            "state": {
+                "name": "1.0",
+                "type": "iana-if-type:ethernetCsmacd",
+                "mtu": 9600,
+                "enabled": true,
+                "oper-status": "UP",
+                "counters": {
+                    "in-octets": "11067281",
+                    "in-unicast-pkts": "0",
+                    "in-broadcast-pkts": "0",
+                    "in-multicast-pkts": "50398",
+                    "in-discards": "10075",
+                    "in-errors": "0",
+                    "in-fcs-errors": "0",
+                    "out-octets": "0",
+                    "out-unicast-pkts": "0",
+                    "out-broadcast-pkts": "0",
+                    "out-multicast-pkts": "0",
+                    "out-discards": "0",
+                    "out-errors": "0"
+                }
+            },
+            "openconfig-if-ethernet:ethernet": {
+                "config": {
+                    "port-speed": "openconfig-if-ethernet:SPEED_100GB"
+                },
+                "openconfig-vlan:switched-vlan": {
+                    "config": {
+                        "native-vlan": 13,
+                        "trunk-vlans": [10, 11, 12]
+                    }
+                }
+            }
+        },
+        {
+            "name": "2.0",
+            "config": {
+                "name": "2.0",
+                "type": "iana-if-type:ethernetCsmacd",
+                "enabled": false
+            },
+            "state": {
+                "name": "2.0",
+                "type": "iana-if-type:ethernetCsmacd",
+                "mtu": 1500,
+                "enabled": false,
+                "oper-status": "DOWN",
+                "counters": {
+                    "in-octets": "0",
+                    "in-unicast-pkts": "0",
+                    "in-broadcast-pkts": "0",
+                    "in-multicast-pkts": "0",
+                    "in-discards": "0",
+                    "in-errors": "0",
+                    "in-fcs-errors": "0",
+                    "out-octets": "0",
+                    "out-unicast-pkts": "0",
+                    "out-broadcast-pkts": "0",
+                    "out-multicast-pkts": "0",
+                    "out-discards": "0",
+                    "out-errors": "0"
+                }
+            },
+            "openconfig-if-ethernet:ethernet": {
+                "config": {
+                    "port-speed": "openconfig-if-ethernet:SPEED_25GB"
+                }
+            }
+        }
+    ]
+}

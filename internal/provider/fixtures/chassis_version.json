@@ -1,0 +1,22 @@
+{
+  "f5-system-controller-image:image": {
+    "state": {
+      "controllers": {
+        "controller": [
+          {
+            "number": 1,
+            "os-version": "1.6.0-9817",
+            "service-version": "1.6.0-9817",
+            "install-status": "success"
+          },
+          {
+            "number": 2,
+            "os-version": "1.6.0-9817",
+            "service-version": "1.6.0-9817",
+            "install-status": "success"
+          }
+        ]
+      }
+    }
+  }
+}

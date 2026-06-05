@@ -37,11 +37,11 @@ cover.out
 .agents
 reports/
 coverage_report.txt
-AGENTS.md
 *schemadiff
 !schemadiff/
 
 .secure_files/
+.env
 
 website/vendor
 
@@ -51,3 +51,9 @@ website/vendor
 
 # Keep windows files with windows line endings
 *.winfile eol=crlf
+
+# Exclude all *_report.md and *_report.jira files except those in the docs directory
+*_report.md
+*_report.jira
+!docs/*_report.md
+!docs/*_report.jira

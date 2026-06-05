@@ -19,6 +19,7 @@ import (
 // Ensure provider defined types fully satisfy framework interfaces.
 var _ resource.Resource = &LagResource{}
 var _ resource.ResourceWithImportState = &LagResource{}
+var _ resource.ResourceWithValidateConfig = &LagResource{}
 
 func NewLagResource() resource.Resource {
 	return &LagResource{}
@@ -36,6 +37,7 @@ type LagResourceModel struct {
 	Status     types.String `tfsdk:"status"`
 	Members    types.Set    `tfsdk:"members"`
 	Id         types.String `tfsdk:"id"`
+	LagType    types.String `tfsdk:"lag_type"`
 	Mode       types.String `tfsdk:"mode"`
 	Interval   types.String `tfsdk:"interval"`
 }
@@ -83,10 +85,22 @@ func (r *LagResource) Schema(ctx context.Context, req resource.SchemaRequest, re
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"lag_type": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "The type of the LAG interface: `LACP` for Link Aggregation Control Protocol or `STATIC` for a static LAG without LACP. Defaults to `LACP` if not specified, preserving backward compatibility. Set to `STATIC` to create a static LAG. Changing this value forces recreation of the resource.",
+				Validators: []validator.String{
+					stringvalidator.OneOf([]string{"LACP", "STATIC"}...),
+				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"mode": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "The LACP mode of the interface to be created.",
+				MarkdownDescription: "The LACP mode of the interface to be created. Only applicable when `lag_type` is `LACP`.",
 				Validators: []validator.String{
 					stringvalidator.OneOf([]string{"ACTIVE", "PASSIVE"}...),
 				},
@@ -94,12 +108,43 @@ func (r *LagResource) Schema(ctx context.Context, req resource.SchemaRequest, re
 			"interval": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "The LACP interval of the interface to be created.",
+				MarkdownDescription: "The LACP interval of the interface to be created. Only applicable when `lag_type` is `LACP`.",
 				Validators: []validator.String{
 					stringvalidator.OneOf([]string{"SLOW", "FAST"}...),
 				},
 			},
 		},
+	}
+}
+
+func (r *LagResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var data LagResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// If lag_type is unknown (e.g. from a variable), skip validation at plan time.
+	if data.LagType.IsUnknown() {
+		return
+	}
+
+	isStatic := data.LagType.ValueString() == "STATIC"
+	if isStatic {
+		if !data.Mode.IsNull() && !data.Mode.IsUnknown() {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("mode"),
+				"Invalid Attribute Combination",
+				"mode cannot be set when lag_type is STATIC. LACP mode is only applicable to LACP LAGs.",
+			)
+		}
+		if !data.Interval.IsNull() && !data.Interval.IsUnknown() {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("interval"),
+				"Invalid Attribute Combination",
+				"interval cannot be set when lag_type is STATIC. LACP interval is only applicable to LACP LAGs.",
+			)
+		}
 	}
 }
 
@@ -121,13 +166,24 @@ func (r *LagResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 	tflog.Info(ctx, fmt.Sprintf("[CREATE] Config LAG Interface :%+v", data.Name.ValueString()))
-	interfaceReqConfig := getLagInterfaceConfig(ctx, data)
 
+	// Default lag_type to LACP if not specified, preserving backward compatibility
+	// with existing configurations that did not have a lag_type attribute.
+	if data.LagType.IsNull() || data.LagType.IsUnknown() {
+		data.LagType = types.StringValue("LACP")
+	}
+	isLACP := data.LagType.ValueString() == "LACP"
+
+	interfaceReqConfig := getLagInterfaceConfig(ctx, data)
 	tflog.Debug(ctx, fmt.Sprintf("lagInterfaceReqConfig Data:%+v", interfaceReqConfig))
 
 	membersConfig := getLagMembersConfig(ctx, data)
 
-	modeIntervalConfig := getLagModeIntervalConfig(ctx, data)
+	// Only build LACP mode/interval config for LACP LAGs; pass nil for static LAGs.
+	var modeIntervalConfig *f5ossdk.F5ReqLagInterfacesConfig
+	if isLACP {
+		modeIntervalConfig = getLagModeIntervalConfig(ctx, data)
+	}
 
 	respByte, err := r.client.CreateLagInterface(interfaceReqConfig, membersConfig, modeIntervalConfig)
 	if err != nil {
@@ -145,12 +201,16 @@ func (r *LagResource) Create(ctx context.Context, req resource.CreateRequest, re
 	}
 	tflog.Debug(ctx, fmt.Sprintf("LAG interface Resp :%+v", intfData))
 
-	lacpData, err := r.client.GetLacpInterface(data.Name.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get LACP Interface, got error: %s", err))
-		return
+	// Only query LACP interface for LACP LAGs; static LAGs have no LACP entry.
+	var lacpData *f5ossdk.LacpInterfaceResponses
+	if isLACP {
+		lacpData, err = r.client.GetLacpInterface(data.Name.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get LACP Interface, got error: %s", err))
+			return
+		}
+		tflog.Debug(ctx, fmt.Sprintf("LACP interface Resp :%+v", lacpData))
 	}
-	tflog.Debug(ctx, fmt.Sprintf("LACP interface Resp :%+v", lacpData))
 
 	r.lagInterfaceResourceModelToState(ctx, intfData, lacpData, data)
 
@@ -177,12 +237,23 @@ func (r *LagResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 	}
 	tflog.Debug(ctx, fmt.Sprintf("LAG interface Resp :%+v", intfData))
 
-	lacpData, err := r.client.GetLacpInterface(data.Id.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get LACP Interface, got error: %s", err))
-		return
+	// Detect lag-type from the device response to decide whether to query LACP.
+	isLACP := false
+	if len(intfData.OpenconfigInterfacesInterface) > 0 {
+		deviceLagType := intfData.OpenconfigInterfacesInterface[0].OpenconfigIfAggregateAggregation.Config.LagType
+		isLACP = deviceLagType == "LACP"
 	}
-	tflog.Debug(ctx, fmt.Sprintf("LACP interface Resp :%+v", lacpData))
+
+	// Only query LACP interface for LACP LAGs; static LAGs have no LACP entry.
+	var lacpData *f5ossdk.LacpInterfaceResponses
+	if isLACP {
+		lacpData, err = r.client.GetLacpInterface(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get LACP Interface, got error: %s", err))
+			return
+		}
+		tflog.Debug(ctx, fmt.Sprintf("LACP interface Resp :%+v", lacpData))
+	}
 
 	r.lagInterfaceResourceModelToState(ctx, intfData, lacpData, data)
 
@@ -204,11 +275,18 @@ func (r *LagResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 	tflog.Info(ctx, fmt.Sprintf("[UPDATE] Config LAG interface :%+v", data.Name.ValueString()))
+
+	isLACP := data.LagType.ValueString() == "LACP"
+
 	lagInterfaceReqConfig := getLagInterfaceConfig(ctx, data)
 	tflog.Info(ctx, fmt.Sprintf("lagInterfaceReqConfig Data:%+v", lagInterfaceReqConfig))
 
-	modeIntervalConfig := getLagModeIntervalConfig(ctx, data)
-	tflog.Info(ctx, fmt.Sprintf("modeIntervalConfig Data:%+v", modeIntervalConfig))
+	// Only build LACP mode/interval config for LACP LAGs; pass nil for static LAGs.
+	var modeIntervalConfig *f5ossdk.F5ReqLagInterfacesConfig
+	if isLACP {
+		modeIntervalConfig = getLagModeIntervalConfig(ctx, data)
+		tflog.Info(ctx, fmt.Sprintf("modeIntervalConfig Data:%+v", modeIntervalConfig))
+	}
 
 	if !data.Members.IsNull() && !data.Members.IsUnknown() {
 		memberData, err := r.client.GetLagInterface(data.Id.ValueString())
@@ -250,10 +328,14 @@ func (r *LagResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
-	lacpData, err := r.client.GetLacpInterface(data.Name.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get LACP Interface, got error: %s", err))
-		return
+	// Only query LACP interface for LACP LAGs.
+	var lacpData *f5ossdk.LacpInterfaceResponses
+	if isLACP {
+		lacpData, err = r.client.GetLacpInterface(data.Name.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to Read/Get LACP Interface, got error: %s", err))
+			return
+		}
 	}
 
 	tflog.Debug(ctx, fmt.Sprintf("LAG interface Resp :%+v", intfData))
@@ -291,15 +373,19 @@ func (r *LagResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 		}
 	}
 
-	err2 := r.client.RemoveLacpInterface(data.Id.ValueString())
-	if err2 != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to delete LACP interface, got error: %s", err2))
-		return
+	// Only remove the LACP interface for LACP LAGs; static LAGs have no LACP entry.
+	isLACP := data.LagType.ValueString() == "LACP"
+	if isLACP {
+		err2 := r.client.RemoveLacpInterface(data.Id.ValueString())
+		if err2 != nil {
+			resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to delete LACP interface, got error: %s", err2))
+			return
+		}
 	}
 
 	err3 := r.client.RemoveLagInterface(data.Id.ValueString())
 	if err3 != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to delete LAG interface, got error: %s", err2))
+		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to delete LAG interface, got error: %s", err3))
 		return
 	}
 
@@ -316,8 +402,21 @@ func (r *LagResource) lagInterfaceResourceModelToState(ctx context.Context, resp
 	}
 	data.TrunkVlans, _ = types.SetValueFrom(ctx, types.Int64Type, respData.OpenconfigInterfacesInterface[0].OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.TrunkVlans)
 	data.Status = types.StringValue(respData.OpenconfigInterfacesInterface[0].State.OperStatus)
-	data.Mode = types.StringValue(lacpData.OpenConfigLacpInterface[0].Config.Mode)
-	data.Interval = types.StringValue(lacpData.OpenConfigLacpInterface[0].Config.Interval)
+
+	// Populate lag_type from device response.
+	deviceLagType := respData.OpenconfigInterfacesInterface[0].OpenconfigIfAggregateAggregation.Config.LagType
+	if deviceLagType != "" {
+		data.LagType = types.StringValue(deviceLagType)
+	}
+
+	// Populate mode/interval from LACP data if available; leave null for static LAGs.
+	if lacpData != nil && len(lacpData.OpenConfigLacpInterface) > 0 {
+		data.Mode = types.StringValue(lacpData.OpenConfigLacpInterface[0].Config.Mode)
+		data.Interval = types.StringValue(lacpData.OpenConfigLacpInterface[0].Config.Interval)
+	} else {
+		data.Mode = types.StringNull()
+		data.Interval = types.StringNull()
+	}
 
 	var members []string
 	for _, member := range respData.OpenconfigInterfacesInterface[0].OpenconfigIfAggregateAggregation.State.Members.Member {
@@ -332,7 +431,7 @@ func getLagInterfaceConfig(ctx context.Context, data *LagResourceModel) *f5ossdk
 	interfaceReq.Config.Name = data.Name.ValueString()
 	interfaceReq.Config.Type = "iana-if-type:ieee8023adLag"
 	interfaceReq.Config.Enabled = true
-	interfaceReq.OpenconfigIfAggregateAggregation.Config.LagType = "LACP"
+	interfaceReq.OpenconfigIfAggregateAggregation.Config.LagType = data.LagType.ValueString()
 	interfaceReq.OpenconfigIfAggregateAggregation.Config.DistributioHash = "src-dst-ipport"
 	interfaceReq.OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.NativeVlan = int(data.NativeVlan.ValueInt64())
 	var trunkIds []int
