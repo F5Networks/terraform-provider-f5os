@@ -241,6 +241,7 @@ func TestUnitLagInterfaceCreateTC4Resource(t *testing.T) {
 const testAccLagInterfaceCreateUnitResourceConfig = `
 resource "f5os_lag" "test_lag" {
   name        = "tf-lag"
+  lag_type    = "LACP"
   native_vlan = 29
   trunk_vlans = [27, 28]
   members = ["1.1", "1.2"]
@@ -249,6 +250,7 @@ resource "f5os_lag" "test_lag" {
 const testAccInterfaceCreateUnitModifyResourceConfig = `
 resource "f5os_lag" "test_lag" {
   name        = "tf-lag"
+  lag_type    = "LACP"
   native_vlan = 28
   trunk_vlans = [27, 29]
   members = ["1.2"]
@@ -633,9 +635,10 @@ func TestUnitLagUpdateRemoveMembersError(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_lacp_config.json"))
 	})
 	// RemoveLagMembers calls DELETE on each member — fail first 3 attempts (SDK retry cycle),
-	// then succeed on subsequent attempts (cleanup destroy)
+	// then succeed on subsequent attempts (cleanup destroy).
+	// The SDK builds: /openconfig-interfaces:interfaces/interface=1.1/openconfig-if-ethernet:ethernet/config/openconfig-if-aggregate:aggregate-id
 	memberRemoveAttempt := 0
-	mux.HandleFunc("/restconf/data/interface=1.1/openconfig-if-ethernet:ethernet/config/openconfig-if-aggregate:aggregate-id", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=1.1/openconfig-if-ethernet:ethernet/config/openconfig-if-aggregate:aggregate-id", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "DELETE" {
 			memberRemoveAttempt++
 			if memberRemoveAttempt <= 3 {
@@ -646,7 +649,7 @@ func TestUnitLagUpdateRemoveMembersError(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/restconf/data/interface=1.2/openconfig-if-ethernet:ethernet/config/openconfig-if-aggregate:aggregate-id", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=1.2/openconfig-if-ethernet:ethernet/config/openconfig-if-aggregate:aggregate-id", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -663,7 +666,7 @@ func TestUnitLagUpdateRemoveMembersError(t *testing.T) {
 			},
 			{
 				Config:      testAccInterfaceCreateUnitModifyResourceConfig,
-				ExpectError: regexp.MustCompile(`(Unable to remove members from LAG interface|Provider produced inconsistent result)`),
+				ExpectError: regexp.MustCompile(`Unable to remove members from LAG interface`),
 			},
 		},
 	})
@@ -988,6 +991,206 @@ const testAccLagEmptyConfig = `
 `
 
 // ---------------------------------------------------------------------------
+// Unit tests: Static LAG lifecycle
+// ---------------------------------------------------------------------------
+
+const testUnitLagStaticCreateConfig = `
+resource "f5os_lag" "test_lag" {
+  name        = "tf-lag"
+  lag_type    = "STATIC"
+  native_vlan = 29
+  trunk_vlans = [27, 28]
+  members     = ["1.1", "1.2"]
+}
+`
+
+const testUnitLagStaticUpdateConfig = `
+resource "f5os_lag" "test_lag" {
+  name        = "tf-lag"
+  lag_type    = "STATIC"
+  native_vlan = 28
+  trunk_vlans = [27, 29]
+  members     = ["1.2"]
+}
+`
+
+// TestUnitLagStaticCreateReadImport verifies that a static LAG can be
+// created, read, and imported without any LACP interaction. The mock
+// server does NOT register a handler for the LACP endpoint — if Create
+// or Read attempts to query it, the test will fail with a 404.
+func TestUnitLagStaticCreateReadImport(t *testing.T) {
+	testAccPreUnitCheck(t)
+	lagMockProviderEndpoints(t)
+	lagMockWriteEndpoints()
+
+	// GetLagInterface returns the static fixture (lag-type: STATIC)
+	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=tf-lag", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_lag_static_config.json"))
+	})
+
+	// NO handler for /restconf/data/openconfig-lacp:lacp/interfaces/interface=tf-lag
+	// If the code tries to query LACP, it will hit the catch-all or 404.
+
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create and verify static LAG attributes
+			{
+				Config: testUnitLagStaticCreateConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_lag.test_lag", "name", "tf-lag"),
+					resource.TestCheckResourceAttr("f5os_lag.test_lag", "lag_type", "STATIC"),
+					resource.TestCheckResourceAttr("f5os_lag.test_lag", "native_vlan", "29"),
+					resource.TestCheckResourceAttr("f5os_lag.test_lag", "trunk_vlans.#", "2"),
+					resource.TestCheckResourceAttr("f5os_lag.test_lag", "members.#", "2"),
+					// mode and interval should not be in state for static LAGs
+					resource.TestCheckNoResourceAttr("f5os_lag.test_lag", "mode"),
+					resource.TestCheckNoResourceAttr("f5os_lag.test_lag", "interval"),
+				),
+			},
+			// Step 2: ImportState — Read must detect STATIC from device response
+			{
+				ResourceName:      "f5os_lag.test_lag",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+// TestUnitLagStaticUpdate verifies that updating a static LAG (change VLANs
+// and remove a member) works without any LACP interaction.
+func TestUnitLagStaticUpdate(t *testing.T) {
+	testAccPreUnitCheck(t)
+	lagMockProviderEndpoints(t)
+	lagMockWriteEndpoints()
+
+	var getCount int
+	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=tf-lag", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			getCount++
+			w.WriteHeader(http.StatusOK)
+			// First 4 GETs (Create + Read cycles): return original config
+			// Subsequent GETs (Update + Read cycles): return modified config
+			if getCount <= 4 {
+				_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_lag_static_config.json"))
+			} else {
+				_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_lag_static_config_modified.json"))
+			}
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Mock endpoints for member removal and VLAN cleanup during Update.
+	// Paths must use the full prefix that the SDK builds: /openconfig-interfaces:interfaces/interface=...
+	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=tf-lag/openconfig-if-aggregate:aggregation/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:native-vlan", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=tf-lag/openconfig-if-aggregate:aggregation/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:trunk-vlans=27", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=tf-lag/openconfig-if-aggregate:aggregation/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:trunk-vlans=28", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=1.1/openconfig-if-ethernet:ethernet/config/openconfig-if-aggregate:aggregate-id", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=1.2/openconfig-if-ethernet:ethernet/config/openconfig-if-aggregate:aggregate-id", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=tf-lag/openconfig-if-aggregate:aggregation/openconfig-vlan:switched-vlan", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// NO handler for LACP endpoint
+
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create static LAG
+			{
+				Config: testUnitLagStaticCreateConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_lag.test_lag", "lag_type", "STATIC"),
+					resource.TestCheckResourceAttr("f5os_lag.test_lag", "native_vlan", "29"),
+					resource.TestCheckResourceAttr("f5os_lag.test_lag", "members.#", "2"),
+				),
+			},
+			// Step 2: Update — change native VLAN, remove member
+			{
+				Config: testUnitLagStaticUpdateConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_lag.test_lag", "lag_type", "STATIC"),
+					resource.TestCheckResourceAttr("f5os_lag.test_lag", "native_vlan", "28"),
+					resource.TestCheckResourceAttr("f5os_lag.test_lag", "members.#", "1"),
+				),
+			},
+		},
+	})
+}
+
+// TestUnitLagStaticModeIntervalRejected verifies that the ValidateConfig
+// method rejects mode and interval when lag_type is STATIC.
+func TestUnitLagStaticModeIntervalRejected(t *testing.T) {
+	testAccPreUnitCheck(t)
+	lagMockProviderEndpoints(t)
+
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+resource "f5os_lag" "test_lag" {
+  name     = "tf-lag"
+  lag_type = "STATIC"
+  mode     = "ACTIVE"
+  members  = ["1.1"]
+}
+`,
+				ExpectError: regexp.MustCompile(`mode cannot be set when lag_type is STATIC`),
+			},
+		},
+	})
+}
+
+// TestUnitLagStaticIntervalRejected verifies that interval alone is also
+// rejected when lag_type is STATIC.
+func TestUnitLagStaticIntervalRejected(t *testing.T) {
+	testAccPreUnitCheck(t)
+	lagMockProviderEndpoints(t)
+
+	defer teardown()
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+resource "f5os_lag" "test_lag" {
+  name     = "tf-lag"
+  lag_type = "STATIC"
+  interval = "FAST"
+  members  = ["1.1"]
+}
+`,
+				ExpectError: regexp.MustCompile(`interval cannot be set when lag_type is STATIC`),
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Acceptance test helpers — direct device API verification
 // ---------------------------------------------------------------------------
 
@@ -1070,7 +1273,7 @@ func testAccCheckLagOnDevice(lagName string, expectedNativeVlan int, expectedTru
 func testAccCheckLagDestroy(s *terraform.State) error {
 	client, err := newTestClientFromEnv()
 	if err != nil {
-		return nil // Cannot connect — treat as destroyed
+		return fmt.Errorf("CheckDestroy: failed to create client: %w", err)
 	}
 
 	for _, rs := range s.RootModule().Resources {
@@ -1094,7 +1297,7 @@ func testAccCheckLagDestroy(s *terraform.State) error {
 func testAccCheckVlansDestroy(s *terraform.State) error {
 	client, err := newTestClientFromEnv()
 	if err != nil {
-		return nil
+		return fmt.Errorf("CheckDestroy: failed to create client: %w", err)
 	}
 
 	data, err := client.GetRequest("/openconfig-vlan:vlans")
@@ -1213,6 +1416,7 @@ resource "f5os_vlan" "vlan3943" {
 }
 resource "f5os_lag" "crud_test" {
   name        = "tf-acc-lag"
+  lag_type    = "LACP"
   native_vlan = f5os_vlan.vlan3941.vlan_id
   trunk_vlans = [
     f5os_vlan.vlan3942.vlan_id,
@@ -1239,6 +1443,7 @@ resource "f5os_vlan" "vlan3943" {
 }
 resource "f5os_lag" "crud_test" {
   name        = "tf-acc-lag"
+  lag_type    = "LACP"
   native_vlan = f5os_vlan.vlan3942.vlan_id
   trunk_vlans = [
     f5os_vlan.vlan3941.vlan_id,
@@ -1247,5 +1452,251 @@ resource "f5os_lag" "crud_test" {
   members  = ["2.0"]
   mode     = "ACTIVE"
   interval = "FAST"
+}
+`
+
+// ---------------------------------------------------------------------------
+// Acceptance tests: Static LAG support
+// ---------------------------------------------------------------------------
+
+// testAccCheckStaticLagOnDevice queries the device directly and verifies that
+// a static LAG exists with the expected properties and NO LACP configuration.
+func testAccCheckStaticLagOnDevice(lagName string, expectedNativeVlan int, expectedTrunkVlans []int, expectedMembers []string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTestClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+
+		intfData, err := client.GetLagInterface(lagName)
+		if err != nil {
+			return fmt.Errorf("failed to get LAG interface: %w", err)
+		}
+		if len(intfData.OpenconfigInterfacesInterface) == 0 {
+			return fmt.Errorf("LAG interface %q not found on device", lagName)
+		}
+
+		intf := intfData.OpenconfigInterfacesInterface[0]
+
+		// Verify lag-type is STATIC
+		gotLagType := intf.OpenconfigIfAggregateAggregation.Config.LagType
+		if gotLagType != "STATIC" {
+			return fmt.Errorf("lag-type: expected STATIC, got %q", gotLagType)
+		}
+
+		// Verify native VLAN
+		if expectedNativeVlan != 0 {
+			gotNativeVlan := intf.OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.NativeVlan
+			if gotNativeVlan != expectedNativeVlan {
+				return fmt.Errorf("native_vlan: expected %d, got %d", expectedNativeVlan, gotNativeVlan)
+			}
+		}
+
+		// Verify trunk VLANs
+		if expectedTrunkVlans != nil {
+			gotTrunkVlans := intf.OpenconfigIfAggregateAggregation.OpenconfigVlanSwitchedVlan.Config.TrunkVlans
+			if len(gotTrunkVlans) != len(expectedTrunkVlans) {
+				return fmt.Errorf("trunk_vlans: expected %v, got %v", expectedTrunkVlans, gotTrunkVlans)
+			}
+			for i, v := range expectedTrunkVlans {
+				if gotTrunkVlans[i] != v {
+					return fmt.Errorf("trunk_vlans[%d]: expected %d, got %d", i, v, gotTrunkVlans[i])
+				}
+			}
+		}
+
+		// Verify members
+		var gotMembers []string
+		for _, m := range intf.OpenconfigIfAggregateAggregation.State.Members.Member {
+			gotMembers = append(gotMembers, m.Name)
+		}
+		if len(gotMembers) != len(expectedMembers) {
+			return fmt.Errorf("members: expected %v, got %v", expectedMembers, gotMembers)
+		}
+		for _, expected := range expectedMembers {
+			found := false
+			for _, got := range gotMembers {
+				if got == expected {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("member %q not found on device; got %v", expected, gotMembers)
+			}
+		}
+
+		// Verify NO LACP configuration exists
+		lacpData, _ := client.GetLacpInterface(lagName)
+		if lacpData != nil && len(lacpData.OpenConfigLacpInterface) > 0 {
+			return fmt.Errorf("static LAG %q should not have LACP interface, but found one", lagName)
+		}
+
+		return nil
+	}
+}
+
+// TestAccLagStaticCreateResource tests creating a static LAG (no LACP).
+// This is the core customer-reported gap: static LAGs were not supported.
+func TestAccLagStaticCreateResource(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckLagDestroy,
+		Steps: []resource.TestStep{
+			// Step 1: Create a static LAG with explicit lag_type = "STATIC"
+			{
+				Config: testAccLagStaticCreateConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_lag.static_test", "name", "tf-acc-static"),
+					resource.TestCheckResourceAttr("f5os_lag.static_test", "lag_type", "STATIC"),
+					resource.TestCheckResourceAttr("f5os_lag.static_test", "members.#", "2"),
+					resource.TestCheckNoResourceAttr("f5os_lag.static_test", "mode"),
+					resource.TestCheckNoResourceAttr("f5os_lag.static_test", "interval"),
+					testAccCheckStaticLagOnDevice(
+						"tf-acc-static",
+						3951,
+						[]int{3952, 3953},
+						[]string{"1.0", "2.0"},
+					),
+				),
+			},
+			// Step 2: Import state — Read must detect STATIC from device
+			{
+				ResourceName:      "f5os_lag.static_test",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+const testAccLagStaticCreateConfig = `
+resource "f5os_vlan" "svlan3951" {
+  vlan_id = 3951
+  name    = "tf-acc-slag-v3951"
+}
+resource "f5os_vlan" "svlan3952" {
+  vlan_id = 3952
+  name    = "tf-acc-slag-v3952"
+}
+resource "f5os_vlan" "svlan3953" {
+  vlan_id = 3953
+  name    = "tf-acc-slag-v3953"
+}
+resource "f5os_lag" "static_test" {
+  name        = "tf-acc-static"
+  lag_type    = "STATIC"
+  native_vlan = f5os_vlan.svlan3951.vlan_id
+  trunk_vlans = [
+    f5os_vlan.svlan3952.vlan_id,
+    f5os_vlan.svlan3953.vlan_id,
+  ]
+  members = ["1.0", "2.0"]
+}
+`
+
+// TestAccLagDefaultIsLACPResource tests that omitting lag_type defaults to
+// LACP, preserving backward compatibility with existing configurations.
+func TestAccLagDefaultIsLACPResource(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckLagDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccLagDefaultIsLACPConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_lag.default_test", "name", "tf-acc-deflag"),
+					resource.TestCheckResourceAttr("f5os_lag.default_test", "lag_type", "LACP"),
+					resource.TestCheckResourceAttr("f5os_lag.default_test", "members.#", "1"),
+				),
+			},
+		},
+	})
+}
+
+const testAccLagDefaultIsLACPConfig = `
+resource "f5os_lag" "default_test" {
+  name    = "tf-acc-deflag"
+  members = ["2.0"]
+}
+`
+
+// TestAccLagStaticUpdateResource tests updating a static LAG — change VLANs
+// and members without any LACP interaction.
+func TestAccLagStaticUpdateResource(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckLagDestroy,
+		Steps: []resource.TestStep{
+			// Step 1: Create static LAG with 2 members
+			{
+				Config: testAccLagStaticUpdateStep1Config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_lag.update_test", "lag_type", "STATIC"),
+					resource.TestCheckResourceAttr("f5os_lag.update_test", "members.#", "2"),
+					resource.TestCheckResourceAttr("f5os_lag.update_test", "native_vlan", "3961"),
+					testAccCheckStaticLagOnDevice(
+						"tf-acc-supd",
+						3961,
+						[]int{3962},
+						[]string{"1.0", "2.0"},
+					),
+				),
+			},
+			// Step 2: Update — change native VLAN, remove a member
+			{
+				Config: testAccLagStaticUpdateStep2Config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_lag.update_test", "lag_type", "STATIC"),
+					resource.TestCheckResourceAttr("f5os_lag.update_test", "members.#", "1"),
+					resource.TestCheckResourceAttr("f5os_lag.update_test", "native_vlan", "3962"),
+					testAccCheckStaticLagOnDevice(
+						"tf-acc-supd",
+						3962,
+						[]int{3961},
+						[]string{"2.0"},
+					),
+				),
+			},
+		},
+	})
+}
+
+const testAccLagStaticUpdateStep1Config = `
+resource "f5os_vlan" "supd3961" {
+  vlan_id = 3961
+  name    = "tf-acc-supd-v3961"
+}
+resource "f5os_vlan" "supd3962" {
+  vlan_id = 3962
+  name    = "tf-acc-supd-v3962"
+}
+resource "f5os_lag" "update_test" {
+  name        = "tf-acc-supd"
+  lag_type    = "STATIC"
+  native_vlan = f5os_vlan.supd3961.vlan_id
+  trunk_vlans = [f5os_vlan.supd3962.vlan_id]
+  members     = ["1.0", "2.0"]
+}
+`
+
+const testAccLagStaticUpdateStep2Config = `
+resource "f5os_vlan" "supd3961" {
+  vlan_id = 3961
+  name    = "tf-acc-supd-v3961"
+}
+resource "f5os_vlan" "supd3962" {
+  vlan_id = 3962
+  name    = "tf-acc-supd-v3962"
+}
+resource "f5os_lag" "update_test" {
+  name        = "tf-acc-supd"
+  lag_type    = "STATIC"
+  native_vlan = f5os_vlan.supd3962.vlan_id
+  trunk_vlans = [f5os_vlan.supd3961.vlan_id]
+  members     = ["2.0"]
 }
 `
