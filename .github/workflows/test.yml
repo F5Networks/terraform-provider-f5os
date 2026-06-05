@@ -29,10 +29,9 @@ jobs:
           cache: true
       - run: go build -v .
       - name: Run linters
-        uses: golangci/golangci-lint-action@2226d7cb06a077cd73e56eedd38eecad18e5d837 # v6.5.0
+        uses: golangci/golangci-lint-action@db582008a42febd596419635a5abc9d9815daa9c # v9.2.1
         with:
-          version: v2.11.4
-          install-mode: goinstall
+          version: v2.12.2
 
   generate:
     runs-on: ubuntu-latest
