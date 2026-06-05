@@ -95,6 +95,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: coverage-${{ matrix.terraform }}
+          name: coverage-terraform-${{ matrix.terraform == '1.0.*' && '1.0' || matrix.terraform == '1.1.*' && '1.1' || '1.2' }}
           path: cover.out
           retention-days: 30
