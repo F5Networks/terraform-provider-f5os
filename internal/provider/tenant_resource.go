@@ -409,17 +409,20 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	data.MgmtGateway = types.StringValue(respData.F5TenantsTenant[0].State.Gateway)
 	data.Status = types.StringValue(respData.F5TenantsTenant[0].State.Status)
 	data.DagIpv6prefixLength = types.Int64Value(int64(respData.F5TenantsTenant[0].State.DagIpv6PrefixLength))
-	if respData.F5TenantsTenant[0].State.MacData.MacPoolSize == 1 {
-		data.MacBlockSize = types.StringValue("one")
-	}
-	if respData.F5TenantsTenant[0].State.MacData.MacPoolSize == 8 {
+	// Map the device-reported mac-pool-size to the mac_block_size attribute.
+	// Valid device values are 1/8/16/32; the default arm maps any other
+	// (unexpected) size to the documented default "one" so the Computed
+	// attribute is always set to a valid value rather than left unknown or
+	// stale, which would trigger a provider inconsistent-result error.
+	switch respData.F5TenantsTenant[0].State.MacData.MacPoolSize {
+	case 8:
 		data.MacBlockSize = types.StringValue("small")
-	}
-	if respData.F5TenantsTenant[0].State.MacData.MacPoolSize == 16 {
+	case 16:
 		data.MacBlockSize = types.StringValue("medium")
-	}
-	if respData.F5TenantsTenant[0].State.MacData.MacPoolSize == 32 {
+	case 32:
 		data.MacBlockSize = types.StringValue("large")
+	default:
+		data.MacBlockSize = types.StringValue("one")
 	}
 	if respData.F5TenantsTenant[0].State.Storage.Size == respData.F5TenantsTenant[0].Config.Storage.Size {
 		data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].State.Storage.Size))
