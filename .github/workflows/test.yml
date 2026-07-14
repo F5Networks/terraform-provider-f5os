@@ -71,11 +71,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # list whatever Terraform versions here you would like to support
+        # list whatever Terraform versions here you would like to support.
+        # 1.9.* mirrors the version pinned in the GitLab unit-tests job so
+        # both pipelines exercise the same modern Terraform line; the older
+        # 1.0/1.1/1.2 lines are retained for backward-compatibility coverage.
         terraform:
           - '1.0.*'
           - '1.1.*'
           - '1.2.*'
+          - '1.9.*'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.3.0
@@ -95,6 +99,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: coverage-terraform-${{ matrix.terraform == '1.0.*' && '1.0' || matrix.terraform == '1.1.*' && '1.1' || '1.2' }}
+          name: coverage-terraform-${{ matrix.terraform == '1.0.*' && '1.0' || matrix.terraform == '1.1.*' && '1.1' || matrix.terraform == '1.2.*' && '1.2' || '1.9' }}
           path: cover.out
           retention-days: 30

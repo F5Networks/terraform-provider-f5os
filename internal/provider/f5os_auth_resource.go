@@ -488,30 +488,55 @@ func (r *AuthResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
+	// cleanupErr captures the final error from the auth_order cleanup so it
+	// can be surfaced as a diagnostic. Unlike role-GID restoration (which is
+	// best-effort), failing to clear/restore auth_order must fail the destroy:
+	// otherwise Terraform removes the resource from state while the device is
+	// left with the Terraform-managed auth_order still applied (a dirty
+	// device with no error surfaced). Keeping the resource in state lets the
+	// user retry the destroy once connectivity/permissions are restored.
+	var cleanupErr error
+
 	if origData != nil {
 		var origMethods []string
 		if err := json.Unmarshal(origData, &origMethods); err != nil {
+			// Corrupt private state: we cannot restore the original order, so
+			// fall back to clearing the leaf entirely.
 			tflog.Warn(ctx, "failed to deserialize original auth order from private state, falling back to delete",
 				map[string]any{"error": err.Error()})
 			if err := r.deleteAuthOrder(ctx); err != nil {
-				tflog.Warn(ctx, "failed deleting auth order", map[string]any{"error": err.Error()})
+				cleanupErr = fmt.Errorf("failed deleting auth order: %w", err)
 			}
 		} else {
-			if err := r.restoreAuthOrder(ctx, origMethods); err != nil {
+			if restoreErr := r.restoreAuthOrder(ctx, origMethods); restoreErr != nil {
+				// Restore failed; fall back to clearing the leaf. Surface the
+				// clear error if that also fails.
 				tflog.Warn(ctx, "failed restoring original auth order, falling back to delete",
-					map[string]any{"error": err.Error(), "methods": origMethods})
+					map[string]any{"error": restoreErr.Error(), "methods": origMethods})
 				if err := r.deleteAuthOrder(ctx); err != nil {
-					tflog.Warn(ctx, "failed deleting auth order", map[string]any{"error": err.Error()})
+					cleanupErr = fmt.Errorf("failed restoring original auth order (%v) and fallback delete also failed: %w", restoreErr, err)
 				}
 			}
 		}
 	} else {
-		// No original auth order saved (e.g., resource created before this fix).
-		// Fall back to the old behavior of deleting the auth order.
+		// No original auth order saved (device had no auth_order configured
+		// at Create time, or the resource predates snapshotting). Clear the
+		// Terraform-managed auth_order to restore the unset baseline.
 		tflog.Warn(ctx, "No original auth order in private state, falling back to delete")
 		if err := r.deleteAuthOrder(ctx); err != nil {
-			tflog.Warn(ctx, "failed deleting auth order", map[string]any{"error": err.Error()})
+			cleanupErr = fmt.Errorf("failed deleting auth order: %w", err)
 		}
+	}
+
+	// If auth_order cleanup failed, surface it and abort the destroy so the
+	// resource remains in state for a retry. Do not remove the resource.
+	if cleanupErr != nil {
+		resp.Diagnostics.AddError(
+			"Failed to clean up auth_order during destroy",
+			fmt.Sprintf("The device may still have the Terraform-managed authentication order applied. "+
+				"The resource has been kept in state; re-run destroy once the device is reachable. Error: %v", cleanupErr),
+		)
+		return
 	}
 
 	// Restore the original role GIDs that were saved during Create/Import,

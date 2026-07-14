@@ -101,6 +101,29 @@ unit-tests:
     - if: $CI_COMMIT_TAG
     - if: $CI_PIPELINE_SOURCE == "schedule"
   stage: unittest
+  variables:
+    # Pin the Terraform CLI used by the plugin-testing framework. Without a
+    # Terraform binary on PATH the framework auto-downloads "latest" from
+    # releases.hashicorp.com at test time, which is both non-deterministic
+    # (version drifts away from the versions GitHub Actions tests against)
+    # and fragile — a transient network failure reaching releases.hashicorp.com
+    # fails the whole suite before any test runs (observed: EOF fetching
+    # terraform/1.15.8/index.json). Pinning + pre-installing removes the
+    # runtime download entirely.
+    TF_VERSION: "1.9.8"
+    # Override TERRAFORM_MIRROR (e.g. to an internal artifactory mirror) to
+    # avoid depending on external releases.hashicorp.com reachability.
+    TERRAFORM_MIRROR: "https://releases.hashicorp.com"
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends unzip
+    - curl -fsSL -o /tmp/terraform.zip
+        "${TERRAFORM_MIRROR}/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+    - unzip -o /tmp/terraform.zip -d /usr/local/bin
+    - rm -f /tmp/terraform.zip
+    # Point the plugin-testing framework at the pinned binary so it never
+    # attempts an on-the-fly download.
+    - export TF_ACC_TERRAFORM_PATH="$(command -v terraform)"
+    - terraform version
   script:
     - make test
     - go tool cover -func=cover.out > coverage_report.txt
