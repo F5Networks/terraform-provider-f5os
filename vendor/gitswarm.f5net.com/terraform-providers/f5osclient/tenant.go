@@ -439,7 +439,12 @@ func (p *F5os) CreateTenant(tenantObj *F5ReqTenants, timeOut int) ([]byte, error
 		if timeDiff.Seconds() > float64(timeOut) {
 			tenantMap, _ := p.getTenantDeployStatus(tenantObj.F5TenantsTenant[0].Name)
 			tenantResp, _ := json.Marshal(tenantMap)
-			tenantStatus := tenantMap["f5-tenants:state"].(map[string]interface{})["status"].(string)
+			// Guard the untyped-map access: in F5OS 2.0.0 the state response
+			// shape changed and status may be absent, so avoid a panic here.
+			var tenantStatus string
+			if stateMap, ok := tenantMap["f5-tenants:state"].(map[string]interface{}); ok {
+				tenantStatus, _ = stateMap["status"].(string)
+			}
 			errorNew := struct {
 				Status  string          `json:"status"`
 				Message string          `json:"message"`
@@ -591,10 +596,14 @@ func (p *F5os) tenantWait(tenantName, runningState string) (bool, error) {
 	if err != nil {
 		return true, err
 	}
-	if tenantMap["f5-tenants:state"].(map[string]interface{})["status"] == nil {
+	stateMap, ok := tenantMap["f5-tenants:state"].(map[string]interface{})
+	if !ok {
 		return true, fmt.Errorf("tenant status not found")
 	}
-	tenantStatus := tenantMap["f5-tenants:state"].(map[string]interface{})["status"].(string)
+	tenantStatus, ok := stateMap["status"].(string)
+	if !ok {
+		return true, fmt.Errorf("tenant status not found")
+	}
 	f5osLogger.Info("[tenantWait]", "tenantName:", hclog.Fmt("%+v", tenantName))
 	f5osLogger.Info("[tenantWait]", "f5-tenants:state", hclog.Fmt("%+v", tenantStatus))
 	if strings.Contains(tenantStatus, "Running") && runningState == "deployed" {
@@ -608,20 +617,37 @@ func (p *F5os) tenantWait(tenantName, runningState string) (bool, error) {
 	}
 	if strings.Contains(tenantStatus, "Pending") {
 		// map[instance:[map[creation-time: instance-id:2 node:2 phase:Insufficient slots to deploy tenant pod-name:test-tenant22-2 ready-time: status:Tenant deployment will be processed when the slot available in partition]]]
-		jsonDataold, _ := json.Marshal(tenantMap["f5-tenants:state"].(map[string]interface{})["instances"].(map[string]interface{})["instance"].([]interface{})[0])
-		if tenantMap["f5-tenants:state"].(map[string]interface{})["instances"] != nil {
-			errorNew := struct {
-				Status  string          `json:"status"`
-				Message string          `json:"message"`
-				Details json.RawMessage `json:"details"`
-			}{
-				Status:  "Tenant Deployment Pending",
-				Message: tenantMap["f5-tenants:state"].(map[string]interface{})["instances"].(map[string]interface{})["instance"].([]interface{})[0].(map[string]interface{})["phase"].(string),
-				Details: json.RawMessage(string(jsonDataold)),
-			}
-			jsonData, _ := json.Marshal(errorNew)
-			return false, fmt.Errorf("%v", string(jsonData))
+		//
+		// In F5OS 2.0.0 the tenant state response no longer includes
+		// state.instances. Guard every level of the untyped-map access
+		// before asserting types so an absent (nil) instances field does
+		// not panic (interface conversion: interface {} is nil) while the
+		// status is Pending. Treat the instances detail as best-effort.
+		instances, ok := stateMap["instances"].(map[string]interface{})
+		if !ok {
+			return true, nil
 		}
+		instanceList, ok := instances["instance"].([]interface{})
+		if !ok || len(instanceList) == 0 {
+			return true, nil
+		}
+		instance, ok := instanceList[0].(map[string]interface{})
+		if !ok {
+			return true, nil
+		}
+		phase, _ := instance["phase"].(string)
+		jsonDataold, _ := json.Marshal(instanceList[0])
+		errorNew := struct {
+			Status  string          `json:"status"`
+			Message string          `json:"message"`
+			Details json.RawMessage `json:"details"`
+		}{
+			Status:  "Tenant Deployment Pending",
+			Message: phase,
+			Details: json.RawMessage(string(jsonDataold)),
+		}
+		jsonData, _ := json.Marshal(errorNew)
+		return false, fmt.Errorf("%v", string(jsonData))
 	}
 	return true, nil
 }

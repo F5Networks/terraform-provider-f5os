@@ -25,19 +25,6 @@
         "appliance-mode": {
             "enabled": false
         },
-        "status": "Pending",
-        "instances": {
-            "instance": [
-                {
-                    "node": 2,
-                    "pod-name": "test-tenant22-2",
-                    "instance-id": 2,
-                    "phase": "Insufficient slots to deploy tenant",
-                    "creation-time": "",
-                    "ready-time": "",
-                    "status": "Tenant deployment will be processed when the slot available in partition"
-                }
-            ]
-        }
+        "status": "Pending"
     }
 }
