@@ -574,8 +574,6 @@ func testAccCheckTenantTypeOnDevice(tenantName, expectedType string) resource.Te
 	}
 }
 
-
-
 // testAccCheckTenantDestroy verifies the test tenant no longer exists.
 func testAccCheckTenantDestroy(s *terraform.State) error {
 	if os.Getenv("F5OS_HOST") == "" {
@@ -1539,6 +1537,92 @@ func TestUnitTenantDeleteError(t *testing.T) {
 		},
 	})
 }
+
+// TestUnitTenantMacBlockAbsent2_0_0 verifies that a tenant Read succeeds when
+// the F5OS 2.0.0 state response omits state.mac-data.f5-tenant-l2-inline:mac-block.
+// The provider only consumes mac-data.mac-pool-size (still present in 2.0.0) to
+// derive mac_block_size, and the absent mac-block slice decodes to nil, so the
+// missing field is a functional no-op — no error and no panic.
+func TestUnitTenantMacBlockAbsent2_0_0(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	// The poll/state endpoint (used by tenantWait) returns the 2.0.0 state
+	// shape with mac-data but no mac-block.
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2/state", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_get_status_2_0_0.json"))
+	})
+	deleted := false
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "DELETE" {
+			deleted = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == "GET" && !deleted {
+			w.WriteHeader(http.StatusOK)
+			// The Read path (GetTenant) returns the 2.0.0 full object whose
+			// state.mac-data omits f5-tenant-l2-inline:mac-block.
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_config_2_0_0.json"))
+		} else if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"invalid-value","error-message":"uri keypath not found"}]}}`)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantMacBlockAbsent2_0_0,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// mac-pool-size 1 -> "one"; absence of mac-block is a no-op.
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "mac_block_size", "one"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "status", "Configured"),
+				),
+			},
+		},
+	})
+}
+
+const testAccTenantMacBlockAbsent2_0_0 = `
+resource "f5os_tenant" "test2" {
+  name              = "testtenant-ecosys2"
+  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  mgmt_ip           = "10.10.10.26"
+  mgmt_gateway      = "10.10.10.1"
+  mgmt_prefix       = 24
+  type              = "BIG-IP"
+  cpu_cores         = 8
+  running_state     = "configured"
+  virtual_disk_size = 82
+  mac_block_size    = "one"
+  vlans             = [ 1 ]
+}
+`
 
 // TestUnitTenantMacBlockSizeSmall verifies mac_block_size="small" (pool_size=8).
 func TestUnitTenantMacBlockSizeSmall(t *testing.T) {
@@ -2514,5 +2598,3 @@ resource "f5os_tenant" "mem_test" {
 }
 `, tenantTestImage())
 }
-
-

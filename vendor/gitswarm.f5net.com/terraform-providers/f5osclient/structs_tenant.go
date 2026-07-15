@@ -101,7 +101,7 @@ type F5ReqTenant struct {
 		} `json:"storage,omitempty"`
 		Hugepages []struct {
 			Slot int    `json:"slot,omitempty"`
-			Path string `json:"pathomitempty"`
+			Path string `json:"path,omitempty"`
 		} `json:"hugepages,omitempty"`
 		RunningState  string `json:"running-state,omitempty"`
 		TrustMode     string `json:"trust-mode,omitempty"`
@@ -155,7 +155,7 @@ type F5RespTenant struct {
 		} `json:"storage,omitempty"`
 		Hugepages []struct {
 			Slot int    `json:"slot,omitempty"`
-			Path string `json:"pathomitempty"`
+			Path string `json:"path,omitempty"`
 		} `json:"hugepages,omitempty"`
 		RunningState  string `json:"running-state,omitempty"`
 		TrustMode     string `json:"trust-mode,omitempty"`
@@ -185,8 +185,15 @@ type F5RespTenant struct {
 		TrustMode           bool   `json:"trust-mode,omitempty"`
 		DagIpv6PrefixLength int    `json:"dag-ipv6-prefix-length,omitempty"`
 		MacData             struct {
-			BaseMac                  string `json:"base-mac,omitempty"`
-			MacPoolSize              int    `json:"mac-pool-size,omitempty"`
+			BaseMac     string `json:"base-mac,omitempty"`
+			MacPoolSize int    `json:"mac-pool-size,omitempty"`
+			// F5TenantL2InlineMacBlock is best-effort. As of F5OS 2.0.0 the
+			// tenant state response no longer includes
+			// state.mac-data.f5-tenant-l2-inline:mac-block (nor its
+			// mac-block[].mac entries). It stays omitempty so an absent field
+			// simply decodes to a nil slice. Nothing in the provider consumes
+			// this field (only MacPoolSize, which 2.0.0 still returns, is read
+			// in the tenant Read path), so its absence is a functional no-op.
 			F5TenantL2InlineMacBlock []struct {
 				Mac string `json:"mac,omitempty"`
 			} `json:"f5-tenant-l2-inline:mac-block,omitempty"`
