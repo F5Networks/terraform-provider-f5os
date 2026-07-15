@@ -3944,3 +3944,267 @@ resource "f5os_auth" "test" {
 		},
 	})
 }
+
+// setupLoginPolicyMock registers a stateful login-policy handler plus the
+// baseline auth/platform handlers used by the login_policy unit tests. The
+// device version reported to the provider is controlled by the caller via
+// setupMockPlatformVersion.
+func setupLoginPolicyMock(t *testing.T, currentPolicy map[string]interface{}) {
+	t.Helper()
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"openconfig-system:config":{"authentication-method":["openconfig-aaa-types:LOCAL"]}}`)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config/authentication-method", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-openconfig-aaa-login-policy:login-policy/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/yang-data+json")
+			w.WriteHeader(http.StatusOK)
+			resp := map[string]interface{}{
+				"f5-openconfig-aaa-login-policy:config": currentPolicy,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case "PATCH":
+			var payload map[string]map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if config, ok := payload["f5-openconfig-aaa-login-policy:config"]; ok {
+				for k, v := range config {
+					currentPolicy[k] = v
+				}
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+}
+
+// TestUnitAuthResourceLoginPolicy2_0_0 exercises the login_policy nested block
+// on an F5OS 2.0.0 device: Create sends the config, Read refreshes it, and
+// Update changes it. Verifies all three login-policy fields round-trip.
+func TestUnitAuthResourceLoginPolicy2_0_0(t *testing.T) {
+	currentPolicy := map[string]interface{}{
+		"admin-role-limit":           false,
+		"restconf-max-session-limit": float64(10),
+		"ssh-max-session-limit":      float64(10),
+	}
+
+	testAccPreUnitCheck(t)
+	setupMockPlatformVersion(mux, "2.0.0")
+	setupLoginPolicyMock(t, currentPolicy)
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  login_policy = {
+    admin_role_limit           = true
+    restconf_max_session_limit = 5
+    ssh_max_session_limit      = 8
+  }
+}
+`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.admin_role_limit", "true"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.restconf_max_session_limit", "5"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.ssh_max_session_limit", "8"),
+				),
+			},
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  login_policy = {
+    admin_role_limit           = false
+    restconf_max_session_limit = 3
+    ssh_max_session_limit      = 4
+  }
+}
+`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.admin_role_limit", "false"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.restconf_max_session_limit", "3"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.ssh_max_session_limit", "4"),
+				),
+			},
+		},
+	})
+}
+
+// TestUnitAuthResourceLoginPolicyRejectedPre2_0_0 verifies that configuring
+// login_policy on a device below 2.0.0 produces a clear error rather than
+// sending an unknown field to the device.
+func TestUnitAuthResourceLoginPolicyRejectedPre2_0_0(t *testing.T) {
+	currentPolicy := map[string]interface{}{}
+
+	testAccPreUnitCheck(t)
+	setupMockPlatformVersion(mux, "1.8.0")
+	setupLoginPolicyMock(t, currentPolicy)
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  login_policy = {
+    admin_role_limit = true
+  }
+}
+`,
+				ExpectError: regexp.MustCompile(`login_policy is not supported on F5OS versions below 2.0.0`),
+			},
+		},
+	})
+}
+
+// testAccCheckLoginPolicyApplied queries the device directly (bypassing the
+// resource Read method) and verifies the login-policy fields match the
+// expected values.
+func testAccCheckLoginPolicyApplied(adminRoleLimit bool, restconfLimit, sshLimit int64) tfresource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTestClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+		policy, err := client.GetLoginPolicy()
+		if err != nil {
+			return fmt.Errorf("GetLoginPolicy failed: %w", err)
+		}
+		if policy.AdminRoleLimit == nil || *policy.AdminRoleLimit != adminRoleLimit {
+			return fmt.Errorf("admin-role-limit: expected %v, got %v", adminRoleLimit, policy.AdminRoleLimit)
+		}
+		if policy.RestconfMaxSessionLimit == nil || *policy.RestconfMaxSessionLimit != restconfLimit {
+			return fmt.Errorf("restconf-max-session-limit: expected %d, got %v", restconfLimit, policy.RestconfMaxSessionLimit)
+		}
+		if policy.SSHMaxSessionLimit == nil || *policy.SSHMaxSessionLimit != sshLimit {
+			return fmt.Errorf("ssh-max-session-limit: expected %d, got %v", sshLimit, policy.SSHMaxSessionLimit)
+		}
+		return nil
+	}
+}
+
+// TestAccAuthResourceLoginPolicy verifies, against a real F5OS 2.0.0+ device,
+// that the login_policy nested block is applied on Create and Update and that
+// the values are reflected on the device via a direct API check. Skips on
+// devices below 2.0.0.
+//
+// Safety:
+//   - auth_order always keeps "local" first
+//   - login_policy Delete is a no-op, so the true device baseline is captured
+//     up front and restored in t.Cleanup
+func TestAccAuthResourceLoginPolicy(t *testing.T) {
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Skipf("Cannot create f5os client: %v", err)
+	}
+	if !platformVersionAtLeast(client.PlatformVersion, "v2.0") {
+		t.Skipf("skipping: login_policy requires F5OS 2.0.0+ but device reports %q", client.PlatformVersion)
+	}
+
+	// Capture the true device baseline so it can be restored after the test,
+	// since login_policy has no Delete restoration.
+	trueBaseline, err := client.GetLoginPolicy()
+	if err != nil {
+		t.Fatalf("Failed to read true device baseline login policy: %v", err)
+	}
+
+	t.Cleanup(func() {
+		cleanupClient, err := newTestClientFromEnv()
+		if err != nil {
+			t.Logf("WARNING: cleanup failed to create client: %v", err)
+			return
+		}
+		if err := cleanupClient.SetLoginPolicy(trueBaseline); err != nil {
+			t.Logf("WARNING: cleanup failed to restore login policy: %v", err)
+		} else {
+			t.Logf("Cleanup: restored login policy to baseline")
+		}
+	})
+
+	tfresource.Test(t, tfresource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			// Step 1: Create
+			{
+				Config: testAccAuthResourceLoginPolicyConfig,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.admin_role_limit", "true"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.restconf_max_session_limit", "5"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.ssh_max_session_limit", "8"),
+					testAccCheckLoginPolicyApplied(true, 5, 8),
+				),
+			},
+			// Step 2: Update every field
+			{
+				Config: testAccAuthResourceLoginPolicyConfigUpdated,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.admin_role_limit", "false"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.restconf_max_session_limit", "3"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.ssh_max_session_limit", "4"),
+					testAccCheckLoginPolicyApplied(false, 3, 4),
+				),
+			},
+			// Step 3: Import
+			{
+				ResourceName:            "f5os_auth.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy"},
+			},
+		},
+	})
+}
+
+const testAccAuthResourceLoginPolicyConfig = `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+
+  login_policy = {
+    admin_role_limit           = true
+    restconf_max_session_limit = 5
+    ssh_max_session_limit      = 8
+  }
+}
+`
+
+const testAccAuthResourceLoginPolicyConfigUpdated = `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+
+  login_policy = {
+    admin_role_limit           = false
+    restconf_max_session_limit = 3
+    ssh_max_session_limit      = 4
+  }
+}
+`

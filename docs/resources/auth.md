@@ -36,6 +36,13 @@ resource "f5os_auth" "aaa" {
     unlock_time        = 300
     max_age            = 90
   }
+
+  # login_policy is only supported on F5OS 2.0.0 and later.
+  login_policy = {
+    admin_role_limit           = true
+    restconf_max_session_limit = 10
+    ssh_max_session_limit      = 10
+  }
 }
 ```
 
@@ -45,12 +52,23 @@ resource "f5os_auth" "aaa" {
 ### Optional
 
 - `auth_order` (List of String) Ordered list of authentication methods. Allowed values: local, radius, tacacs, ldap.
+- `login_policy` (Attributes) AAA login-policy settings. Only supported on F5OS >= 2.0.0. Only fields you specify are managed; unspecified fields are left at device defaults. (see [below for nested schema](#nestedatt--login_policy))
 - `password_policy` (Attributes) Password policy settings. Only fields you specify are managed; unspecified fields are left at device defaults. (see [below for nested schema](#nestedatt--password_policy))
 - `remote_roles` (Attributes Set) Remote role mappings. Configure role GID (and optionally LDAP group association). (see [below for nested schema](#nestedatt--remote_roles))
 
 ### Read-Only
 
 - `id` (String) Synthetic ID for the auth resource.
+
+<a id="nestedatt--login_policy"></a>
+### Nested Schema for `login_policy`
+
+Optional:
+
+- `admin_role_limit` (Boolean) Whether to limit concurrent sessions for the admin role.
+- `restconf_max_session_limit` (Number) Maximum number of concurrent RESTCONF sessions.
+- `ssh_max_session_limit` (Number) Maximum number of concurrent SSH sessions.
+
 
 <a id="nestedatt--password_policy"></a>
 ### Nested Schema for `password_policy`

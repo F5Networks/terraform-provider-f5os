@@ -18,4 +18,11 @@ resource "f5os_auth" "aaa" {
     unlock_time        = 300
     max_age            = 90
   }
+
+  # login_policy is only supported on F5OS 2.0.0 and later.
+  login_policy = {
+    admin_role_limit           = true
+    restconf_max_session_limit = 10
+    ssh_max_session_limit      = 10
+  }
 }

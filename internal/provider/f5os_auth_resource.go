@@ -78,11 +78,20 @@ type passwordPolicyModel struct {
 	MaxClassRepeat    types.Int64 `tfsdk:"max_class_repeat"`
 }
 
+// loginPolicyModel represents the AAA login-policy settings in Terraform state.
+// Introduced in F5OS 2.0.0 (f5-openconfig-aaa-login-policy module).
+type loginPolicyModel struct {
+	AdminRoleLimit          types.Bool  `tfsdk:"admin_role_limit"`
+	RestconfMaxSessionLimit types.Int64 `tfsdk:"restconf_max_session_limit"`
+	SSHMaxSessionLimit      types.Int64 `tfsdk:"ssh_max_session_limit"`
+}
+
 type AuthResourceModel struct {
 	ID             types.String `tfsdk:"id"`
 	AuthOrder      types.List   `tfsdk:"auth_order"`
 	RemoteRoles    types.Set    `tfsdk:"remote_roles"`
 	PasswordPolicy types.Object `tfsdk:"password_policy"`
+	LoginPolicy    types.Object `tfsdk:"login_policy"`
 }
 
 func (r *AuthResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -178,6 +187,30 @@ func (r *AuthResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 					"max_class_repeat": schema.Int64Attribute{
 						MarkdownDescription: "Max repeating chars of any class allowed. Only supported on F5OS >= v1.7.",
 						Optional:            true,
+					},
+				},
+			},
+			"login_policy": schema.SingleNestedAttribute{
+				MarkdownDescription: "AAA login-policy settings. Only supported on F5OS >= 2.0.0. Only fields you specify are managed; unspecified fields are left at device defaults.",
+				Optional:            true,
+				Attributes: map[string]schema.Attribute{
+					"admin_role_limit": schema.BoolAttribute{
+						MarkdownDescription: "Whether to limit concurrent sessions for the admin role.",
+						Optional:            true,
+					},
+					"restconf_max_session_limit": schema.Int64Attribute{
+						MarkdownDescription: "Maximum number of concurrent RESTCONF sessions.",
+						Optional:            true,
+						Validators: []validator.Int64{
+							int64validator.AtLeast(1),
+						},
+					},
+					"ssh_max_session_limit": schema.Int64Attribute{
+						MarkdownDescription: "Maximum number of concurrent SSH sessions.",
+						Optional:            true,
+						Validators: []validator.Int64{
+							int64validator.AtLeast(1),
+						},
 					},
 				},
 			},
@@ -303,6 +336,19 @@ func (r *AuthResource) Create(ctx context.Context, req resource.CreateRequest, r
 		}
 	}
 
+	// Handle login policy if provided (F5OS 2.0.0+ only)
+	if !plan.LoginPolicy.IsNull() && !plan.LoginPolicy.IsUnknown() {
+		var lpModel loginPolicyModel
+		resp.Diagnostics.Append(plan.LoginPolicy.As(ctx, &lpModel, basetypes.ObjectAsOptions{})...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		resp.Diagnostics.Append(r.writeLoginPolicy(ctx, &lpModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	plan.ID = types.StringValue("f5os-auth")
 
 	// Read back actual device state so Terraform detects any discrepancies
@@ -316,6 +362,12 @@ func (r *AuthResource) Create(ctx context.Context, req resource.CreateRequest, r
 	if !plan.RemoteRoles.IsNull() {
 		if err := r.readRoleConfig(ctx, &plan); err != nil {
 			resp.Diagnostics.AddError("Failed to read back role config after create", err.Error())
+			return
+		}
+	}
+	if !plan.LoginPolicy.IsNull() {
+		resp.Diagnostics.Append(r.readLoginPolicy(ctx, &plan, false)...)
+		if resp.Diagnostics.HasError() {
 			return
 		}
 	}
@@ -333,7 +385,7 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 	// Detect import: all user-configurable fields are null because
 	// ImportStatePassthroughID only sets the ID.
-	isImport := state.AuthOrder.IsNull() && state.RemoteRoles.IsNull() && state.PasswordPolicy.IsNull()
+	isImport := state.AuthOrder.IsNull() && state.RemoteRoles.IsNull() && state.PasswordPolicy.IsNull() && state.LoginPolicy.IsNull()
 
 	// During import, snapshot the device's current auth_order into private
 	// state so Delete can restore it. Create handles this for the normal
@@ -376,6 +428,17 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	// Read password_policy from device when managed or during import.
 	if !state.PasswordPolicy.IsNull() || isImport {
 		resp.Diagnostics.Append(r.readPasswordPolicy(ctx, &state, isImport)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
+	// Read login_policy from device when managed or during import. Login
+	// policy is only available on F5OS 2.0.0+; on older devices the read is
+	// skipped during import (nothing to import) and, when managed, the write
+	// would already have failed at Create/Update time.
+	if !state.LoginPolicy.IsNull() || (isImport && platformVersionAtLeast(r.client.PlatformVersion, "v2.0")) {
+		resp.Diagnostics.Append(r.readLoginPolicy(ctx, &state, isImport)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
@@ -458,6 +521,19 @@ func (r *AuthResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		}
 	}
 
+	// Update login policy if specified (F5OS 2.0.0+ only)
+	if !plan.LoginPolicy.IsNull() && !plan.LoginPolicy.IsUnknown() {
+		var lpModel loginPolicyModel
+		resp.Diagnostics.Append(plan.LoginPolicy.As(ctx, &lpModel, basetypes.ObjectAsOptions{})...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		resp.Diagnostics.Append(r.writeLoginPolicy(ctx, &lpModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	plan.ID = types.StringValue("f5os-auth")
 
 	// Read back actual device state so Terraform detects any discrepancies
@@ -471,6 +547,12 @@ func (r *AuthResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	if !plan.RemoteRoles.IsNull() {
 		if err := r.readRoleConfig(ctx, &plan); err != nil {
 			resp.Diagnostics.AddError("Failed to read back role config after update", err.Error())
+			return
+		}
+	}
+	if !plan.LoginPolicy.IsNull() {
+		resp.Diagnostics.Append(r.readLoginPolicy(ctx, &plan, false)...)
+		if resp.Diagnostics.HasError() {
 			return
 		}
 	}
@@ -1220,5 +1302,127 @@ func passwordPolicyConfigToModel(config *f5os.PasswordPolicyConfig, deviceVersio
 		model.MaxClassRepeat = types.Int64Null()
 	}
 
+	return model
+}
+
+// ---------------------------------------------------------------------------
+// Login Policy helpers (F5OS 2.0.0+)
+// ---------------------------------------------------------------------------
+
+// loginPolicyAttrTypes returns the attr.Type map for the login_policy
+// SingleNestedAttribute. Used when constructing types.ObjectValue.
+func loginPolicyAttrTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"admin_role_limit":           types.BoolType,
+		"restconf_max_session_limit": types.Int64Type,
+		"ssh_max_session_limit":      types.Int64Type,
+	}
+}
+
+// writeLoginPolicy converts the Terraform model to an API config struct and
+// sends it to the device via PATCH. Login policy is only available on F5OS
+// 2.0.0+, so writing to an older device is rejected with a clear error.
+func (r *AuthResource) writeLoginPolicy(ctx context.Context, lp *loginPolicyModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if !platformVersionAtLeast(r.client.PlatformVersion, "v2.0") {
+		diags.AddError("Unsupported attribute",
+			"login_policy is not supported on F5OS versions below 2.0.0")
+		return diags
+	}
+	config := loginPolicyModelToConfig(lp)
+	tflog.Debug(ctx, "Writing login policy to device")
+	if err := r.client.SetLoginPolicy(config); err != nil {
+		diags.AddError("Failed to set login policy", err.Error())
+	}
+	return diags
+}
+
+// readLoginPolicy reads login policy from the device and refreshes the
+// LoginPolicy field in the model.
+//
+// When isImport is true, all fields are populated from the device (since there
+// is no prior state). Otherwise, only fields already present in state are
+// refreshed — this avoids adding fields the user didn't declare.
+func (r *AuthResource) readLoginPolicy(ctx context.Context, state *AuthResourceModel, isImport bool) diag.Diagnostics {
+	var diags diag.Diagnostics
+	policy, err := r.client.GetLoginPolicy()
+	if err != nil {
+		diags.AddError("Failed to read login policy from device", err.Error())
+		return diags
+	}
+
+	if isImport {
+		model := loginPolicyConfigToModel(policy)
+		obj, d := types.ObjectValueFrom(ctx, loginPolicyAttrTypes(), model)
+		diags.Append(d...)
+		if !diags.HasError() {
+			state.LoginPolicy = obj
+		}
+		return diags
+	}
+
+	// Normal read: only refresh fields already in state.
+	var current loginPolicyModel
+	diags.Append(state.LoginPolicy.As(ctx, &current, basetypes.ObjectAsOptions{})...)
+	if diags.HasError() {
+		return diags
+	}
+
+	if !current.AdminRoleLimit.IsNull() && policy.AdminRoleLimit != nil {
+		current.AdminRoleLimit = types.BoolValue(*policy.AdminRoleLimit)
+	}
+	if !current.RestconfMaxSessionLimit.IsNull() && policy.RestconfMaxSessionLimit != nil {
+		current.RestconfMaxSessionLimit = types.Int64Value(*policy.RestconfMaxSessionLimit)
+	}
+	if !current.SSHMaxSessionLimit.IsNull() && policy.SSHMaxSessionLimit != nil {
+		current.SSHMaxSessionLimit = types.Int64Value(*policy.SSHMaxSessionLimit)
+	}
+
+	obj, d := types.ObjectValueFrom(ctx, loginPolicyAttrTypes(), current)
+	diags.Append(d...)
+	if !diags.HasError() {
+		state.LoginPolicy = obj
+	}
+	return diags
+}
+
+// loginPolicyModelToConfig converts a Terraform loginPolicyModel to an
+// f5osclient LoginPolicyConfig struct. Only non-null fields are set.
+func loginPolicyModelToConfig(lp *loginPolicyModel) *f5os.LoginPolicyConfig {
+	config := &f5os.LoginPolicyConfig{}
+	if !lp.AdminRoleLimit.IsNull() && !lp.AdminRoleLimit.IsUnknown() {
+		v := lp.AdminRoleLimit.ValueBool()
+		config.AdminRoleLimit = &v
+	}
+	if !lp.RestconfMaxSessionLimit.IsNull() && !lp.RestconfMaxSessionLimit.IsUnknown() {
+		v := lp.RestconfMaxSessionLimit.ValueInt64()
+		config.RestconfMaxSessionLimit = &v
+	}
+	if !lp.SSHMaxSessionLimit.IsNull() && !lp.SSHMaxSessionLimit.IsUnknown() {
+		v := lp.SSHMaxSessionLimit.ValueInt64()
+		config.SSHMaxSessionLimit = &v
+	}
+	return config
+}
+
+// loginPolicyConfigToModel converts an f5osclient LoginPolicyConfig to a
+// Terraform loginPolicyModel for populating state.
+func loginPolicyConfigToModel(config *f5os.LoginPolicyConfig) loginPolicyModel {
+	model := loginPolicyModel{}
+	if config.AdminRoleLimit != nil {
+		model.AdminRoleLimit = types.BoolValue(*config.AdminRoleLimit)
+	} else {
+		model.AdminRoleLimit = types.BoolNull()
+	}
+	if config.RestconfMaxSessionLimit != nil {
+		model.RestconfMaxSessionLimit = types.Int64Value(*config.RestconfMaxSessionLimit)
+	} else {
+		model.RestconfMaxSessionLimit = types.Int64Null()
+	}
+	if config.SSHMaxSessionLimit != nil {
+		model.SSHMaxSessionLimit = types.Int64Value(*config.SSHMaxSessionLimit)
+	} else {
+		model.SSHMaxSessionLimit = types.Int64Null()
+	}
 	return model
 }

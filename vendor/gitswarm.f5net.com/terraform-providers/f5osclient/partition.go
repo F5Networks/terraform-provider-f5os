@@ -870,6 +870,10 @@ const (
 	uriAAARoleConfig     = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config"
 	uriAAARoleRemoteGID  = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config/f5-system-aaa:remote-gid"
 	uriAAAPasswordPolicy = "/openconfig-system:system/aaa/f5-openconfig-aaa-password-policy:password-policy/config"
+	// uriAAALoginPolicy targets the login-policy config introduced by the
+	// f5-openconfig-aaa-login-policy YANG module (2024-09-24), available on
+	// F5OS 2.0.0 and later.
+	uriAAALoginPolicy = "/openconfig-system:system/aaa/f5-openconfig-aaa-login-policy:login-policy/config"
 )
 
 type authOrderPayload struct {
@@ -1115,6 +1119,57 @@ func (c *F5os) SetPasswordPolicy(config *PasswordPolicyConfig) error {
 	_, err = c.PatchRequest(uriAAAPasswordPolicy, body)
 	if err != nil {
 		return fmt.Errorf("PATCH password policy failed: %w", err)
+	}
+	return nil
+}
+
+// LoginPolicyConfig represents the AAA login-policy settings introduced by the
+// f5-openconfig-aaa-login-policy YANG module (2024-09-24) on F5OS 2.0.0+.
+// Pointer fields allow distinguishing "not set" from zero values.
+type LoginPolicyConfig struct {
+	AdminRoleLimit          *bool  `json:"admin-role-limit,omitempty"`
+	RestconfMaxSessionLimit *int64 `json:"restconf-max-session-limit,omitempty"`
+	SSHMaxSessionLimit      *int64 `json:"ssh-max-session-limit,omitempty"`
+}
+
+// loginPolicyResponse is the API response wrapper for login policy.
+type loginPolicyResponse struct {
+	Config LoginPolicyConfig `json:"f5-openconfig-aaa-login-policy:config"`
+}
+
+// loginPolicyPayload is the API request wrapper for login policy.
+type loginPolicyPayload struct {
+	Config LoginPolicyConfig `json:"f5-openconfig-aaa-login-policy:config"`
+}
+
+// GetLoginPolicy reads the current login-policy config from the device.
+// Only supported on F5OS 2.0.0 and later.
+func (c *F5os) GetLoginPolicy() (*LoginPolicyConfig, error) {
+	resp, err := c.GetRequest(uriAAALoginPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("GET login policy failed: %w", err)
+	}
+
+	var parsed loginPolicyResponse
+	if err := json.Unmarshal(resp, &parsed); err != nil {
+		return nil, fmt.Errorf("invalid JSON for login policy: %w", err)
+	}
+
+	return &parsed.Config, nil
+}
+
+// SetLoginPolicy updates login-policy config on the device using PATCH.
+// Only fields with non-nil values are sent. Only supported on F5OS 2.0.0+.
+func (c *F5os) SetLoginPolicy(config *LoginPolicyConfig) error {
+	payload := loginPolicyPayload{Config: *config}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal login policy payload: %w", err)
+	}
+
+	_, err = c.PatchRequest(uriAAALoginPolicy, body)
+	if err != nil {
+		return fmt.Errorf("PATCH login policy failed: %w", err)
 	}
 	return nil
 }
