@@ -2,7 +2,7 @@ module gitswarm.f5net.com/terraform-providers/terraform-provider-f5os
 
 go 1.25
 
-toolchain go1.25.10
+toolchain go1.25.12
 
 require (
 	github.com/hashicorp/terraform-plugin-docs v0.14.1

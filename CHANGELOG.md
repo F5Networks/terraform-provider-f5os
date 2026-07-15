@@ -4,6 +4,8 @@ BREAKING CHANGES:
 FEATURES:
 BUG FIXES:
 IMPROVEMENTS:
+* CI/CD: Bumped Go toolchain from 1.25.10 to 1.25.12 to remediate standard library vulnerabilities GO-2026-5856 (crypto/tls), GO-2026-5039 (net/textproto), and GO-2026-5037 (crypto/x509) flagged by `govulncheck`
+* CI/CD: Re-enabled the GitHub Actions `govulncheck` job as blocking (removed `continue-on-error`) now that the toolchain upgrade clears all known standard library vulnerabilities
 
 ## 1.12.0
 

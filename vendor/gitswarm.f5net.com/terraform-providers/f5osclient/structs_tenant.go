@@ -201,6 +201,15 @@ type F5RespTenant struct {
 		ApplianceMode struct {
 			Enabled bool `json:"enabled,omitempty"`
 		} `json:"appliance-mode,omitempty"`
+		// The following fields are optional/best-effort. As of F5OS 2.0.0
+		// the tenant state response no longer includes cpu-allocations,
+		// primary-slot, image-version, or instances. They must remain
+		// omitempty so an absent field simply decodes to the zero value.
+		// cpu-allocations, primary-slot, and image-version are consumed via
+		// this typed struct and are therefore safe when absent. The instances
+		// detail is also read from an untyped map in tenantWait, which guards
+		// each level of the map access before asserting types to avoid a
+		// panic when the field is nil.
 		CpuAllocations struct {
 			CpuAllocation []struct {
 				Node int   `json:"node,omitempty"`

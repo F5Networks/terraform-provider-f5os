@@ -35,7 +35,7 @@
             },
             "state": {
                 "name": "testtenant-ecosys2",
-                "unit-key-hash": "STAUsMBmo1nkZ5I6Bi22IIhzlLyHsjhP2R0ENW2w6oh/0E0vz3k/PouNSWKT60qLs6dpPfuhb1GDsEJgvvg2/w==",
+                "unit-key-hash": "REDACTED-FAKE-UNIT-KEY-HASH-FOR-TESTING-ONLY==",
                 "type": "BIG-IP",
                 "image": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
                 "mgmt-ip": "10.14.10.10",
