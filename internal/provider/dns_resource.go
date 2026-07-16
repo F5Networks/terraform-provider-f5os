@@ -8,13 +8,97 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	f5os "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
+
+// emptyListWhenConfigNull is a plan modifier for the Optional+Computed
+// dns_domains attribute. For an Optional+Computed list, when the user removes
+// the attribute from configuration the framework's default behavior is to
+// preserve the prior state value — which means removing all search domains
+// from the config would never plan a change, and Update would never run to
+// delete them from the device. This modifier forces the planned value to an
+// empty list when the config value is null (and prior state was non-null), so
+// removing domains is correctly planned and applied. When the config is set,
+// the configured value is used as normal.
+type emptyListWhenConfigNull struct{}
+
+func (m emptyListWhenConfigNull) Description(_ context.Context) string {
+	return "When the attribute is omitted from configuration, plan it as an empty list instead of preserving the prior state value."
+}
+
+func (m emptyListWhenConfigNull) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (m emptyListWhenConfigNull) PlanModifyList(ctx context.Context, req planmodifier.ListRequest, resp *planmodifier.ListResponse) {
+	// Only act when the config omits the attribute. If the user set a value
+	// (including an explicit empty list), respect it.
+	if !req.ConfigValue.IsNull() {
+		return
+	}
+	// On create (no prior state) leave the plan as-is; Create normalizes a
+	// null value to an empty list in state.
+	if req.StateValue.IsNull() {
+		return
+	}
+	resp.PlanValue = types.ListValueMust(types.StringType, []attr.Value{})
+}
+
+// recomputeIDOnChange is a plan modifier for the Computed id attribute. The id
+// is a content hash derived from dns_servers and dns_domains. By default a
+// Computed attribute carries its prior state value into the plan, but since the
+// id changes whenever servers/domains change, Update would then produce an id
+// that differs from the planned value and Terraform would report "provider
+// produced inconsistent result after apply". This modifier marks id as unknown
+// whenever the planned servers/domains differ from state, so Update can set the
+// recomputed value.
+type recomputeIDOnChange struct{}
+
+func (m recomputeIDOnChange) Description(_ context.Context) string {
+	return "Recompute id (mark unknown) when dns_servers or dns_domains change."
+}
+
+func (m recomputeIDOnChange) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (m recomputeIDOnChange) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	// On create the id is already unknown; nothing to do.
+	if req.StateValue.IsNull() {
+		return
+	}
+
+	// Compare the user's configuration to prior state. Using the config (not
+	// the plan) avoids depending on plan-modifier execution order for the
+	// dns_domains attribute. A null domains config means "no domains", which
+	// is equivalent to an empty list in state.
+	var cfgServers, cfgDomains, stateServers, stateDomains types.List
+	req.Config.GetAttribute(ctx, path.Root("dns_servers"), &cfgServers)
+	req.Config.GetAttribute(ctx, path.Root("dns_domains"), &cfgDomains)
+	req.State.GetAttribute(ctx, path.Root("dns_servers"), &stateServers)
+	req.State.GetAttribute(ctx, path.Root("dns_domains"), &stateDomains)
+
+	// Normalize a null domains config to an empty list for comparison.
+	if cfgDomains.IsNull() {
+		cfgDomains = types.ListValueMust(types.StringType, []attr.Value{})
+	}
+	stateDomainsNorm := stateDomains
+	if stateDomainsNorm.IsNull() {
+		stateDomainsNorm = types.ListValueMust(types.StringType, []attr.Value{})
+	}
+
+	if !cfgServers.Equal(stateServers) || !cfgDomains.Equal(stateDomainsNorm) {
+		resp.PlanValue = types.StringUnknown()
+	}
+}
 
 // Ensure the implementation satisfies the expected interfaces
 var (
@@ -62,10 +146,16 @@ func (r *DNSResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "List of DNS search domains. Example: `[\"internal.domain\"]`",
+				PlanModifiers: []planmodifier.List{
+					emptyListWhenConfigNull{},
+				},
 			},
 			"id": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Unique identifier for the resource, computed from the DNS server configuration.",
+				PlanModifiers: []planmodifier.String{
+					recomputeIDOnChange{},
+				},
 			},
 		},
 	}
