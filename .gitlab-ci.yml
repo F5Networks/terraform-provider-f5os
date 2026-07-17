@@ -157,10 +157,19 @@ unit-tests:
 #
 # To run a single group ad-hoc, trigger a pipeline with RUN_ACC_TESTS=true
 # (and the F5OS_* creds) — the same rule allows manual scheduled-style runs.
+#
+# Selecting a single group: set the ACC_JOB variable to the group name
+# (the suffix after "acc:" — e.g. ACC_JOB=dns, ACC_JOB=tenant_image). Only
+# that group's job runs; every other acc:* job is skipped. Leave ACC_JOB
+# unset/empty to run the full suite as before. Each job declares its own
+# name in ACC_GROUP, and the rules below compare ACC_JOB against it.
 .acc_test:
   stage: acctest
   resource_group: f5os_acc_dut
   rules:
+    # When ACC_JOB is set, only run the job whose ACC_GROUP matches it.
+    - if: $ACC_JOB && $ACC_JOB != $ACC_GROUP
+      when: never
     - if: $CI_PIPELINE_SOURCE == "schedule" && $F5OS_HOST && $F5OS_USERNAME && $F5OS_PASSWORD
     - if: $RUN_ACC_TESTS && $F5OS_HOST && $F5OS_USERNAME && $F5OS_PASSWORD
   variables:
@@ -206,6 +215,7 @@ acc:device_info:
   extends: .acc_test
   needs: []
   variables:
+    ACC_GROUP: "device_info"
     ACC_RUN: "^TestAccDeviceInfo"
     ACC_TIMEOUT: "30m"
 
@@ -215,6 +225,7 @@ acc:vlan:
     - job: acc:device_info
       optional: true
   variables:
+    ACC_GROUP: "vlan"
     ACC_RUN: "^TestAccVlan"
     ACC_TIMEOUT: "30m"
 
@@ -224,6 +235,7 @@ acc:interface:
     - job: acc:vlan
       optional: true
   variables:
+    ACC_GROUP: "interface"
     ACC_RUN: "^TestAccInterface"
     ACC_TIMEOUT: "30m"
 
@@ -233,6 +245,7 @@ acc:lag:
     - job: acc:interface
       optional: true
   variables:
+    ACC_GROUP: "lag"
     ACC_RUN: "^TestAccLag"
     ACC_TIMEOUT: "30m"
 
@@ -242,6 +255,7 @@ acc:dns:
     - job: acc:lag
       optional: true
   variables:
+    ACC_GROUP: "dns"
     ACC_RUN: "^TestAcc(F5osDNS|DNS)"
     ACC_TIMEOUT: "30m"
 
@@ -251,6 +265,7 @@ acc:ntp:
     - job: acc:dns
       optional: true
   variables:
+    ACC_GROUP: "ntp"
     ACC_RUN: "^TestAcc(F5osNTP|NTP)"
     ACC_TIMEOUT: "30m"
 
@@ -260,6 +275,7 @@ acc:snmp:
     - job: acc:ntp
       optional: true
   variables:
+    ACC_GROUP: "snmp"
     ACC_RUN: "^TestAccSnmp"
     ACC_TIMEOUT: "45m"
 
@@ -269,6 +285,7 @@ acc:logging:
     - job: acc:snmp
       optional: true
   variables:
+    ACC_GROUP: "logging"
     ACC_RUN: "^TestAcc(F5osLogging|Logging)"
     ACC_TIMEOUT: "60m"
 
@@ -278,6 +295,7 @@ acc:tls_cert_key:
     - job: acc:logging
       optional: true
   variables:
+    ACC_GROUP: "tls_cert_key"
     ACC_RUN: "^TestAccTlsCertKey"
     ACC_TIMEOUT: "30m"
 
@@ -287,6 +305,7 @@ acc:primarykey:
     - job: acc:tls_cert_key
       optional: true
   variables:
+    ACC_GROUP: "primarykey"
     ACC_RUN: "^TestAccPrimaryKey"
     ACC_TIMEOUT: "45m"
 
@@ -296,6 +315,7 @@ acc:config_backup:
     - job: acc:primarykey
       optional: true
   variables:
+    ACC_GROUP: "config_backup"
     ACC_RUN: "^TestAccCfgBackup"
     ACC_TIMEOUT: "30m"
 
@@ -305,6 +325,7 @@ acc:license:
     - job: acc:config_backup
       optional: true
   variables:
+    ACC_GROUP: "license"
     ACC_RUN: "^TestAccLicense"
     ACC_TIMEOUT: "30m"
 
@@ -314,6 +335,7 @@ acc:qkview:
     - job: acc:license
       optional: true
   variables:
+    ACC_GROUP: "qkview"
     ACC_RUN: "^TestAccQkview"
     ACC_TIMEOUT: "60m"
 
@@ -323,6 +345,7 @@ acc:system:
     - job: acc:qkview
       optional: true
   variables:
+    ACC_GROUP: "system"
     ACC_RUN: "^TestAccSystem"
     ACC_TIMEOUT: "45m"
 
@@ -332,6 +355,7 @@ acc:tenant_image:
     - job: acc:system
       optional: true
   variables:
+    ACC_GROUP: "tenant_image"
     # Covers tenant_image resource AND data source (both TestAccTenantImage*).
     ACC_RUN: "^TestAccTenantImage"
     ACC_TIMEOUT: "120m"
@@ -343,6 +367,7 @@ acc:tenant:
     - job: acc:tenant_image
       optional: true
   variables:
+    ACC_GROUP: "tenant"
     # Tenant deploy tests only — explicitly excludes TestAccTenantImage*
     # (RE2 has no negative lookahead, so the prefixes are enumerated).
     ACC_RUN: "^TestAccTenant(Deploy|Vlans|NoVlans|DeploymentFile|MacBlockSize|ExplicitMemory)"
@@ -355,6 +380,7 @@ acc:partition:
     - job: acc:tenant
       optional: true
   variables:
+    ACC_GROUP: "partition"
     ACC_RUN: "^TestAccPartitionCreate"
     ACC_TIMEOUT: "30m"
 
@@ -364,6 +390,7 @@ acc:partition_change_password:
     - job: acc:partition
       optional: true
   variables:
+    ACC_GROUP: "partition_change_password"
     ACC_RUN: "^TestAccPartitionChangePassword"
     ACC_TIMEOUT: "30m"
 
@@ -373,6 +400,7 @@ acc:user:
     - job: acc:partition_change_password
       optional: true
   variables:
+    ACC_GROUP: "user"
     # User resource tests only — excludes TestAccUserPasswordChange*.
     ACC_RUN: "^TestAccUser(Resource|Role)"
     ACC_TIMEOUT: "60m"
@@ -383,6 +411,7 @@ acc:user_password_change:
     - job: acc:user
       optional: true
   variables:
+    ACC_GROUP: "user_password_change"
     ACC_RUN: "^TestAccUserPasswordChange"
     ACC_TIMEOUT: "30m"
 
@@ -394,6 +423,7 @@ acc:auth:
     - job: acc:user_password_change
       optional: true
   variables:
+    ACC_GROUP: "auth"
     ACC_RUN: "^TestAccAuth"
     ACC_TIMEOUT: "45m"
 
@@ -403,6 +433,7 @@ acc:proxy:
     - job: acc:auth
       optional: true
   variables:
+    ACC_GROUP: "proxy"
     ACC_RUN: "^TestAcc(Proxy|NoProxy)"
     ACC_TIMEOUT: "30m"
 
