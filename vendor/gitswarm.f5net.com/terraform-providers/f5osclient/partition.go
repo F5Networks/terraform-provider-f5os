@@ -1080,6 +1080,10 @@ type PasswordPolicyConfig struct {
 	MaxLetterRepeat   *int64 `json:"max-letter-repeat,omitempty"`
 	MaxSequenceRepeat *int64 `json:"max-sequence-repeat,omitempty"`
 	MaxClassRepeat    *int64 `json:"max-class-repeat,omitempty"`
+	// 2.0.0+ only fields
+	MinDays  *int64 `json:"min-days,omitempty"`
+	Remember *int64 `json:"remember,omitempty"`
+	WarnAge  *int64 `json:"warn-age,omitempty"`
 }
 
 // passwordPolicyResponse is the API response wrapper for password policy.

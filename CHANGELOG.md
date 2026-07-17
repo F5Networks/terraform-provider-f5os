@@ -4,6 +4,7 @@ BREAKING CHANGES:
 FEATURES:
 * `f5os_tenant`: Added `max_nodes` (Optional/Computed) attribute for F5OS 2.0.0+ tenants; version-gated so it is not sent to devices below 2.0.0. Also exposes read-only `mgmt_vlan`, `mgmt_vlan_accessible`, and `clustering_as_service` state attributes reported by F5OS 2.0.0+
 * `f5os_auth`: Added `login_policy` nested block (`admin_role_limit`, `restconf_max_session_limit`, `ssh_max_session_limit`) backed by the `f5-openconfig-aaa-login-policy` module; version-gated to F5OS 2.0.0+ (configuring it on older devices returns a clear error)
+* `f5os_auth`: Extended `password_policy` with F5OS 2.0.0+ fields `min_days`, `remember`, and `warn_age`; version-gated so configuring them on devices below 2.0.0 returns a clear error
 BUG FIXES:
 IMPROVEMENTS:
 * CI/CD: Bumped Go toolchain from 1.25.10 to 1.25.12 to remediate standard library vulnerabilities GO-2026-5856 (crypto/tls), GO-2026-5039 (net/textproto), and GO-2026-5037 (crypto/x509) flagged by `govulncheck`
