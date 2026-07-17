@@ -76,6 +76,10 @@ type passwordPolicyModel struct {
 	MaxLetterRepeat   types.Int64 `tfsdk:"max_letter_repeat"`
 	MaxSequenceRepeat types.Int64 `tfsdk:"max_sequence_repeat"`
 	MaxClassRepeat    types.Int64 `tfsdk:"max_class_repeat"`
+	// v2.0.0+ only fields
+	MinDays  types.Int64 `tfsdk:"min_days"`
+	Remember types.Int64 `tfsdk:"remember"`
+	WarnAge  types.Int64 `tfsdk:"warn_age"`
 }
 
 // loginPolicyModel represents the AAA login-policy settings in Terraform state.
@@ -186,6 +190,19 @@ func (r *AuthResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 					},
 					"max_class_repeat": schema.Int64Attribute{
 						MarkdownDescription: "Max repeating chars of any class allowed. Only supported on F5OS >= v1.7.",
+						Optional:            true,
+					},
+					// v2.0.0+ only fields
+					"min_days": schema.Int64Attribute{
+						MarkdownDescription: "Minimum number of days between password changes. Only supported on F5OS >= 2.0.0.",
+						Optional:            true,
+					},
+					"remember": schema.Int64Attribute{
+						MarkdownDescription: "Number of previous passwords remembered to prevent reuse. Only supported on F5OS >= 2.0.0.",
+						Optional:            true,
+					},
+					"warn_age": schema.Int64Attribute{
+						MarkdownDescription: "Number of days before expiration to warn the user. Only supported on F5OS >= 2.0.0.",
 						Optional:            true,
 					},
 				},
@@ -325,6 +342,12 @@ func (r *AuthResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 		// Version guard for v1.7+ fields
 		resp.Diagnostics.Append(r.validateV17Fields(ctx, &ppModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		// Version guard for v2.0.0+ fields
+		resp.Diagnostics.Append(r.validateV20Fields(ctx, &ppModel)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
@@ -510,6 +533,12 @@ func (r *AuthResource) Update(ctx context.Context, req resource.UpdateRequest, r
 
 		// Version guard for v1.7+ fields
 		resp.Diagnostics.Append(r.validateV17Fields(ctx, &ppModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		// Version guard for v2.0.0+ fields
+		resp.Diagnostics.Append(r.validateV20Fields(ctx, &ppModel)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
@@ -990,6 +1019,9 @@ func passwordPolicyAttrTypes() map[string]attr.Type {
 		"max_letter_repeat":    types.Int64Type,
 		"max_sequence_repeat":  types.Int64Type,
 		"max_class_repeat":     types.Int64Type,
+		"min_days":             types.Int64Type,
+		"remember":             types.Int64Type,
+		"warn_age":             types.Int64Type,
 	}
 }
 
@@ -1011,6 +1043,28 @@ func (r *AuthResource) validateV17Fields(ctx context.Context, pp *passwordPolicy
 	if !pp.MaxClassRepeat.IsNull() && !pp.MaxClassRepeat.IsUnknown() {
 		diags.AddError("Unsupported attribute",
 			"max_class_repeat is not supported on F5OS versions below v1.7")
+	}
+	return diags
+}
+
+// validateV20Fields checks whether the user configured v2.0.0+ fields on a
+// device that doesn't support them. Returns diagnostics with errors if so.
+func (r *AuthResource) validateV20Fields(ctx context.Context, pp *passwordPolicyModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if platformVersionAtLeast(r.client.PlatformVersion, "v2.0") {
+		return diags
+	}
+	if !pp.MinDays.IsNull() && !pp.MinDays.IsUnknown() {
+		diags.AddError("Unsupported attribute",
+			"min_days is not supported on F5OS versions below 2.0.0")
+	}
+	if !pp.Remember.IsNull() && !pp.Remember.IsUnknown() {
+		diags.AddError("Unsupported attribute",
+			"remember is not supported on F5OS versions below 2.0.0")
+	}
+	if !pp.WarnAge.IsNull() && !pp.WarnAge.IsUnknown() {
+		diags.AddError("Unsupported attribute",
+			"warn_age is not supported on F5OS versions below 2.0.0")
 	}
 	return diags
 }
@@ -1097,6 +1151,15 @@ func (r *AuthResource) readPasswordPolicy(ctx context.Context, state *AuthResour
 	}
 	if !current.MaxClassRepeat.IsNull() && policy.MaxClassRepeat != nil {
 		current.MaxClassRepeat = types.Int64Value(*policy.MaxClassRepeat)
+	}
+	if !current.MinDays.IsNull() && policy.MinDays != nil {
+		current.MinDays = types.Int64Value(*policy.MinDays)
+	}
+	if !current.Remember.IsNull() && policy.Remember != nil {
+		current.Remember = types.Int64Value(*policy.Remember)
+	}
+	if !current.WarnAge.IsNull() && policy.WarnAge != nil {
+		current.WarnAge = types.Int64Value(*policy.WarnAge)
 	}
 
 	obj, d := types.ObjectValueFrom(ctx, passwordPolicyAttrTypes(), current)
@@ -1195,6 +1258,22 @@ func passwordPolicyModelToConfig(pp *passwordPolicyModel, deviceVersion string) 
 		if !pp.MaxClassRepeat.IsNull() && !pp.MaxClassRepeat.IsUnknown() {
 			v := pp.MaxClassRepeat.ValueInt64()
 			config.MaxClassRepeat = &v
+		}
+	}
+
+	// v2.0.0+ fields — only include if device supports them
+	if platformVersionAtLeast(deviceVersion, "v2.0") {
+		if !pp.MinDays.IsNull() && !pp.MinDays.IsUnknown() {
+			v := pp.MinDays.ValueInt64()
+			config.MinDays = &v
+		}
+		if !pp.Remember.IsNull() && !pp.Remember.IsUnknown() {
+			v := pp.Remember.ValueInt64()
+			config.Remember = &v
+		}
+		if !pp.WarnAge.IsNull() && !pp.WarnAge.IsUnknown() {
+			v := pp.WarnAge.ValueInt64()
+			config.WarnAge = &v
 		}
 	}
 
@@ -1300,6 +1379,30 @@ func passwordPolicyConfigToModel(config *f5os.PasswordPolicyConfig, deviceVersio
 		model.MaxLetterRepeat = types.Int64Null()
 		model.MaxSequenceRepeat = types.Int64Null()
 		model.MaxClassRepeat = types.Int64Null()
+	}
+
+	// v2.0.0+ fields — only populate if device supports them
+	if platformVersionAtLeast(deviceVersion, "v2.0") {
+		if config.MinDays != nil {
+			model.MinDays = types.Int64Value(*config.MinDays)
+		} else {
+			model.MinDays = types.Int64Null()
+		}
+		if config.Remember != nil {
+			model.Remember = types.Int64Value(*config.Remember)
+		} else {
+			model.Remember = types.Int64Null()
+		}
+		if config.WarnAge != nil {
+			model.WarnAge = types.Int64Value(*config.WarnAge)
+		} else {
+			model.WarnAge = types.Int64Null()
+		}
+	} else {
+		// Pre-2.0.0: these fields don't exist on the device
+		model.MinDays = types.Int64Null()
+		model.Remember = types.Int64Null()
+		model.WarnAge = types.Int64Null()
 	}
 
 	return model

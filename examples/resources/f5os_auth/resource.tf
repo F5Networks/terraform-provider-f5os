@@ -17,6 +17,11 @@ resource "f5os_auth" "aaa" {
     max_login_failures = 5
     unlock_time        = 300
     max_age            = 90
+
+    # min_days, remember, and warn_age are only supported on F5OS 2.0.0 and later.
+    min_days = 1
+    remember = 5
+    warn_age = 14
   }
 
   # login_policy is only supported on F5OS 2.0.0 and later.

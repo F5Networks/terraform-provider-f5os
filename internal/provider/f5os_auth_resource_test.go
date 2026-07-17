@@ -2118,8 +2118,8 @@ func TestPasswordPolicyConfigToModel(t *testing.T) {
 
 func TestPasswordPolicyAttrTypes(t *testing.T) {
 	attrTypes := passwordPolicyAttrTypes()
-	// Should have exactly 17 fields
-	assert.Equal(t, 17, len(attrTypes), "passwordPolicyAttrTypes should return 17 attribute types")
+	// Should have exactly 20 fields (14 base + 3 v1.7 + 3 v2.0.0)
+	assert.Equal(t, 20, len(attrTypes), "passwordPolicyAttrTypes should return 20 attribute types")
 
 	// Check all expected keys exist
 	expectedKeys := []string{
@@ -2127,7 +2127,7 @@ func TestPasswordPolicyAttrTypes(t *testing.T) {
 		"required_special", "required_differences", "reject_username", "apply_to_root",
 		"retries", "max_login_failures", "unlock_time", "root_lockout",
 		"root_unlock_time", "max_age", "max_letter_repeat", "max_sequence_repeat",
-		"max_class_repeat",
+		"max_class_repeat", "min_days", "remember", "warn_age",
 	}
 	for _, key := range expectedKeys {
 		_, exists := attrTypes[key]
@@ -2463,6 +2463,34 @@ func testAccCheckPasswordPolicyApplied(expected *f5os.PasswordPolicyConfig) tfre
 					actual = fmt.Sprintf("%d", *policy.MaxClassRepeat)
 				}
 				return fmt.Errorf("max-class-repeat mismatch: expected %d, got %s", *expected.MaxClassRepeat, actual)
+			}
+		}
+		// Check 2.0.0+ fields when expected
+		if expected.MinDays != nil {
+			if policy.MinDays == nil || *policy.MinDays != *expected.MinDays {
+				actual := "<nil>"
+				if policy.MinDays != nil {
+					actual = fmt.Sprintf("%d", *policy.MinDays)
+				}
+				return fmt.Errorf("min-days mismatch: expected %d, got %s", *expected.MinDays, actual)
+			}
+		}
+		if expected.Remember != nil {
+			if policy.Remember == nil || *policy.Remember != *expected.Remember {
+				actual := "<nil>"
+				if policy.Remember != nil {
+					actual = fmt.Sprintf("%d", *policy.Remember)
+				}
+				return fmt.Errorf("remember mismatch: expected %d, got %s", *expected.Remember, actual)
+			}
+		}
+		if expected.WarnAge != nil {
+			if policy.WarnAge == nil || *policy.WarnAge != *expected.WarnAge {
+				actual := "<nil>"
+				if policy.WarnAge != nil {
+					actual = fmt.Sprintf("%d", *policy.WarnAge)
+				}
+				return fmt.Errorf("warn-age mismatch: expected %d, got %s", *expected.WarnAge, actual)
 			}
 		}
 		return nil

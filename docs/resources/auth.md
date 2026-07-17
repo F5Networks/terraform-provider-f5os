@@ -35,6 +35,11 @@ resource "f5os_auth" "aaa" {
     max_login_failures = 5
     unlock_time        = 300
     max_age            = 90
+
+    # min_days, remember, and warn_age are only supported on F5OS 2.0.0 and later.
+    min_days = 1
+    remember = 5
+    warn_age = 14
   }
 
   # login_policy is only supported on F5OS 2.0.0 and later.
@@ -81,8 +86,10 @@ Optional:
 - `max_letter_repeat` (Number) Max repeating lowercase letters allowed. Only supported on F5OS >= v1.7.
 - `max_login_failures` (Number) Failed login attempts before lockout.
 - `max_sequence_repeat` (Number) Max repeating letters/digits allowed. Only supported on F5OS >= v1.7.
+- `min_days` (Number) Minimum number of days between password changes. Only supported on F5OS >= 2.0.0.
 - `min_length` (Number) Minimum password length.
 - `reject_username` (Boolean) Reject passwords containing the username.
+- `remember` (Number) Number of previous passwords remembered to prevent reuse. Only supported on F5OS >= 2.0.0.
 - `required_differences` (Number) Characters that must differ from previous password.
 - `required_lowercase` (Number) Required lowercase character count.
 - `required_numeric` (Number) Required numeric digit count.
@@ -92,6 +99,7 @@ Optional:
 - `root_lockout` (Boolean) Enable lockout of root accounts.
 - `root_unlock_time` (Number) Root account unlock time in seconds.
 - `unlock_time` (Number) Account unlock time in seconds (0 = manual).
+- `warn_age` (Number) Number of days before expiration to warn the user. Only supported on F5OS >= 2.0.0.
 
 
 <a id="nestedatt--remote_roles"></a>
