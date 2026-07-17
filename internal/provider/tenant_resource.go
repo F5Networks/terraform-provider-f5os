@@ -55,8 +55,12 @@ type TenantResourceModel struct {
 	MgmtPrefix          types.Int64  `tfsdk:"mgmt_prefix"`
 	CpuCores            types.Int64  `tfsdk:"cpu_cores"`
 	Nodes               types.List   `tfsdk:"nodes"`
+	MaxNodes            types.Int64  `tfsdk:"max_nodes"`
 	Vlans               types.List   `tfsdk:"vlans"`
 	Status              types.String `tfsdk:"status"`
+	MgmtVlan            types.Int64  `tfsdk:"mgmt_vlan"`
+	MgmtVlanAccessible  types.Bool   `tfsdk:"mgmt_vlan_accessible"`
+	ClusteringAsService types.Bool   `tfsdk:"clustering_as_service"`
 	MacBlockSize        types.String `tfsdk:"mac_block_size"`
 	DagIpv6prefixLength types.Int64  `tfsdk:"dag_ipv6_prefix_length"`
 	Timeout             types.Int64  `tfsdk:"timeout"`
@@ -168,6 +172,14 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 					),
 				),
 			},
+			"max_nodes": schema.Int64Attribute{
+				MarkdownDescription: "The maximum number of nodes the tenant may scale to.\nSupported on F5OS 2.0.0 and later; ignored on earlier versions.",
+				Optional:            true,
+				Computed:            true,
+				Validators: []validator.Int64{
+					int64validator.AtLeast(1),
+				},
+			},
 			"vlans": schema.ListAttribute{
 				MarkdownDescription: "The existing VLAN IDs in the chassis partition that should be added to the tenant.\nThe order of these VLANs is ignored.\nThis module orders the VLANs automatically, if you deliberately re-order them in subsequent tasks, this module will not register a change.\nRequired for create operations",
 				Optional:            true,
@@ -190,6 +202,18 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 			"status": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Tenant status",
+			},
+			"mgmt_vlan": schema.Int64Attribute{
+				Computed:            true,
+				MarkdownDescription: "The management VLAN ID assigned to the tenant.\nRead-only; reported on F5OS 2.0.0 and later.",
+			},
+			"mgmt_vlan_accessible": schema.BoolAttribute{
+				Computed:            true,
+				MarkdownDescription: "Whether the tenant management VLAN is accessible.\nRead-only; reported on F5OS 2.0.0 and later.",
+			},
+			"clustering_as_service": schema.BoolAttribute{
+				Computed:            true,
+				MarkdownDescription: "Whether the clustering-as-a-service feature flag is enabled for the tenant.\nRead-only; reported on F5OS 2.0.0 and later.",
 			},
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -440,6 +464,28 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	} else if data.DeploymentFile.IsUnknown() {
 		data.DeploymentFile = types.StringNull()
 	}
+	// Map the F5OS 2.0.0 tenant state fields. These attributes are Computed,
+	// so they must always be set to a known value to avoid a provider
+	// inconsistent-result error. On devices that predate 2.0.0 the fields are
+	// absent and decode to their zero values, which we surface as-is.
+	//
+	// max_nodes is Optional+Computed. When the user configured a known value it
+	// was already sent to the device via the config builders, so we must
+	// preserve the planned value here — overwriting it with a (potentially
+	// device-normalized) different value would trigger a "provider produced
+	// inconsistent result after apply" error. Only when the plan value is
+	// null/unknown (import, or Computed-only on older devices) do we adopt the
+	// device value, falling back to null when the device did not report one.
+	if !data.MaxNodes.IsNull() && !data.MaxNodes.IsUnknown() {
+		// keep the user-configured value as-is
+	} else if respData.F5TenantsTenant[0].State.MaxNodes != 0 {
+		data.MaxNodes = types.Int64Value(int64(respData.F5TenantsTenant[0].State.MaxNodes))
+	} else {
+		data.MaxNodes = types.Int64Null()
+	}
+	data.MgmtVlan = types.Int64Value(int64(respData.F5TenantsTenant[0].State.MgmtVlan))
+	data.MgmtVlanAccessible = types.BoolValue(respData.F5TenantsTenant[0].State.MgmtVlanAccessible)
+	data.ClusteringAsService = types.BoolValue(respData.F5TenantsTenant[0].State.FeatureFlags.ClusteringAsService)
 }
 
 func (r *TenantResource) getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.F5ReqTenants {
@@ -471,6 +517,12 @@ func (r *TenantResource) getTenantCreateConfig(ctx context.Context, req resource
 	tenantSubbj.Config.Cryptos = data.Cryptos.ValueString()
 	data.Nodes.ElementsAs(ctx, &tenantSubbj.Config.Nodes, false)
 	tenantSubbj.Config.Storage.Size = int(data.VirtualdiskSize.ValueInt64())
+	// max-nodes was introduced in F5OS 2.0.0. Only send it when the device
+	// supports it and the user supplied a value, otherwise older devices
+	// would reject the unknown field.
+	if platformVersionAtLeast(r.client.PlatformVersion, "v2.0") && !data.MaxNodes.IsNull() && !data.MaxNodes.IsUnknown() {
+		tenantSubbj.Config.MaxNodes = int(data.MaxNodes.ValueInt64())
+	}
 
 	tenantConfig := new(f5ossdk.F5ReqTenants)
 	tenantConfig.F5TenantsTenant = append(tenantConfig.F5TenantsTenant, tenantSubbj)
@@ -499,6 +551,12 @@ func (r *TenantResource) getTenantUpdateConfig(ctx context.Context, req resource
 	tenantSubbj.Config.RunningState = data.RunningState.ValueString()
 	tenantSubbj.Config.Cryptos = data.Cryptos.ValueString()
 	tenantSubbj.Config.Storage.Size = int(data.VirtualdiskSize.ValueInt64())
+	// max-nodes was introduced in F5OS 2.0.0. Only send it when the device
+	// supports it and the user supplied a value, otherwise older devices
+	// would reject the unknown field.
+	if platformVersionAtLeast(r.client.PlatformVersion, "v2.0") && !data.MaxNodes.IsNull() && !data.MaxNodes.IsUnknown() {
+		tenantSubbj.Config.MaxNodes = int(data.MaxNodes.ValueInt64())
+	}
 
 	tenantpatchConfig := new(f5ossdk.F5ReqTenantsPatch)
 	tenantpatchConfig.F5TenantsTenants.Tenant = append(tenantpatchConfig.F5TenantsTenants.Tenant, tenantSubbj)

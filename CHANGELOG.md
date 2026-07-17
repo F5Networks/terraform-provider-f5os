@@ -2,6 +2,7 @@
 
 BREAKING CHANGES:
 FEATURES:
+* `f5os_tenant`: Added `max_nodes` (Optional/Computed) attribute for F5OS 2.0.0+ tenants; version-gated so it is not sent to devices below 2.0.0. Also exposes read-only `mgmt_vlan`, `mgmt_vlan_accessible`, and `clustering_as_service` state attributes reported by F5OS 2.0.0+
 BUG FIXES:
 IMPROVEMENTS:
 * CI/CD: Bumped Go toolchain from 1.25.10 to 1.25.12 to remediate standard library vulnerabilities GO-2026-5856 (crypto/tls), GO-2026-5039 (net/textproto), and GO-2026-5037 (crypto/x509) flagged by `govulncheck`

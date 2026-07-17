@@ -75,10 +75,14 @@ type F5ReqTenant struct {
 		TargetDeploymentFile    string `json:"target-deployment-file,omitempty"`
 		UpgradeStatus           string `json:"upgrade-status,omitempty"`
 		Nodes                   []int  `json:"nodes,omitempty"`
-		MgmtIp                  string `json:"mgmt-ip,omitempty"`
-		PrefixLength            int    `json:"prefix-length,omitempty"`
-		Gateway                 string `json:"gateway,omitempty"`
-		MacData                 struct {
+		// MaxNodes is the maximum number of nodes a tenant may scale to.
+		// Introduced in F5OS 2.0.0 (tenant config.max-nodes). Left omitempty
+		// so it is not sent to devices that predate 2.0.0.
+		MaxNodes     int    `json:"max-nodes,omitempty"`
+		MgmtIp       string `json:"mgmt-ip,omitempty"`
+		PrefixLength int    `json:"prefix-length,omitempty"`
+		Gateway      string `json:"gateway,omitempty"`
+		MacData      struct {
 			F5TenantL2InlineMacBlockSize string `json:"f5-tenant-l2-inline:mac-block-size,omitempty"`
 		} `json:"mac-data,omitempty"`
 		DagIpv6PrefixLength int `json:"dag-ipv6-prefix-length,omitempty"`
@@ -231,6 +235,22 @@ type F5RespTenant struct {
 				MgmtMac      string    `json:"mgmt-mac,omitempty"`
 			} `json:"instance,omitempty"`
 		} `json:"instances,omitempty"`
+		// The following state fields are introduced in F5OS 2.0.0 and are
+		// read-only. They remain omitempty so an absent field simply decodes
+		// to the zero value on devices that predate 2.0.0.
+		//
+		// MaxNodes mirrors config.max-nodes (confirmed max-nodes=8 present on
+		// 2.0.0 tenants). MgmtVlan/MgmtVlanAccessible come from the
+		// f5-tenant-mgmt-vlan augmentation. FeatureFlags.ClusteringAsService
+		// reports whether clustering-as-a-service is enabled. Vlans mirrors
+		// the tenant's assigned VLAN IDs in state.
+		MaxNodes           int   `json:"max-nodes,omitempty"`
+		MgmtVlan           int   `json:"f5-tenant-mgmt-vlan:mgmt-vlan,omitempty"`
+		MgmtVlanAccessible bool  `json:"f5-tenant-mgmt-vlan:mgmt-vlan-accessible,omitempty"`
+		Vlans              []int `json:"vlans,omitempty"`
+		FeatureFlags       struct {
+			ClusteringAsService bool `json:"clustering-as-service,omitempty"`
+		} `json:"feature-flags,omitempty"`
 	} `json:"state,omitempty"`
 }
 

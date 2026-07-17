@@ -63,6 +63,8 @@ We recommend it is enabled, otherwise crypto and compression may be processed in
 Required for if `type` is `BIG-IP-Next`.
 - `mac_block_size` (String) Configure a BIG-IP tenant on these systems to use contiguous block of MAC allocation.
 Default value is `one`.
+- `max_nodes` (Number) The maximum number of nodes the tenant may scale to.
+Supported on F5OS 2.0.0 and later; ignored on earlier versions.
 - `memory` (Number) The amount of memory that should be provided to the tenant in MB.
  More information on memory sizing for [Velos](https://clouddocs.f5.com/training/community/velos-training/html/velos_performance_and_sizing.html#memory-sizing)/[rSeries](https://clouddocs.f5.com/training/community/rseries-training/html/rseries_performance_and_sizing.html#memory-sizing)
 - `nodes` (List of Number) List of integers. Specifies on which blades nodes the tenants are deployed.
@@ -79,7 +81,13 @@ Required for create operations
 
 ### Read-Only
 
+- `clustering_as_service` (Boolean) Whether the clustering-as-a-service feature flag is enabled for the tenant.
+Read-only; reported on F5OS 2.0.0 and later.
 - `id` (String) Unique F5OS Tenant identifier
+- `mgmt_vlan` (Number) The management VLAN ID assigned to the tenant.
+Read-only; reported on F5OS 2.0.0 and later.
+- `mgmt_vlan_accessible` (Boolean) Whether the tenant management VLAN is accessible.
+Read-only; reported on F5OS 2.0.0 and later.
 - `status` (String) Tenant status
 
 ## Import
