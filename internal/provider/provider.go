@@ -35,6 +35,7 @@ type F5osProviderModel struct {
 	Port             types.Int64  `tfsdk:"port"`
 	TeemDisable      types.Bool   `tfsdk:"teem_disable"`
 	DisableSslVerify types.Bool   `tfsdk:"disable_tls_verify"`
+	CustomHeaders    types.Map    `tfsdk:"custom_headers"`
 }
 type TeemData struct {
 	ResourceName      string
@@ -81,6 +82,11 @@ func (p *F5osProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 			"teem_disable": schema.BoolAttribute{
 				MarkdownDescription: "If this flag set to true,sending telemetry data to TEEM will be disabled,can be provided via `TEEM_DISABLE` environment variable.",
 				Optional:            true,
+			},
+			"custom_headers": schema.MapAttribute{
+				MarkdownDescription: "Optional map of custom HTTP headers added to every F5OS API request. When an HTTPS proxy is in use, these headers are also sent in the CONNECT tunnel request.",
+				Optional:            true,
+				ElementType:         types.StringType,
 			},
 		},
 	}
@@ -172,12 +178,21 @@ func (p *F5osProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	}
 
 	// Example client configuration for data sources and resources
+	customHeaders := make(map[string]string)
+	if !config.CustomHeaders.IsNull() && !config.CustomHeaders.IsUnknown() {
+		for k, v := range config.CustomHeaders.Elements() {
+			if sv, ok := v.(types.String); ok {
+				customHeaders[k] = sv.ValueString()
+			}
+		}
+	}
 	f5osConfig := &f5ossdk.F5osConfig{
 		Host:             host,
 		User:             username,
 		Password:         password,
 		Port:             hostPort,
 		DisableSSLVerify: disableSSL,
+		CustomHeaders:    customHeaders,
 		// TrustedCACertificate: trustedCAPath,
 	}
 	client, err := f5ossdk.NewSession(f5osConfig)
