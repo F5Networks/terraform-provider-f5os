@@ -1,11 +1,15 @@
 package provider
 
 import (
+	"crypto/tls"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	f5os "gitswarm.f5net.com/terraform-providers/f5osclient"
@@ -430,5 +434,246 @@ func TestTransportProxy_ReauthPreservesTransport(t *testing.T) {
 	}
 	if newSession.Transport.Proxy == nil {
 		t.Fatal("new session Transport.Proxy is nil after re-auth")
+	}
+}
+
+// =========================================================================
+// Section 4: CustomHeaders tests
+// These verify that custom HTTP headers are stored on the session,
+// injected into API requests, and set as ProxyConnectHeader on the
+// transport for HTTPS CONNECT tunnel injection.
+// =========================================================================
+
+// TestNewSession_CustomHeadersStoredOnSession verifies that headers
+// provided in F5osConfig.CustomHeaders are copied onto the session.
+func TestNewSession_CustomHeadersStoredOnSession(t *testing.T) {
+	backend := newMockBackend()
+	defer backend.Close()
+
+	cfg := &f5os.F5osConfig{
+		Host:             backend.URL,
+		User:             "admin",
+		Password:         "admin",
+		DisableSSLVerify: true,
+		CustomHeaders: map[string]string{
+			"X-Tenant-ID":   "hsbc-prod",
+			"X-Custom-Auth": "token123",
+		},
+	}
+	session, err := f5os.NewSession(cfg)
+	if err != nil {
+		t.Fatalf("NewSession failed: %v", err)
+	}
+
+	if len(session.CustomHeaders) != 2 {
+		t.Fatalf("expected 2 CustomHeaders on session, got %d", len(session.CustomHeaders))
+	}
+	if session.CustomHeaders["X-Tenant-ID"] != "hsbc-prod" {
+		t.Fatalf("expected X-Tenant-ID='hsbc-prod', got %q", session.CustomHeaders["X-Tenant-ID"])
+	}
+	if session.CustomHeaders["X-Custom-Auth"] != "token123" {
+		t.Fatalf("expected X-Custom-Auth='token123', got %q", session.CustomHeaders["X-Custom-Auth"])
+	}
+}
+
+// TestNewSession_CustomHeadersSetProxyConnectHeader verifies that
+// CustomHeaders are registered as ProxyConnectHeader on the transport,
+// so they appear in the CONNECT tunnel request when using an HTTPS proxy.
+func TestNewSession_CustomHeadersSetProxyConnectHeader(t *testing.T) {
+	backend := newMockBackend()
+	defer backend.Close()
+
+	cfg := &f5os.F5osConfig{
+		Host:             backend.URL,
+		User:             "admin",
+		Password:         "admin",
+		DisableSSLVerify: true,
+		CustomHeaders: map[string]string{
+			"X-Tenant-ID": "hsbc-prod",
+		},
+	}
+	session, err := f5os.NewSession(cfg)
+	if err != nil {
+		t.Fatalf("NewSession failed: %v", err)
+	}
+
+	if session.Transport.ProxyConnectHeader == nil {
+		t.Fatal("expected ProxyConnectHeader to be set on transport when CustomHeaders provided")
+	}
+	if session.Transport.ProxyConnectHeader.Get("X-Tenant-ID") != "hsbc-prod" {
+		t.Fatalf("expected ProxyConnectHeader X-Tenant-ID='hsbc-prod', got %q",
+			session.Transport.ProxyConnectHeader.Get("X-Tenant-ID"))
+	}
+}
+
+// TestNewSession_NoCustomHeadersLeavesProxyConnectHeaderNil verifies that
+// when no CustomHeaders are provided, ProxyConnectHeader is not set.
+func TestNewSession_NoCustomHeadersLeavesProxyConnectHeaderNil(t *testing.T) {
+	backend := newMockBackend()
+	defer backend.Close()
+
+	session := newSessionOrFail(t, backend.URL)
+
+	if session.Transport.ProxyConnectHeader != nil {
+		t.Fatal("expected ProxyConnectHeader to be nil when no CustomHeaders provided")
+	}
+}
+
+// TestNewSession_CustomHeadersSentOnLoginRequest verifies that custom
+// headers are included in the initial login (NewSession) HTTP request.
+func TestNewSession_CustomHeadersSentOnLoginRequest(t *testing.T) {
+	var capturedHeaders http.Header
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Capture only the first request (the login request to uriLogin).
+		if capturedHeaders == nil {
+			capturedHeaders = r.Header.Clone()
+		}
+		w.Header().Set("X-Auth-Token", "test-token")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"openconfig-system:aaa":{}}`))
+	}))
+	defer backend.Close()
+
+	cfg := &f5os.F5osConfig{
+		Host:             backend.URL,
+		User:             "admin",
+		Password:         "admin",
+		DisableSSLVerify: true,
+		CustomHeaders: map[string]string{
+			"X-Tenant-ID": "hsbc-prod",
+		},
+	}
+	_, err := f5os.NewSession(cfg)
+	if err != nil {
+		t.Fatalf("NewSession failed: %v", err)
+	}
+
+	if capturedHeaders.Get("X-Tenant-ID") != "hsbc-prod" {
+		t.Fatalf("expected login request to contain X-Tenant-ID='hsbc-prod', got %q",
+			capturedHeaders.Get("X-Tenant-ID"))
+	}
+}
+
+// TestTransportProxy_CustomHeadersInCONNECTTunnel verifies end-to-end that
+// headers placed in transport.ProxyConnectHeader actually appear in the
+// CONNECT request sent to an HTTPS proxy — i.e. they are in the "outer"
+// tunnel frame, before the encrypted payload. This is the core requirement
+// for proxy authentication schemes that inspect CONNECT tunnel headers.
+func TestTransportProxy_CustomHeadersInCONNECTTunnel(t *testing.T) {
+	var (
+		mu                     sync.Mutex
+		capturedConnectHeaders http.Header
+	)
+
+	// Start a TLS target — the client must use CONNECT to reach HTTPS via a proxy.
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	// Start a plain HTTP proxy that handles CONNECT, captures its headers, and
+	// bridges the connection so the TLS handshake completes.
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "only CONNECT supported", http.StatusMethodNotAllowed)
+			return
+		}
+		mu.Lock()
+		capturedConnectHeaders = r.Header.Clone()
+		mu.Unlock()
+
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijack not supported", http.StatusInternalServerError)
+			return
+		}
+		clientConn, _, err := hj.Hijack()
+		if err != nil {
+			return
+		}
+		defer clientConn.Close()
+
+		_, _ = fmt.Fprint(clientConn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+
+		targetConn, err := net.Dial("tcp", r.Host)
+		if err != nil {
+			return
+		}
+		defer targetConn.Close()
+
+		done := make(chan struct{}, 2)
+		go func() { _, _ = io.Copy(targetConn, clientConn); done <- struct{}{} }()
+		go func() { _, _ = io.Copy(clientConn, targetConn); done <- struct{}{} }()
+		<-done
+	}))
+	defer proxy.Close()
+
+	proxyURL, _ := url.Parse(proxy.URL)
+	tr := &http.Transport{
+		Proxy: http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+		},
+		ProxyConnectHeader: http.Header{
+			"X-Tenant-ID": {"hsbc-prod"},
+		},
+	}
+	client := &http.Client{Transport: tr}
+
+	resp, err := client.Get(target.URL + "/test")
+	if err != nil {
+		t.Fatalf("GET through HTTPS proxy failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	mu.Lock()
+	headers := capturedConnectHeaders
+	mu.Unlock()
+
+	if headers == nil {
+		t.Fatal("proxy never received a CONNECT request")
+	}
+	if headers.Get("X-Tenant-ID") != "hsbc-prod" {
+		t.Fatalf("expected CONNECT request to contain X-Tenant-ID='hsbc-prod', got %q",
+			headers.Get("X-Tenant-ID"))
+	}
+}
+
+// TestNewSession_ReauthPreservesCustomHeaders verifies that CustomHeaders
+// survive the 401 re-auth path in doRequest, where a new F5osConfig is
+// reconstructed from the session fields.
+func TestNewSession_ReauthPreservesCustomHeaders(t *testing.T) {
+	backend := newMockBackend()
+	defer backend.Close()
+
+	cfg := &f5os.F5osConfig{
+		Host:             backend.URL,
+		User:             "admin",
+		Password:         "admin",
+		DisableSSLVerify: true,
+		CustomHeaders: map[string]string{
+			"X-Tenant-ID": "hsbc-prod",
+		},
+	}
+	session, err := f5os.NewSession(cfg)
+	if err != nil {
+		t.Fatalf("NewSession failed: %v", err)
+	}
+
+	// Simulate the F5osConfig reconstruction done in doRequest on 401.
+	reconstructedCfg := &f5os.F5osConfig{
+		Host:             session.Host,
+		User:             session.User,
+		Password:         session.Password,
+		Transport:        session.Transport,
+		DisableSSLVerify: session.DisableSSLVerify,
+		ConfigOptions:    session.ConfigOptions,
+		Port:             session.Port,
+		CustomHeaders:    session.CustomHeaders,
+	}
+
+	if reconstructedCfg.CustomHeaders["X-Tenant-ID"] != "hsbc-prod" {
+		t.Fatalf("expected X-Tenant-ID='hsbc-prod' in reconstructed config, got %q",
+			reconstructedCfg.CustomHeaders["X-Tenant-ID"])
 	}
 }

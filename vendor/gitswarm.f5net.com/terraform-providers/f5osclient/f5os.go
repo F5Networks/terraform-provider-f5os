@@ -66,6 +66,10 @@ type F5osConfig struct {
 	DisableSSLVerify bool
 	// TrustedCACertificate string
 	ConfigOptions *ConfigOptions
+	// CustomHeaders is an optional set of HTTP headers added to every API request.
+	// These headers are also injected into the CONNECT tunnel request
+	// via ProxyConnectHeader, when an HTTPS proxy is in use.
+	CustomHeaders map[string]string
 }
 
 // F5os is a container for our session state.
@@ -85,6 +89,8 @@ type F5os struct {
 	Password         string
 	DisableSSLVerify bool
 	Port             int
+	// CustomHeaders holds the extra HTTP headers injected into every API request.
+	CustomHeaders map[string]string
 	// PollInterval controls how long the client sleeps between polling
 	// iterations when waiting for asynchronous operations (image import,
 	// tenant deploy, partition creation, etc.). The zero value is treated
@@ -228,6 +234,14 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	f5osSession.Password = f5osObj.Password
 	f5osSession.DisableSSLVerify = f5osObj.DisableSSLVerify
 	f5osSession.Port = f5osObj.Port
+	f5osSession.CustomHeaders = f5osObj.CustomHeaders
+	if len(f5osObj.CustomHeaders) > 0 {
+		proxyHdr := make(http.Header)
+		for k, v := range f5osObj.CustomHeaders {
+			proxyHdr.Set(k, v)
+		}
+		tr.ProxyConnectHeader = proxyHdr
+	}
 
 	client := &http.Client{
 		Transport: tr,
@@ -242,6 +256,9 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	}
 	req.Header.Set("Content-Type", contentTypeHeader)
 	req.SetBasicAuth(f5osObj.User, f5osObj.Password)
+	for k, v := range f5osObj.CustomHeaders {
+		req.Header.Set(k, v)
+	}
 	res, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -318,6 +335,9 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 		}
 		req.Header.Set("X-Auth-Token", p.Token)
 		req.Header.Set("Content-Type", contentTypeHeader)
+		for k, v := range p.CustomHeaders {
+			req.Header.Set(k, v)
+		}
 		client := &http.Client{
 			Transport: p.Transport,
 			Timeout:   p.ConfigOptions.APICallTimeout,
@@ -335,13 +355,16 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 				return io.ReadAll(resp.Body)
 			}
 			if resp.StatusCode == 401 && i != retries-1 {
-				var f5osObj = F5osConfig{Host: p.Host, User: p.User, Password: p.Password, Transport: p.Transport, UserAgent: p.UserAgent, Teem: p.Teem, ConfigOptions: p.ConfigOptions, DisableSSLVerify: p.DisableSSLVerify, Port: p.Port}
+				var f5osObj = F5osConfig{Host: p.Host, User: p.User, Password: p.Password, Transport: p.Transport, UserAgent: p.UserAgent, Teem: p.Teem, ConfigOptions: p.ConfigOptions, DisableSSLVerify: p.DisableSSLVerify, Port: p.Port, CustomHeaders: p.CustomHeaders}
 				f5os, err := NewSession(&f5osObj)
 				if err != nil {
 					return nil, err
 				}
 				req.Header.Set("X-Auth-Token", f5os.Token)
 				req.Header.Set("Content-Type", contentTypeHeader)
+				for k, v := range p.CustomHeaders {
+					req.Header.Set(k, v)
+				}
 			}
 			if resp.StatusCode >= 400 && i == retries-1 {
 				byteData, _ := io.ReadAll(resp.Body)
@@ -366,6 +389,9 @@ func (p *F5os) doTenantRequest(op, path string, body []byte) ([]byte, error) {
 	}
 	req.Header.Set("X-Auth-Token", p.Token)
 	req.Header.Set("Content-Type", contentTypeHeader)
+	for k, v := range p.CustomHeaders {
+		req.Header.Set(k, v)
+	}
 	client := &http.Client{
 		Transport: p.Transport,
 		Timeout:   p.ConfigOptions.APICallTimeout,
