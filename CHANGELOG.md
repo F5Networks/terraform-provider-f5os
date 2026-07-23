@@ -5,10 +5,17 @@ FEATURES:
 * `f5os_tenant`: Added `max_nodes` (Optional/Computed) attribute for F5OS 2.0.0+ tenants; version-gated so it is not sent to devices below 2.0.0. Also exposes read-only `mgmt_vlan`, `mgmt_vlan_accessible`, and `clustering_as_service` state attributes reported by F5OS 2.0.0+
 * `f5os_auth`: Added `login_policy` nested block (`admin_role_limit`, `restconf_max_session_limit`, `ssh_max_session_limit`) backed by the `f5-openconfig-aaa-login-policy` module; version-gated to F5OS 2.0.0+ (configuring it on older devices returns a clear error)
 * `f5os_auth`: Extended `password_policy` with F5OS 2.0.0+ fields `min_days`, `remember`, and `warn_age`; version-gated so configuring them on devices below 2.0.0 returns a clear error
+* `f5os_auth`: Added `ldap` nested block (`user_object_class`, `group_object_class` lists) backed by the `f5-openconfig-aaa-ldap` module; version-gated to F5OS 2.0.0+ (configuring it on older devices returns a clear error)
 BUG FIXES:
 IMPROVEMENTS:
 * CI/CD: Bumped Go toolchain from 1.25.10 to 1.25.12 to remediate standard library vulnerabilities GO-2026-5856 (crypto/tls), GO-2026-5039 (net/textproto), and GO-2026-5037 (crypto/x509) flagged by `govulncheck`
 * CI/CD: Re-enabled the GitHub Actions `govulncheck` job as blocking (removed `continue-on-error`) now that the toolchain upgrade clears all known standard library vulnerabilities
+* CI/CD: Pinned `GOTOOLCHAIN=go1.25.12` on the `govulncheck` install step in both GitHub Actions and GitLab CI so the scanner is built with a toolchain able to parse the module's `go 1.25` sources
+
+SECURITY:
+* Upgraded `golang.org/x/net` from v0.55.0 to v0.56.0 to remediate GO-2026-5942 (panic parsing invalid SVCB/HTTPS DNS records in `golang.org/x/net/dns/dnsmessage`)
+* Upgraded `golang.org/x/text` from v0.24.0 to v0.39.0 to remediate GO-2026-5970 (infinite loop on invalid input in `golang.org/x/text`)
+* Upgraded transitive dependencies pulled in by the above: `golang.org/x/crypto` v0.37.0 → v0.53.0, `golang.org/x/sys` v0.44.0 → v0.46.0, `golang.org/x/mod` v0.17.0 → v0.37.0, `google.golang.org/protobuf` v1.34.1 → v1.36.10, `github.com/google/go-cmp` v0.6.0 → v0.7.0
 
 ## 1.12.0
 

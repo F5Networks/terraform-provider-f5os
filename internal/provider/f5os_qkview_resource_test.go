@@ -884,7 +884,7 @@ func TestUnitQkviewCreateListErrorDuringExistsCheck(t *testing.T) {
 
 // TestUnitQkviewExistsNoMatchInList exercises the qkviewExists path where
 // the list contains files but none match the target filename. This covers
-// the final "return false, '', nil" in qkviewExists.
+// the final `return false, "", nil` in qkviewExists.
 func TestUnitQkviewExistsNoMatchInList(t *testing.T) {
 	testAccPreUnitCheck(t)
 	defer teardown()

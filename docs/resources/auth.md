@@ -48,6 +48,12 @@ resource "f5os_auth" "aaa" {
     restconf_max_session_limit = 10
     ssh_max_session_limit      = 10
   }
+
+  # ldap object classes are only supported on F5OS 2.0.0 and later.
+  ldap = {
+    user_object_class  = ["posixAccount"]
+    group_object_class = ["posixGroup"]
+  }
 }
 ```
 
@@ -57,6 +63,7 @@ resource "f5os_auth" "aaa" {
 ### Optional
 
 - `auth_order` (List of String) Ordered list of authentication methods. Allowed values: local, radius, tacacs, ldap.
+- `ldap` (Attributes) LDAP server configuration. Only supported on F5OS >= 2.0.0. Only fields you specify are managed; unspecified fields are left at device defaults. (see [below for nested schema](#nestedatt--ldap))
 - `login_policy` (Attributes) AAA login-policy settings. Only supported on F5OS >= 2.0.0. Only fields you specify are managed; unspecified fields are left at device defaults. (see [below for nested schema](#nestedatt--login_policy))
 - `password_policy` (Attributes) Password policy settings. Only fields you specify are managed; unspecified fields are left at device defaults. (see [below for nested schema](#nestedatt--password_policy))
 - `remote_roles` (Attributes Set) Remote role mappings. Configure role GID (and optionally LDAP group association). (see [below for nested schema](#nestedatt--remote_roles))
@@ -64,6 +71,15 @@ resource "f5os_auth" "aaa" {
 ### Read-Only
 
 - `id` (String) Synthetic ID for the auth resource.
+
+<a id="nestedatt--ldap"></a>
+### Nested Schema for `ldap`
+
+Optional:
+
+- `group_object_class` (List of String) Object classes used when searching for LDAP group objects (e.g. ["posixGroup"]).
+- `user_object_class` (List of String) Object classes used when searching for LDAP user objects (e.g. ["posixAccount"]).
+
 
 <a id="nestedatt--login_policy"></a>
 ### Nested Schema for `login_policy`

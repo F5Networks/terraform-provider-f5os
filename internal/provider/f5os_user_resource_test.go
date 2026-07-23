@@ -321,8 +321,6 @@ func TestAccUserResourceSecondaryRoleOnly(t *testing.T) {
 // Acceptance test helpers for direct device verification
 // ---------------------------------------------------------------------------
 
-
-
 // testAccCheckUserRolesOnDevice queries the device's roles endpoint directly
 // and verifies that the given user has exactly the expected roles — no more,
 // no less. This bypasses the resource's Read method.

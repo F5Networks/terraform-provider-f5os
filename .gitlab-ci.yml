@@ -60,6 +60,11 @@ cve-scan:
     - if: $CI_COMMIT_TAG
     - if: $CI_PIPELINE_SOURCE == "schedule"
   script:
+    # Build govulncheck with a toolchain new enough to parse the module's
+    # `go 1.25` sources. `go install @latest` otherwise builds it with the
+    # toolchain pinned by x/vuln's go.mod, whose type-checker rejects newer
+    # language versions with "package requires newer Go version".
+    - export GOTOOLCHAIN=go1.25.12
     - go install golang.org/x/vuln/cmd/govulncheck@latest
     - export GOFLAGS=-mod=vendor
     - govulncheck -show verbose ./...
@@ -102,6 +107,14 @@ unit-tests:
     - if: $CI_PIPELINE_SOURCE == "schedule"
   stage: unittest
   variables:
+    # Force acceptance-test mode OFF for this job. The plugin-testing framework
+    # treats TF_ACC as "run acceptance tests" whenever it is set to ANY
+    # non-empty value — including "0" — so it must be EMPTY, not "0". Setting
+    # it empty here overrides any inherited pipeline/project-level TF_ACC (e.g.
+    # when a pipeline is triggered with RUN_ACC_TESTS=true), which would
+    # otherwise make `make test` execute acceptance tests against a real
+    # device.
+    TF_ACC: ""
     # Pin the Terraform CLI used by the plugin-testing framework. Without a
     # Terraform binary on PATH the framework auto-downloads "latest" from
     # releases.hashicorp.com at test time, which is both non-deterministic

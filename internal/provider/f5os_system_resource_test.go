@@ -497,7 +497,6 @@ func TestAccSystemUpdateTC2Resource(t *testing.T) {
 	})
 }
 
-
 const testAccSystemCreateResourceConfig = `
 resource "f5os_system" "system_settings" {
   hostname = "system.example.net"
@@ -533,8 +532,6 @@ resource "f5os_system" "system_settings" {
 // ---------------------------------------------------------------------------
 // Acceptance test helpers
 // ---------------------------------------------------------------------------
-
-
 
 // testAccCheckSystemSSHListsOnDevice queries the device cipher service
 // endpoints directly and verifies the sshd ciphers, kex, macs, and hkey

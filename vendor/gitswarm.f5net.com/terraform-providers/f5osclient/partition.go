@@ -874,6 +874,11 @@ const (
 	// f5-openconfig-aaa-login-policy YANG module (2024-09-24), available on
 	// F5OS 2.0.0 and later.
 	uriAAALoginPolicy = "/openconfig-system:system/aaa/f5-openconfig-aaa-login-policy:login-policy/config"
+	// uriAAALdap targets the LDAP container introduced by the
+	// f5-openconfig-aaa-ldap YANG module. The user-object-class and
+	// group-object-class leaf-lists it exposes are available on F5OS 2.0.0
+	// and later.
+	uriAAALdap = "/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap"
 )
 
 type authOrderPayload struct {
@@ -1174,6 +1179,75 @@ func (c *F5os) SetLoginPolicy(config *LoginPolicyConfig) error {
 	_, err = c.PatchRequest(uriAAALoginPolicy, body)
 	if err != nil {
 		return fmt.Errorf("PATCH login policy failed: %w", err)
+	}
+	return nil
+}
+
+// LdapConfig represents the subset of the LDAP container managed by the
+// provider. The user-object-class and group-object-class leaf-lists were
+// introduced by the f5-openconfig-aaa-ldap YANG module and are available on
+// F5OS 2.0.0 and later. Slice fields are nil when unmanaged so callers can
+// distinguish "not set" (nil, omitted from the payload) from "set to empty"
+// (non-nil zero-length slice, sent as [] to clear the leaf-list on the device).
+//
+// The struct is not tagged with omitempty because encoding/json treats a
+// non-nil empty slice the same as a nil slice under omitempty, which would
+// collapse the "clear to empty" case into "leave unset". SetLdapConfig builds
+// the payload explicitly to preserve the distinction.
+type LdapConfig struct {
+	UserObjectClass  []string `json:"user-object-class"`
+	GroupObjectClass []string `json:"group-object-class"`
+}
+
+// ldapResponse is the API response wrapper for the LDAP container.
+type ldapResponse struct {
+	Ldap LdapConfig `json:"f5-openconfig-aaa-ldap:ldap"`
+}
+
+// GetLdapConfig reads the current LDAP container config from the device.
+// Only the object-class leaf-lists are parsed. Available on F5OS 2.0.0+.
+func (c *F5os) GetLdapConfig() (*LdapConfig, error) {
+	resp, err := c.GetRequest(uriAAALdap)
+	if err != nil {
+		return nil, fmt.Errorf("GET ldap config failed: %w", err)
+	}
+
+	var parsed ldapResponse
+	if err := json.Unmarshal(resp, &parsed); err != nil {
+		return nil, fmt.Errorf("invalid JSON for ldap config: %w", err)
+	}
+
+	return &parsed.Ldap, nil
+}
+
+// SetLdapConfig updates the LDAP container config on the device using PATCH.
+// Only leaf-lists with non-nil slices are included in the payload: a nil slice
+// is omitted (leaving the leaf-list unmanaged), while a non-nil empty slice is
+// sent as [] to clear the leaf-list on the device. Available on F5OS 2.0.0+.
+func (c *F5os) SetLdapConfig(config *LdapConfig) error {
+	ldap := make(map[string]interface{})
+	if config.UserObjectClass != nil {
+		ldap["user-object-class"] = config.UserObjectClass
+	}
+	if config.GroupObjectClass != nil {
+		ldap["group-object-class"] = config.GroupObjectClass
+	}
+
+	// Nothing to send: both leaf-lists are unmanaged (nil). Skip the round-trip
+	// rather than PATCH an empty container, whose device behavior is undefined.
+	if len(ldap) == 0 {
+		return nil
+	}
+
+	payload := map[string]interface{}{"f5-openconfig-aaa-ldap:ldap": ldap}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal ldap config payload: %w", err)
+	}
+
+	_, err = c.PatchRequest(uriAAALdap, body)
+	if err != nil {
+		return fmt.Errorf("PATCH ldap config failed: %w", err)
 	}
 	return nil
 }
