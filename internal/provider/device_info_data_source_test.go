@@ -287,9 +287,9 @@ func TestUnitConvertInterfacesInfo(t *testing.T) {
 							OutDiscards      string `json:"out-discards,omitempty"`
 							OutErrors        string `json:"out-errors,omitempty"`
 						}{
-							InOctets:      "11067281",
+							InOctets:        "11067281",
 							InMulticastPkts: "50398",
-							InDiscards:    "10075",
+							InDiscards:      "10075",
 						},
 					},
 					OpenconfigIfEthernetEthernet: struct {
@@ -408,11 +408,11 @@ func TestUnitFilterGatherSubsets(t *testing.T) {
 			name:  "all expands to five subsets",
 			input: []string{"all"},
 			expected: map[string]bool{
-				"interfaces":       true,
-				"vlans":            true,
+				"interfaces":        true,
+				"vlans":             true,
 				"controller_images": true,
-				"partition_images": true,
-				"tenant_images":    true,
+				"partition_images":  true,
+				"tenant_images":     true,
 			},
 		},
 		{
@@ -424,10 +424,10 @@ func TestUnitFilterGatherSubsets(t *testing.T) {
 			name:  "all minus interfaces",
 			input: []string{"all", "!interfaces"},
 			expected: map[string]bool{
-				"vlans":            true,
+				"vlans":             true,
 				"controller_images": true,
-				"partition_images": true,
-				"tenant_images":    true,
+				"partition_images":  true,
+				"tenant_images":     true,
 			},
 		},
 		{

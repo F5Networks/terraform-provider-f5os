@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -4233,6 +4234,403 @@ resource "f5os_auth" "test" {
     admin_role_limit           = false
     restconf_max_session_limit = 3
     ssh_max_session_limit      = 4
+  }
+}
+`
+
+// setupLdapMock registers a stateful LDAP-container handler plus the baseline
+// auth/platform handlers used by the ldap unit tests. The device version
+// reported to the provider is controlled by the caller via
+// setupMockPlatformVersion.
+func setupLdapMock(t *testing.T, currentLdap map[string]interface{}) {
+	t.Helper()
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"openconfig-system:config":{"authentication-method":["openconfig-aaa-types:LOCAL"]}}`)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config/authentication-method", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/yang-data+json")
+			w.WriteHeader(http.StatusOK)
+			resp := map[string]interface{}{
+				"f5-openconfig-aaa-ldap:ldap": currentLdap,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case "PATCH":
+			var payload map[string]map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if ldap, ok := payload["f5-openconfig-aaa-ldap:ldap"]; ok {
+				for k, v := range ldap {
+					currentLdap[k] = v
+				}
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+}
+
+// TestUnitAuthResourceLdap2_0_0 exercises the ldap nested block on an F5OS
+// 2.0.0 device: Create sends the object classes, Read refreshes them, and
+// Update changes them. Verifies both leaf-lists round-trip.
+func TestUnitAuthResourceLdap2_0_0(t *testing.T) {
+	currentLdap := map[string]interface{}{
+		"user-object-class":  []interface{}{"person"},
+		"group-object-class": []interface{}{"groupOfNames"},
+	}
+
+	testAccPreUnitCheck(t)
+	setupMockPlatformVersion(mux, "2.0.0")
+	setupLdapMock(t, currentLdap)
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  ldap = {
+    user_object_class  = ["posixAccount"]
+    group_object_class = ["posixGroup"]
+  }
+}
+`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "posixAccount"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.group_object_class.0", "posixGroup"),
+				),
+			},
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  ldap = {
+    user_object_class  = ["posixAccount", "inetOrgPerson"]
+    group_object_class = ["posixGroup"]
+  }
+}
+`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "posixAccount"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.1", "inetOrgPerson"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.group_object_class.0", "posixGroup"),
+				),
+			},
+		},
+	})
+}
+
+// setupLdapDriftMock registers a stateful LDAP-container handler whose GET
+// response is controlled by a caller-owned pointer. Tests can create with one
+// device state, then flip *drift to simulate an out-of-band eviction of a
+// managed leaf-list before the next refresh. PATCH does NOT mutate the GET
+// value, so the flipped state persists through the refresh cycle.
+func setupLdapDriftMock(t *testing.T, drift *map[string]interface{}) {
+	t.Helper()
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"openconfig-system:config":{"authentication-method":["openconfig-aaa-types:LOCAL"]}}`)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config/authentication-method", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/yang-data+json")
+			w.WriteHeader(http.StatusOK)
+			resp := map[string]interface{}{
+				"f5-openconfig-aaa-ldap:ldap": *drift,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case "PATCH":
+			// Accept but do not persist: the caller drives GET state via *drift.
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+}
+
+// TestUnitAuthResourceLdapDriftSurfaced verifies the non-import drift branch of
+// readLdapConfig: after a successful Create, if the device evicts a managed
+// leaf-list out-of-band (GET now returns it empty), the next refresh must write
+// the device state back so Terraform reports a non-empty plan instead of
+// silently ignoring the drift.
+//
+// This is a regression guard for the previous "config.UserObjectClass != nil"
+// guard, which left stale state in place and hid the drift entirely. The drift
+// is asserted on refresh (not inside Create), because the framework requires
+// Create's returned value to match the plan.
+func TestUnitAuthResourceLdapDriftSurfaced(t *testing.T) {
+	// Step 1 (create) sees the configured values on GET.
+	drift := map[string]interface{}{
+		"user-object-class":  []interface{}{"posixAccount"},
+		"group-object-class": []interface{}{"posixGroup"},
+	}
+
+	testAccPreUnitCheck(t)
+	setupMockPlatformVersion(mux, "2.0.0")
+	setupLdapDriftMock(t, &drift)
+
+	defer teardown()
+
+	const cfg = `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  ldap = {
+    user_object_class  = ["posixAccount"]
+    group_object_class = ["posixGroup"]
+  }
+}
+`
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			{
+				// Create: device reflects the config, apply is clean.
+				Config: cfg,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "posixAccount"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.group_object_class.0", "posixGroup"),
+				),
+			},
+			{
+				// Simulate out-of-band eviction before the refresh: the device
+				// now returns empty leaf-lists. The refresh Read must surface
+				// this as a diff, so the plan is non-empty. With the old guard
+				// the stale value stayed in state and the plan was empty.
+				PreConfig: func() {
+					drift = map[string]interface{}{}
+				},
+				Config:             cfg,
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+		},
+	})
+}
+
+// TestUnitAuthResourceLdapRejectedPre2_0_0 verifies that configuring the ldap
+// block on a device below 2.0.0 produces a clear error rather than sending an
+// unknown field to the device.
+func TestUnitAuthResourceLdapRejectedPre2_0_0(t *testing.T) {
+	currentLdap := map[string]interface{}{}
+
+	testAccPreUnitCheck(t)
+	setupMockPlatformVersion(mux, "1.8.0")
+	setupLdapMock(t, currentLdap)
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  ldap = {
+    user_object_class = ["posixAccount"]
+  }
+}
+`,
+				ExpectError: regexp.MustCompile(`ldap configuration \(user_object_class/group_object_class\) is not supported`),
+			},
+		},
+	})
+}
+
+// TestUnitLdapConfigToModel exercises the ldapConfigToModel converter directly
+// (the code path used during import) for both populated and nil leaf-lists.
+func TestUnitLdapConfigToModel(t *testing.T) {
+	ctx := context.Background()
+
+	// Populated leaf-lists round-trip into non-null lists.
+	cfg := &f5os.LdapConfig{
+		UserObjectClass:  []string{"posixAccount"},
+		GroupObjectClass: []string{"posixGroup"},
+	}
+	model, diags := ldapConfigToModel(ctx, cfg)
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if model.UserObjectClass.IsNull() {
+		t.Errorf("expected user_object_class to be non-null")
+	}
+	if model.GroupObjectClass.IsNull() {
+		t.Errorf("expected group_object_class to be non-null")
+	}
+	var users []string
+	model.UserObjectClass.ElementsAs(ctx, &users, false)
+	if len(users) != 1 || users[0] != "posixAccount" {
+		t.Errorf("user_object_class: got %v", users)
+	}
+
+	// Nil leaf-lists map to null lists.
+	empty, diags := ldapConfigToModel(ctx, &f5os.LdapConfig{})
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if !empty.UserObjectClass.IsNull() {
+		t.Errorf("expected null user_object_class for empty config")
+	}
+	if !empty.GroupObjectClass.IsNull() {
+		t.Errorf("expected null group_object_class for empty config")
+	}
+}
+
+// testAccCheckLdapApplied queries the device directly (bypassing the resource
+// Read method) and verifies the LDAP object-class leaf-lists match the
+// expected values.
+func testAccCheckLdapApplied(userClasses, groupClasses []string) tfresource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTestClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+		config, err := client.GetLdapConfig()
+		if err != nil {
+			return fmt.Errorf("GetLdapConfig failed: %w", err)
+		}
+		if !slices.Equal(config.UserObjectClass, userClasses) {
+			return fmt.Errorf("user-object-class: expected %v, got %v", userClasses, config.UserObjectClass)
+		}
+		if !slices.Equal(config.GroupObjectClass, groupClasses) {
+			return fmt.Errorf("group-object-class: expected %v, got %v", groupClasses, config.GroupObjectClass)
+		}
+		return nil
+	}
+}
+
+// TestAccAuthResourceLdap verifies, against a real F5OS 2.0.0+ device, that the
+// ldap nested block is applied on Create and Update and that the values are
+// reflected on the device via a direct API check. Skips on devices below
+// 2.0.0.
+//
+// Safety:
+//   - auth_order always keeps "local" first
+//   - ldap Delete is a no-op, so the true device baseline is captured up front
+//     and restored in t.Cleanup
+func TestAccAuthResourceLdap(t *testing.T) {
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Skipf("Cannot create f5os client: %v", err)
+	}
+	if !platformVersionAtLeast(client.PlatformVersion, "v2.0") {
+		t.Skipf("skipping: ldap object classes require F5OS 2.0.0+ but device reports %q", client.PlatformVersion)
+	}
+
+	// Capture the true device baseline so it can be restored after the test,
+	// since the ldap block has no Delete restoration.
+	trueBaseline, err := client.GetLdapConfig()
+	if err != nil {
+		t.Fatalf("Failed to read true device baseline ldap config: %v", err)
+	}
+
+	t.Cleanup(func() {
+		cleanupClient, err := newTestClientFromEnv()
+		if err != nil {
+			t.Logf("WARNING: cleanup failed to create client: %v", err)
+			return
+		}
+		if err := cleanupClient.SetLdapConfig(trueBaseline); err != nil {
+			t.Logf("WARNING: cleanup failed to restore ldap config: %v", err)
+		} else {
+			t.Logf("Cleanup: restored ldap config to baseline")
+		}
+	})
+
+	tfresource.Test(t, tfresource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			// Step 1: Create
+			{
+				Config: testAccAuthResourceLdapConfig,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "posixAccount"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.group_object_class.0", "posixGroup"),
+					testAccCheckLdapApplied([]string{"posixAccount"}, []string{"posixGroup"}),
+				),
+			},
+			// Step 2: Update the user object classes
+			{
+				Config: testAccAuthResourceLdapConfigUpdated,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "posixAccount"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.1", "inetOrgPerson"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.group_object_class.0", "posixGroup"),
+					testAccCheckLdapApplied([]string{"posixAccount", "inetOrgPerson"}, []string{"posixGroup"}),
+				),
+			},
+			// Step 3: Import
+			{
+				ResourceName:            "f5os_auth.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy", "login_policy"},
+			},
+		},
+	})
+}
+
+const testAccAuthResourceLdapConfig = `
+resource "f5os_auth" "test" {
+  auth_order = ["local", "ldap"]
+
+  ldap = {
+    user_object_class  = ["posixAccount"]
+    group_object_class = ["posixGroup"]
+  }
+}
+`
+
+const testAccAuthResourceLdapConfigUpdated = `
+resource "f5os_auth" "test" {
+  auth_order = ["local", "ldap"]
+
+  ldap = {
+    user_object_class  = ["posixAccount", "inetOrgPerson"]
+    group_object_class = ["posixGroup"]
   }
 }
 `

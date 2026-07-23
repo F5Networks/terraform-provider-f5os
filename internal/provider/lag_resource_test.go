@@ -1194,8 +1194,6 @@ resource "f5os_lag" "test_lag" {
 // Acceptance test helpers — direct device API verification
 // ---------------------------------------------------------------------------
 
-
-
 // testAccCheckLagOnDevice queries the device directly and verifies that the
 // LAG interface exists with the expected native_vlan, trunk_vlans, members,
 // mode, and interval.

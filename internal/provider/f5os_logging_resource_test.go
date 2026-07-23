@@ -86,8 +86,6 @@ func getTestCABundle(t *testing.T) string {
 // Direct-API verification helpers
 // ---------------------------------------------------------------------------
 
-
-
 // testAccCheckLoggingIncludeHostnameOnDevice queries the device directly
 // and verifies the include-hostname setting.
 func testAccCheckLoggingIncludeHostnameOnDevice(expected bool) resource.TestCheckFunc {

@@ -90,12 +90,20 @@ type loginPolicyModel struct {
 	SSHMaxSessionLimit      types.Int64 `tfsdk:"ssh_max_session_limit"`
 }
 
+// ldapConfigModel represents the LDAP server-config object classes in
+// Terraform state. Introduced in F5OS 2.0.0 (f5-openconfig-aaa-ldap module).
+type ldapConfigModel struct {
+	UserObjectClass  types.List `tfsdk:"user_object_class"`
+	GroupObjectClass types.List `tfsdk:"group_object_class"`
+}
+
 type AuthResourceModel struct {
 	ID             types.String `tfsdk:"id"`
 	AuthOrder      types.List   `tfsdk:"auth_order"`
 	RemoteRoles    types.Set    `tfsdk:"remote_roles"`
 	PasswordPolicy types.Object `tfsdk:"password_policy"`
 	LoginPolicy    types.Object `tfsdk:"login_policy"`
+	Ldap           types.Object `tfsdk:"ldap"`
 }
 
 func (r *AuthResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -228,6 +236,23 @@ func (r *AuthResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 						Validators: []validator.Int64{
 							int64validator.AtLeast(1),
 						},
+					},
+				},
+			},
+			"ldap": schema.SingleNestedAttribute{
+				MarkdownDescription: "LDAP server configuration. Only supported on F5OS >= 2.0.0. " +
+					"Only fields you specify are managed; unspecified fields are left at device defaults.",
+				Optional: true,
+				Attributes: map[string]schema.Attribute{
+					"user_object_class": schema.ListAttribute{
+						MarkdownDescription: "Object classes used when searching for LDAP user objects (e.g. [\"posixAccount\"]).",
+						Optional:            true,
+						ElementType:         types.StringType,
+					},
+					"group_object_class": schema.ListAttribute{
+						MarkdownDescription: "Object classes used when searching for LDAP group objects (e.g. [\"posixGroup\"]).",
+						Optional:            true,
+						ElementType:         types.StringType,
 					},
 				},
 			},
@@ -372,6 +397,19 @@ func (r *AuthResource) Create(ctx context.Context, req resource.CreateRequest, r
 		}
 	}
 
+	// Handle LDAP config if provided (F5OS 2.0.0+ only)
+	if !plan.Ldap.IsNull() && !plan.Ldap.IsUnknown() {
+		var ldapModel ldapConfigModel
+		resp.Diagnostics.Append(plan.Ldap.As(ctx, &ldapModel, basetypes.ObjectAsOptions{})...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		resp.Diagnostics.Append(r.writeLdapConfig(ctx, &ldapModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	plan.ID = types.StringValue("f5os-auth")
 
 	// Read back actual device state so Terraform detects any discrepancies
@@ -394,6 +432,12 @@ func (r *AuthResource) Create(ctx context.Context, req resource.CreateRequest, r
 			return
 		}
 	}
+	if !plan.Ldap.IsNull() {
+		resp.Diagnostics.Append(r.readLdapConfig(ctx, &plan, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -408,7 +452,7 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 	// Detect import: all user-configurable fields are null because
 	// ImportStatePassthroughID only sets the ID.
-	isImport := state.AuthOrder.IsNull() && state.RemoteRoles.IsNull() && state.PasswordPolicy.IsNull() && state.LoginPolicy.IsNull()
+	isImport := state.AuthOrder.IsNull() && state.RemoteRoles.IsNull() && state.PasswordPolicy.IsNull() && state.LoginPolicy.IsNull() && state.Ldap.IsNull()
 
 	// During import, snapshot the device's current auth_order into private
 	// state so Delete can restore it. Create handles this for the normal
@@ -462,6 +506,17 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	// would already have failed at Create/Update time.
 	if !state.LoginPolicy.IsNull() || (isImport && platformVersionAtLeast(r.client.PlatformVersion, "v2.0")) {
 		resp.Diagnostics.Append(r.readLoginPolicy(ctx, &state, isImport)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
+	// Read ldap config from device when managed or during import. Like
+	// login_policy, the LDAP object classes are only available on F5OS
+	// 2.0.0+; on older devices the import read is skipped and a managed
+	// write would already have failed at Create/Update time.
+	if !state.Ldap.IsNull() || (isImport && platformVersionAtLeast(r.client.PlatformVersion, "v2.0")) {
+		resp.Diagnostics.Append(r.readLdapConfig(ctx, &state, isImport)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
@@ -563,6 +618,19 @@ func (r *AuthResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		}
 	}
 
+	// Update LDAP config if specified (F5OS 2.0.0+ only)
+	if !plan.Ldap.IsNull() && !plan.Ldap.IsUnknown() {
+		var ldapModel ldapConfigModel
+		resp.Diagnostics.Append(plan.Ldap.As(ctx, &ldapModel, basetypes.ObjectAsOptions{})...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		resp.Diagnostics.Append(r.writeLdapConfig(ctx, &ldapModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	plan.ID = types.StringValue("f5os-auth")
 
 	// Read back actual device state so Terraform detects any discrepancies
@@ -581,6 +649,12 @@ func (r *AuthResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 	if !plan.LoginPolicy.IsNull() {
 		resp.Diagnostics.Append(r.readLoginPolicy(ctx, &plan, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+	if !plan.Ldap.IsNull() {
+		resp.Diagnostics.Append(r.readLdapConfig(ctx, &plan, false)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
@@ -1528,4 +1602,159 @@ func loginPolicyConfigToModel(config *f5os.LoginPolicyConfig) loginPolicyModel {
 		model.SSHMaxSessionLimit = types.Int64Null()
 	}
 	return model
+}
+
+// ---------------------------------------------------------------------------
+// LDAP config helpers (F5OS 2.0.0+)
+// ---------------------------------------------------------------------------
+
+// ldapAttrTypes returns the attr.Type map for the ldap SingleNestedAttribute.
+// Used when constructing types.ObjectValue.
+func ldapAttrTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"user_object_class":  types.ListType{ElemType: types.StringType},
+		"group_object_class": types.ListType{ElemType: types.StringType},
+	}
+}
+
+// writeLdapConfig converts the Terraform model to an API config struct and
+// sends it to the device via PATCH. The LDAP object-class leaf-lists are only
+// available on F5OS 2.0.0+, so writing to an older device is rejected with a
+// clear error.
+func (r *AuthResource) writeLdapConfig(ctx context.Context, lc *ldapConfigModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if !platformVersionAtLeast(r.client.PlatformVersion, "v2.0") {
+		diags.AddError("Unsupported attribute",
+			"ldap configuration (user_object_class/group_object_class) is not supported on F5OS versions below 2.0.0")
+		return diags
+	}
+	config, d := ldapModelToConfig(ctx, lc)
+	diags.Append(d...)
+	if diags.HasError() {
+		return diags
+	}
+	tflog.Debug(ctx, "Writing ldap config to device")
+	if err := r.client.SetLdapConfig(config); err != nil {
+		diags.AddError("Failed to set ldap config", err.Error())
+	}
+	return diags
+}
+
+// readLdapConfig reads the LDAP container config from the device and refreshes
+// the Ldap field in the model.
+//
+// When isImport is true, all fields are populated from the device (since there
+// is no prior state). Otherwise, only fields already present in state are
+// refreshed — this avoids adding fields the user didn't declare.
+func (r *AuthResource) readLdapConfig(ctx context.Context, state *AuthResourceModel, isImport bool) diag.Diagnostics {
+	var diags diag.Diagnostics
+	config, err := r.client.GetLdapConfig()
+	if err != nil {
+		diags.AddError("Failed to read ldap config from device", err.Error())
+		return diags
+	}
+
+	if isImport {
+		model, d := ldapConfigToModel(ctx, config)
+		diags.Append(d...)
+		if diags.HasError() {
+			return diags
+		}
+		obj, d := types.ObjectValueFrom(ctx, ldapAttrTypes(), model)
+		diags.Append(d...)
+		if !diags.HasError() {
+			state.Ldap = obj
+		}
+		return diags
+	}
+
+	// Normal read: only refresh fields already in state.
+	var current ldapConfigModel
+	diags.Append(state.Ldap.As(ctx, &current, basetypes.ObjectAsOptions{})...)
+	if diags.HasError() {
+		return diags
+	}
+
+	// Refresh managed fields unconditionally from the device so out-of-band
+	// drift is surfaced. Dropping the previous "config.X != nil" guard is
+	// deliberate: if the device evicts the value (nil) while state still holds
+	// a non-null list, we must write the device's value back so Terraform sees
+	// the diff and re-applies. ListValueFrom preserves the nil/empty
+	// distinction from GetLdapConfig: a nil slice becomes a null list
+	// (leaf-list absent on device), a non-nil empty slice becomes an empty list
+	// (leaf-list present but cleared).
+	if !current.UserObjectClass.IsNull() {
+		lv, d := types.ListValueFrom(ctx, types.StringType, config.UserObjectClass)
+		diags.Append(d...)
+		if diags.HasError() {
+			return diags
+		}
+		current.UserObjectClass = lv
+	}
+	if !current.GroupObjectClass.IsNull() {
+		lv, d := types.ListValueFrom(ctx, types.StringType, config.GroupObjectClass)
+		diags.Append(d...)
+		if diags.HasError() {
+			return diags
+		}
+		current.GroupObjectClass = lv
+	}
+
+	obj, d := types.ObjectValueFrom(ctx, ldapAttrTypes(), current)
+	diags.Append(d...)
+	if !diags.HasError() {
+		state.Ldap = obj
+	}
+	return diags
+}
+
+// ldapModelToConfig converts a Terraform ldapConfigModel to an f5osclient
+// LdapConfig struct. Only non-null leaf-lists are set.
+func ldapModelToConfig(ctx context.Context, lc *ldapConfigModel) (*f5os.LdapConfig, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	config := &f5os.LdapConfig{}
+	if !lc.UserObjectClass.IsNull() && !lc.UserObjectClass.IsUnknown() {
+		var classes []string
+		diags.Append(lc.UserObjectClass.ElementsAs(ctx, &classes, false)...)
+		if diags.HasError() {
+			return config, diags
+		}
+		config.UserObjectClass = classes
+	}
+	if !lc.GroupObjectClass.IsNull() && !lc.GroupObjectClass.IsUnknown() {
+		var classes []string
+		diags.Append(lc.GroupObjectClass.ElementsAs(ctx, &classes, false)...)
+		if diags.HasError() {
+			return config, diags
+		}
+		config.GroupObjectClass = classes
+	}
+	return config, diags
+}
+
+// ldapConfigToModel converts an f5osclient LdapConfig to a Terraform
+// ldapConfigModel for populating state.
+func ldapConfigToModel(ctx context.Context, config *f5os.LdapConfig) (ldapConfigModel, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	model := ldapConfigModel{
+		UserObjectClass:  types.ListNull(types.StringType),
+		GroupObjectClass: types.ListNull(types.StringType),
+	}
+	if config.UserObjectClass != nil {
+		lv, d := types.ListValueFrom(ctx, types.StringType, config.UserObjectClass)
+		diags.Append(d...)
+		if diags.HasError() {
+			return model, diags
+		}
+		model.UserObjectClass = lv
+	}
+	if config.GroupObjectClass != nil {
+		lv, d := types.ListValueFrom(ctx, types.StringType, config.GroupObjectClass)
+		diags.Append(d...)
+		if diags.HasError() {
+			return model, diags
+		}
+		model.GroupObjectClass = lv
+	}
+	return model, diags
 }

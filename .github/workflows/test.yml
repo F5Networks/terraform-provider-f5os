@@ -58,7 +58,13 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
+      # Build govulncheck with a toolchain new enough to parse the module's
+      # `go 1.25` sources. `go install @latest` otherwise builds it with the
+      # toolchain pinned by x/vuln's go.mod, whose type-checker rejects newer
+      # language versions with "package requires newer Go version".
       - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        env:
+          GOTOOLCHAIN: go1.25.12
       - run: govulncheck -show verbose ./...
 
   # Run unit tests in a matrix with Terraform CLI versions

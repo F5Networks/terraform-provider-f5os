@@ -83,8 +83,6 @@ func testAccProxyPreCheck(t *testing.T) {
 	}
 }
 
-
-
 // testAccCheckProxyClientConnects verifies that an F5OS client can successfully
 // connect to the device through the proxy by creating a session and verifying
 // it obtained an auth token.
