@@ -1168,15 +1168,32 @@ func (r *f5osLoggingResource) Delete(ctx context.Context, req resource.DeleteReq
 		}
 	}
 
-	// Delete Include Hostname
-	log.Printf("[DEBUG] Deleting include hostname configuration")
+	// Reset Include Hostname to false.
+	//
+	// DELETE on /f5-openconfig-system-logging:config does not reliably
+	// reset the include-hostname leaf on the device: on some F5OS
+	// versions the leaf either retains its previously-set value or
+	// falls back to a default of true. Explicitly PUT include-hostname
+	// = false so the device state matches the "resource destroyed"
+	// expectation and post-destroy checks pass.
+	log.Printf("[DEBUG] Resetting include hostname configuration to false")
 	if !state.IncludeHostname.IsNull() && !state.IncludeHostname.IsUnknown() {
-		err := client.DeleteRequest(baseURI + "/f5-openconfig-system-logging:config")
-		if err != nil {
-			log.Printf("[WARN] Failed to delete include hostname configuration (may not exist): %v", err)
-			// Don't treat this as a fatal error
+		payload := map[string]interface{}{
+			"f5-openconfig-system-logging:config": map[string]interface{}{
+				"include-hostname": false,
+			},
+		}
+		payloadBytes, mErr := json.Marshal(payload)
+		if mErr != nil {
+			log.Printf("[WARN] Failed to marshal include hostname reset payload: %v", mErr)
+		} else if _, err := client.PutRequest(baseURI+"/f5-openconfig-system-logging:config", payloadBytes); err != nil {
+			log.Printf("[WARN] Failed to reset include hostname configuration: %v", err)
+			// Fall back to DELETE in case PUT is not supported.
+			if dErr := client.DeleteRequest(baseURI + "/f5-openconfig-system-logging:config"); dErr != nil {
+				log.Printf("[WARN] Fallback DELETE of include hostname configuration also failed: %v", dErr)
+			}
 		} else {
-			log.Printf("[DEBUG] Successfully deleted include hostname configuration")
+			log.Printf("[DEBUG] Successfully reset include hostname configuration to false")
 		}
 	}
 
