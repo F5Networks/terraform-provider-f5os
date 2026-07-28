@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
@@ -220,10 +221,50 @@ func testAccCheckLoggingTLSOnDevice() resource.TestCheckFunc {
 // CheckDestroy
 // ---------------------------------------------------------------------------
 
+// isLoggingNotFoundErr reports whether err from a client.GetRequest call
+// against the logging endpoints represents an "expected" absence of data
+// (RESTCONF data-missing / uri keypath not found / 404). Any other error
+// (auth failure, connection refused, TLS handshake, malformed JSON in the
+// error envelope, etc.) is treated as a real failure so that destroy
+// verification cannot silently pass when the device is unreachable or
+// rejecting our credentials.
+func isLoggingNotFoundErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "uri keypath not found"),
+		strings.Contains(msg, "data-missing"),
+		strings.Contains(msg, "404 not found"),
+		strings.Contains(msg, "not found"):
+		return true
+	}
+	return false
+}
+
 // testAccCheckLoggingDestroy verifies that the logging configuration has been
 // cleaned up after destroy. It checks that test-created servers, TLS config,
-// remote forwarding, and include-hostname have been removed.
+// remote forwarding, and include-hostname have been removed. include-hostname
+// is intentionally not asserted here; use testAccCheckLoggingDestroyWith to
+// opt in to that assertion for tests that manage include_hostname.
 func testAccCheckLoggingDestroy(s *terraform.State) error {
+	return loggingDestroyCheck(s, false)
+}
+
+// testAccCheckLoggingDestroyWith returns a CheckDestroy function that
+// applies the standard logging destroy checks and, when
+// assertIncludeHostnameReset is true, additionally verifies that the
+// device's include-hostname leaf has been reset to false. Tests that
+// manage include_hostname should use this variant so that regressions in
+// the Delete-side reset behavior are caught by acceptance tests.
+func testAccCheckLoggingDestroyWith(assertIncludeHostnameReset bool) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		return loggingDestroyCheck(s, assertIncludeHostnameReset)
+	}
+}
+
+func loggingDestroyCheck(_ *terraform.State, assertIncludeHostnameReset bool) error {
 	client, err := newTestClientFromEnv()
 	if err != nil {
 		return nil // cannot connect — nothing to verify
@@ -231,23 +272,70 @@ func testAccCheckLoggingDestroy(s *terraform.State) error {
 
 	baseURI := "/openconfig-system:system/logging"
 
-	// Check servers are gone (the test IPs should not be present)
+	// Check servers are gone (the test IPs should not be present).
+	//
+	// The device's DELETE of a remote server sometimes returns before
+	// the removal is visible on a subsequent GET, so probe with a
+	// short retry loop rather than asserting off a single GET. This
+	// preserves the "dangling resource" semantics for real leaks
+	// (which persist across retries) while tolerating the device's
+	// eventual-consistency window seen on shared/slow DUTs.
 	testServers := []string{
 		"10.255.255.90", "10.255.255.91", "10.255.255.92", "10.255.255.93",
 		"10.255.255.94", "10.255.255.95", "10.255.255.96", "10.255.255.97",
 		"10.255.255.98", "10.255.255.99",
 	}
-	resp, err := client.GetRequest(baseURI + "/remote-servers")
-	if err == nil && len(resp) > 0 {
-		for _, addr := range testServers {
-			if strings.Contains(string(resp), addr) {
-				return fmt.Errorf("test server %s still present on device after destroy", addr)
+	const (
+		serverProbeAttempts = 5
+		serverProbeDelay    = 2 * time.Second
+	)
+	var lingering string
+	var lastProbeErr error
+	for attempt := 0; attempt < serverProbeAttempts; attempt++ {
+		lingering = ""
+		lastProbeErr = nil
+		resp, err := client.GetRequest(baseURI + "/remote-servers")
+		if err != nil {
+			if isLoggingNotFoundErr(err) {
+				// Endpoint reports the container is absent — treat as gone.
+				break
+			}
+			// Real error (auth/connectivity/parse) — remember and retry;
+			// if it persists across all attempts, fail the check rather
+			// than silently declaring the servers "gone".
+			lastProbeErr = err
+		} else if len(resp) == 0 {
+			// Empty body: container present but no children — gone.
+			break
+		} else {
+			body := string(resp)
+			for _, addr := range testServers {
+				if strings.Contains(body, addr) {
+					lingering = addr
+					break
+				}
+			}
+			if lingering == "" {
+				break
 			}
 		}
+		if attempt < serverProbeAttempts-1 {
+			time.Sleep(serverProbeDelay)
+		}
+	}
+	if lastProbeErr != nil {
+		return fmt.Errorf("failed to verify remote-servers were destroyed: %w", lastProbeErr)
+	}
+	if lingering != "" {
+		return fmt.Errorf("test server %s still present on device after destroy (probed %d times with %s delay)",
+			lingering, serverProbeAttempts, serverProbeDelay)
 	}
 
 	// Check TLS configuration is gone
-	resp, err = client.GetRequest(baseURI + "/f5-openconfig-system-logging:tls")
+	resp, err := client.GetRequest(baseURI + "/f5-openconfig-system-logging:tls")
+	if err != nil && !isLoggingNotFoundErr(err) {
+		return fmt.Errorf("failed to verify TLS configuration was destroyed: %w", err)
+	}
 	if err == nil && len(resp) > 0 {
 		// TLS endpoint returned data — check if cert/key are still configured
 		if strings.Contains(string(resp), "certificate") && strings.Contains(string(resp), "key") {
@@ -257,6 +345,9 @@ func testAccCheckLoggingDestroy(s *terraform.State) error {
 
 	// Check remote forwarding is gone
 	resp, err = client.GetRequest(baseURI + "/f5-openconfig-system-logging:host-logs")
+	if err != nil && !isLoggingNotFoundErr(err) {
+		return fmt.Errorf("failed to verify remote-forwarding was destroyed: %w", err)
+	}
 	if err == nil && len(resp) > 0 {
 		if strings.Contains(string(resp), "remote-forwarding") {
 			var data map[string]interface{}
@@ -275,14 +366,29 @@ func testAccCheckLoggingDestroy(s *terraform.State) error {
 		}
 	}
 
-	// Check include-hostname is reset (should be false/absent after destroy)
+	// Note: include-hostname is a global device attribute (a single
+	// leaf under /openconfig-system:system/logging/config), not a
+	// discrete resource. It has no natural "destroyed" state — DELETE
+	// on the container may leave the leaf at its previous value or a
+	// device-side default, and other tenants/operators may legitimately
+	// set it out of band. By default we do not fail CheckDestroy on a
+	// lingering include-hostname=true; the resource's Delete already
+	// makes a best-effort reset to false (see f5os_logging_resource.go
+	// Delete). Tests that manage include_hostname should opt in to the
+	// stricter assertion via testAccCheckLoggingDestroyWith(true) so
+	// that regressions in the reset-on-Delete behavior are caught.
 	resp, err = client.GetRequest(baseURI + "/f5-openconfig-system-logging:config")
+	if err != nil && !isLoggingNotFoundErr(err) {
+		return fmt.Errorf("failed to verify include-hostname was reset: %w", err)
+	}
 	if err == nil && len(resp) > 0 {
 		var data map[string]interface{}
 		if json.Unmarshal(resp, &data) == nil {
 			if config, ok := data["f5-openconfig-system-logging:config"].(map[string]interface{}); ok {
-				if v, ok := config["include-hostname"].(bool); ok && v {
-					return fmt.Errorf("include-hostname still true on device after destroy")
+				if v, ok := config["include-hostname"].(bool); ok {
+					if assertIncludeHostnameReset && v {
+						return fmt.Errorf("include-hostname still true on device after destroy; expected reset to false")
+					}
 				}
 			}
 		}
@@ -952,7 +1058,12 @@ func TestAccLoggingIncludeHostnameOnly(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t); testAccLoggingCleanup(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		CheckDestroy:             testAccCheckLoggingDestroy,
+		// This test manages include_hostname exclusively, so opt in to
+		// the strict destroy assertion. Regressions in the Delete-side
+		// reset behavior (see f5os_logging_resource.go Delete) will
+		// surface as a CheckDestroy failure rather than slipping past
+		// the relaxed default.
+		CheckDestroy: testAccCheckLoggingDestroyWith(true),
 		Steps: []resource.TestStep{
 			{
 				Config: testAccLoggingIncludeHostnameOnlyConfig,
@@ -1599,11 +1710,184 @@ func TestUnitLoggingDeleteVerifiesAPIOrder(t *testing.T) {
 					if st.deleteRemoteForwdCount == 0 {
 						return fmt.Errorf("expected remote forwarding DELETE call, got %d", st.deleteRemoteForwdCount)
 					}
-					if st.deleteIncludeHostCount == 0 {
-						return fmt.Errorf("expected include hostname DELETE call, got %d", st.deleteIncludeHostCount)
+					// Delete resets include-hostname to false by PUTting
+					// the leaf rather than DELETEing the container (device
+					// DELETE does not reliably clear the leaf). Accept
+					// either PUT-during-destroy or DELETE for backward
+					// compatibility with older delete paths.
+					if st.deleteIncludeHostCount == 0 && st.putIncludeHostCount == 0 {
+						return fmt.Errorf("expected include hostname PUT or DELETE call during destroy, got put=%d delete=%d",
+							st.putIncludeHostCount, st.deleteIncludeHostCount)
+					}
+					// Whichever path was taken, the final mock state must
+					// reflect include-hostname=false so the "destroyed"
+					// contract holds end-to-end.
+					if st.includeHostname {
+						return fmt.Errorf("expected include-hostname to be false after destroy, got true")
 					}
 					if st.deleteTLSCount == 0 {
 						return fmt.Errorf("expected TLS DELETE call, got %d", st.deleteTLSCount)
+					}
+					return nil
+				},
+			},
+		},
+	})
+}
+
+// TestUnitLoggingDeleteIncludeHostnamePUTFailureFallback verifies that
+// when the PUT used to reset include-hostname during Delete fails, the
+// resource falls back to DELETE on the same endpoint. Exercises the
+// fallback branch added for older F5OS versions where PUT of the
+// container leaf is not supported.
+//
+// This test cannot reuse setupLoggingMock because it needs to change the
+// PUT handler's behavior between the Create and Destroy steps, which
+// http.ServeMux does not permit (handlers registered on the same
+// pattern panic on re-registration). Instead it registers a minimal set
+// of handlers with a togglable failPUT flag.
+func TestUnitLoggingDeleteIncludeHostnamePUTFailureFallback(t *testing.T) {
+	testAccPreUnitCheck(t)
+	defer teardown()
+
+	registerLoggingBaseHandlers()
+
+	var (
+		mu              sync.Mutex
+		includeHostname bool
+		failPUT         bool
+		putCount        int
+		deleteCount     int
+	)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/logging/f5-openconfig-system-logging:config",
+		func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+			switch r.Method {
+			case http.MethodGet:
+				w.WriteHeader(http.StatusOK)
+				_, _ = fmt.Fprintf(w, `{"f5-openconfig-system-logging:config":{"include-hostname":%v}}`, includeHostname)
+			case http.MethodPut:
+				putCount++
+				if failPUT {
+					// Simulate an F5OS version that rejects PUT on this
+					// leaf. The response body must match the RESTCONF
+					// error envelope the f5osclient's F5osError type
+					// unmarshals — otherwise .Error() returns nil and
+					// the client treats the response as success.
+					w.WriteHeader(http.StatusMethodNotAllowed)
+					_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-message":"method not allowed"}]}}`))
+					return
+				}
+				body, _ := io.ReadAll(r.Body)
+				var payload map[string]interface{}
+				_ = json.Unmarshal(body, &payload)
+				if cfg, ok := payload["f5-openconfig-system-logging:config"].(map[string]interface{}); ok {
+					if v, ok := cfg["include-hostname"].(bool); ok {
+						includeHostname = v
+					}
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			case http.MethodDelete:
+				deleteCount++
+				includeHostname = false
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+		})
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create with include_hostname=true; PUT must succeed.
+			{
+				Config: testUnitLoggingIncludeHostnameOnlyConfig,
+				Check: resource.TestCheckResourceAttr("f5os_logging.test", "include_hostname", "true"),
+			},
+			// Step 2: Destroy — PUT fails, DELETE fallback must run and
+			// converge include-hostname to false. PreConfig flips the
+			// failure switch immediately before Terraform runs the
+			// destroy so the Delete-time PUT is the one that fails.
+			{
+				Destroy: true,
+				Config:  testUnitLoggingIncludeHostnameOnlyConfig,
+				PreConfig: func() {
+					mu.Lock()
+					failPUT = true
+					mu.Unlock()
+				},
+				Check: func(_ *terraform.State) error {
+					mu.Lock()
+					defer mu.Unlock()
+					if deleteCount == 0 {
+						return fmt.Errorf("expected DELETE fallback after PUT failure, got put=%d delete=%d",
+							putCount, deleteCount)
+					}
+					if includeHostname {
+						return fmt.Errorf("expected include-hostname false after fallback DELETE, got true")
+					}
+					return nil
+				},
+			},
+		},
+	})
+}
+
+// TestUnitLoggingDeleteSkipsIncludeHostnameWhenNull verifies that when
+// include_hostname was never set in configuration, Delete does not issue
+// any PUT or DELETE against the include-hostname endpoint. This guards
+// against a regression where the reset would fire unconditionally and
+// mutate a leaf the user never managed.
+func TestUnitLoggingDeleteSkipsIncludeHostnameWhenNull(t *testing.T) {
+	st := setupLoggingMock(t)
+	defer teardown()
+
+	// Seed the mock so include-hostname is true on the "device" before
+	// the test runs. If Delete correctly skips the leaf, this value must
+	// remain true after destroy.
+	st.mu.Lock()
+	st.includeHostname = true
+	st.mu.Unlock()
+
+	// Snapshot the counters right before the destroy step so we can
+	// verify Delete itself did not touch the endpoint (the create step
+	// legitimately does not either, but this is defensive).
+	var preDestroyPut, preDestroyDelete int
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testUnitLoggingServersOnlyConfig,
+				Check: func(_ *terraform.State) error {
+					st.mu.Lock()
+					preDestroyPut = st.putIncludeHostCount
+					preDestroyDelete = st.deleteIncludeHostCount
+					st.mu.Unlock()
+					return nil
+				},
+			},
+			{
+				Destroy: true,
+				Config:  testUnitLoggingServersOnlyConfig,
+				Check: func(_ *terraform.State) error {
+					st.mu.Lock()
+					defer st.mu.Unlock()
+					if st.putIncludeHostCount != preDestroyPut {
+						return fmt.Errorf("Delete unexpectedly PUT include-hostname (pre=%d post=%d)",
+							preDestroyPut, st.putIncludeHostCount)
+					}
+					if st.deleteIncludeHostCount != preDestroyDelete {
+						return fmt.Errorf("Delete unexpectedly DELETEd include-hostname (pre=%d post=%d)",
+							preDestroyDelete, st.deleteIncludeHostCount)
+					}
+					if !st.includeHostname {
+						return fmt.Errorf("expected include-hostname unchanged (true) after destroy of unrelated resource, got false")
 					}
 					return nil
 				},
