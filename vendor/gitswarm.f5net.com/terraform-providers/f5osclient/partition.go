@@ -388,6 +388,103 @@ func (p *F5os) DeleteTlsCertKey(certKeyName string) error {
 	return err
 }
 
+// uriTlsContainer is the RESTCONF path to the aaa-tls tls container
+// (config + state). Used by GetTlsCertKey and ImportTlsCertKey on
+// F5OS 2.0.0+.
+const uriTlsContainer = "/openconfig-system:system/aaa/f5-openconfig-aaa-tls:tls"
+
+// tlsContainerResponse models the JSON envelope returned by a GET on
+// the aaa-tls tls container. The device may emit either bare
+// ("certificate") or module-prefixed ("f5-openconfig-aaa-tls:
+// certificate") leaf names depending on firmware version — both
+// forms are decoded, with the module-prefixed variant taking
+// precedence when both are present.
+type tlsContainerResponse struct {
+	TLS struct {
+		Config struct {
+			Certificate         string `json:"certificate,omitempty"`
+			CertificatePrefixed string `json:"f5-openconfig-aaa-tls:certificate,omitempty"`
+			// Key is intentionally omitted here: the device never
+			// returns it and modeling it would just silently swallow a
+			// value if a future firmware started emitting one.
+		} `json:"config"`
+		State struct {
+			Certificate         string `json:"certificate,omitempty"`
+			CertificatePrefixed string `json:"f5-openconfig-aaa-tls:certificate,omitempty"`
+		} `json:"state"`
+	} `json:"f5-openconfig-aaa-tls:tls"`
+}
+
+// coalesce returns the first non-empty argument. Used by
+// GetTlsCertKey to pick between namespaced and bare leaf variants.
+func coalesce(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// tlsImportPayload is the wire format for PATCHing an existing
+// certificate + key onto the aaa-tls tls/config container. Both
+// leaves are optional — the caller decides which to set — but at
+// least one must be non-empty for the request to be meaningful.
+type tlsImportPayload struct {
+	Config struct {
+		Certificate string `json:"certificate,omitempty"`
+		Key         string `json:"key,omitempty"`
+	} `json:"config"`
+}
+
+// GetTlsCertKey reads the aaa-tls tls container and returns the
+// certificate present under config.certificate (round-trip of what
+// the caller last imported) and state.certificate (device view).
+// The key is never returned by the device and cannot be reconstructed
+// from state; callers that need to detect key drift must track it
+// externally. Requires F5OS 2.0.0+.
+func (p *F5os) GetTlsCertKey() (*TlsCertKey, *TlsCertKeyState, error) {
+	f5osLogger.Debug("[GetTlsCertKey]", "Request path", hclog.Fmt("%+v", uriTlsContainer))
+	resp, err := p.GetRequest(uriTlsContainer)
+	if err != nil {
+		return nil, nil, fmt.Errorf("GET aaa-tls tls container failed: %w", err)
+	}
+	if len(resp) == 0 {
+		return &TlsCertKey{}, &TlsCertKeyState{}, nil
+	}
+	var envelope tlsContainerResponse
+	if err := json.Unmarshal(resp, &envelope); err != nil {
+		return nil, nil, fmt.Errorf("invalid JSON for aaa-tls tls container: %w", err)
+	}
+	cfg := &TlsCertKey{
+		Certificate: coalesce(envelope.TLS.Config.CertificatePrefixed, envelope.TLS.Config.Certificate),
+	}
+	state := &TlsCertKeyState{
+		Certificate: coalesce(envelope.TLS.State.CertificatePrefixed, envelope.TLS.State.Certificate),
+	}
+	return cfg, state, nil
+}
+
+// ImportTlsCertKey PATCHes the provided certificate and/or key onto
+// the aaa-tls tls/config container. This is the F5OS 2.0.0+ path for
+// installing an existing certificate/key pair instead of generating
+// a self-signed cert. Requires F5OS 2.0.0+.
+func (p *F5os) ImportTlsCertKey(certificate, key string) error {
+	if certificate == "" && key == "" {
+		return fmt.Errorf("ImportTlsCertKey: at least one of certificate or key must be non-empty")
+	}
+	var payload tlsImportPayload
+	payload.Config.Certificate = certificate
+	payload.Config.Key = key
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal aaa-tls import payload: %w", err)
+	}
+	f5osLogger.Debug("[ImportTlsCertKey]", "Request path", hclog.Fmt("%+v", uriTlsContainer))
+	if _, err := p.PatchRequest(uriTlsContainer, body); err != nil {
+		return fmt.Errorf("PATCH aaa-tls tls container failed: %w", err)
+	}
+	return nil
+}
+
 // PatchDNSConfig sets DNS config using PATCH to /system/dns
 func (c *F5os) PatchDNSConfig(dnsServers []string, searchDomains []string) error {
 	// Pre-allocate so json.Marshal produces "server":[] not "server":null
