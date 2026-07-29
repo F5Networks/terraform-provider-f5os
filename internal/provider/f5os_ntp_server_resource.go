@@ -2,7 +2,10 @@ package provider
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -67,6 +70,36 @@ func (r *NTPServerResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Optional:            true,
 				Computed:            true,
 			},
+			// F5OS 2.0.0+ additive config leaves. Writing these on an
+			// older device (< 2.0.0) returns a clear error from
+			// Create/Update; on 2.0.0+ they are passed through to the
+			// device.
+			"association_type": schema.StringAttribute{
+				MarkdownDescription: "NTP association type. Requires F5OS 2.0.0 or later. Typical values are `SERVER`, `PEER`, or `POOL`; the device enforces the allowed set.",
+				Optional:            true,
+			},
+			"version": schema.Int64Attribute{
+				MarkdownDescription: "NTP protocol version to use with this server. Requires F5OS 2.0.0 or later.",
+				Optional:            true,
+			},
+			"port": schema.Int64Attribute{
+				MarkdownDescription: "UDP port to reach the NTP server on. Requires F5OS 2.0.0 or later.",
+				Optional:            true,
+			},
+			// F5OS 2.0.0+ read-only state leaves. Populated by Read from
+			// the device's state container. Null on pre-2.0.0 devices.
+			"stratum": schema.Int64Attribute{
+				MarkdownDescription: "Reported stratum of the NTP server (read-only, F5OS 2.0.0+).",
+				Computed:            true,
+			},
+			"authenticated": schema.BoolAttribute{
+				MarkdownDescription: "Whether the association is authenticated (read-only, F5OS 2.0.0+).",
+				Computed:            true,
+			},
+			"state_address": schema.StringAttribute{
+				MarkdownDescription: "Resolved address for the NTP server as reported by the device (read-only, F5OS 2.0.0+).",
+				Computed:            true,
+			},
 			"id": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Terraform synthetic ID (server address).",
@@ -79,6 +112,11 @@ func (r *NTPServerResource) Create(ctx context.Context, req resource.CreateReque
 	var plan f5os.NTPServerModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if diags := r.validate200Fields(plan); diags.HasError() {
+		resp.Diagnostics.Append(diags...)
 		return
 	}
 
@@ -134,6 +172,16 @@ func (r *NTPServerResource) Create(ctx context.Context, req resource.CreateReque
 		"server": plan.Server.ValueString(),
 	})
 
+	// Populate F5OS 2.0.0+ read-only state leaves so Terraform's Computed
+	// attributes have concrete values after Create. On pre-2.0.0 devices
+	// these end up as null, which is a legal value for a Computed
+	// attribute. Failures here are warnings (see helper) so a transient
+	// post-write GET error does not leak the resource on the device.
+	resp.Diagnostics.Append(r.refreshComputedStateLeaves(&plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	plan.ID = plan.Server
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
@@ -178,6 +226,21 @@ func (r *NTPServerResource) Read(ctx context.Context, req resource.ReadRequest, 
 	state.NTPService = types.BoolValue(ntpService)
 	state.NTPAuthentication = types.BoolValue(ntpAuth)
 
+	// F5OS 2.0.0+ additive config leaves. Mirror the device
+	// unconditionally so out-of-band removal (downgrade, admin edit)
+	// surfaces as drift rather than sticking to a stale plan value.
+	// On pre-2.0.0 devices the leaves are always absent, so these
+	// stay null.
+	state.AssociationType = nullableStringToTF(ntp.AssociationType)
+	state.Version = nullableInt64ToTF(ntp.Version)
+	state.Port = nullableInt64ToTF(ntp.Port)
+
+	// F5OS 2.0.0+ read-only state leaves. Devices below 2.0.0 do not
+	// populate these, in which case they stay null.
+	state.Stratum = nullableInt64ToTF(ntp.StateStratum)
+	state.Authenticated = nullableBoolToTF(ntp.StateAuthenticated)
+	state.StateAddress = nullableStringToTF(ntp.StateAddress)
+
 	tflog.Debug(ctx, "NTP Read Result", map[string]any{
 		"server":             ntp.Address,
 		"key_id":             ntp.KeyID,
@@ -195,6 +258,11 @@ func (r *NTPServerResource) Update(ctx context.Context, req resource.UpdateReque
 	var plan f5os.NTPServerModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if diags := r.validate200Fields(plan); diags.HasError() {
+		resp.Diagnostics.Append(diags...)
 		return
 	}
 
@@ -242,6 +310,13 @@ func (r *NTPServerResource) Update(ctx context.Context, req resource.UpdateReque
 		}
 	}
 
+	// Populate F5OS 2.0.0+ read-only state leaves so Computed attributes
+	// carry concrete post-apply values. Failures here are warnings.
+	resp.Diagnostics.Append(r.refreshComputedStateLeaves(&plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	plan.ID = plan.Server
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -265,6 +340,84 @@ func (r *NTPServerResource) ImportState(ctx context.Context, req resource.Import
 	tflog.Info(ctx, "Importing NTP Server", map[string]any{"server": req.ID})
 }
 
+// validate200Fields returns an error diagnostic when any of the F5OS
+// 2.0.0+ additive attributes (association_type, version, port) are set
+// on a device running an older version. It is called by Create and
+// Update before any payload is built.
+func (r *NTPServerResource) validate200Fields(plan f5os.NTPServerModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	var set []string
+	if !plan.AssociationType.IsNull() && !plan.AssociationType.IsUnknown() {
+		set = append(set, "association_type")
+	}
+	if !plan.Version.IsNull() && !plan.Version.IsUnknown() {
+		set = append(set, "version")
+	}
+	if !plan.Port.IsNull() && !plan.Port.IsUnknown() {
+		set = append(set, "port")
+	}
+	if len(set) == 0 {
+		return diags
+	}
+	if !platformVersionAtLeast(r.client.PlatformVersion, "v2.0") {
+		diags.AddError("Unsupported attribute",
+			fmt.Sprintf("The following NTP server attribute(s) are only "+
+				"supported on F5OS 2.0.0 or later: %s. Detected device "+
+				"version: %q. Remove these attributes or target a 2.0.0+ device.",
+				strings.Join(set, ", "), r.client.PlatformVersion))
+	}
+	return diags
+}
+
+// refreshComputedStateLeaves fetches the current NTP server entry from
+// the device and copies the read-only 2.0.0+ state leaves plus any
+// config leaves the device chose to echo back onto plan. This gives
+// Terraform's Computed attributes concrete values after Create/Update.
+// On pre-2.0.0 devices the state leaves come back nil, in which case
+// the corresponding plan fields end up null — the legal empty value
+// for a Computed attribute.
+//
+// Failures here are downgraded to warnings: the device write already
+// succeeded, so aborting Create/Update with an error would leak the
+// resource on the device while Terraform believes nothing was
+// created, forcing a subsequent apply to fail with "already exists".
+// The next Read cycle fills the Computed leaves.
+func (r *NTPServerResource) refreshComputedStateLeaves(plan *f5os.NTPServerModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	ntp, err := r.client.GetNTPServer(plan.Server.ValueString())
+	if err != nil {
+		diags.AddWarning("NTP Post-Write Read Warning",
+			"The NTP server was written to the device successfully, but the "+
+				"follow-up read used to populate computed state attributes failed: "+
+				err.Error()+". Terraform will retry the read on the next apply.")
+		// Set Computed leaves to null so Terraform accepts state as
+		// consistent (Computed attributes may not remain Unknown in
+		// final state). The next Read will overwrite with real values.
+		plan.Stratum = types.Int64Null()
+		plan.Authenticated = types.BoolNull()
+		plan.StateAddress = types.StringNull()
+		return diags
+	}
+	// Config leaves: only overwrite if the device returned a value.
+	// This preserves plan-declared values on devices that echo config
+	// verbatim, but also picks up device-side defaults when the caller
+	// omitted the leaf.
+	if ntp.AssociationType != nil {
+		plan.AssociationType = types.StringValue(*ntp.AssociationType)
+	}
+	if ntp.Version != nil {
+		plan.Version = types.Int64Value(*ntp.Version)
+	}
+	if ntp.Port != nil {
+		plan.Port = types.Int64Value(*ntp.Port)
+	}
+	// Read-only state leaves. nullableXToTF maps nil to *Null().
+	plan.Stratum = nullableInt64ToTF(ntp.StateStratum)
+	plan.Authenticated = nullableBoolToTF(ntp.StateAuthenticated)
+	plan.StateAddress = nullableStringToTF(ntp.StateAddress)
+	return diags
+}
+
 type NTPServerModel struct {
 	ID                types.String `tfsdk:"id"`
 	Server            types.String `tfsdk:"server"`
@@ -273,4 +426,39 @@ type NTPServerModel struct {
 	IBurst            types.Bool   `tfsdk:"iburst"`
 	NTPService        types.Bool   `tfsdk:"ntp_service"`
 	NTPAuthentication types.Bool   `tfsdk:"ntp_authentication"`
+	// F5OS 2.0.0+ additive config leaves.
+	AssociationType types.String `tfsdk:"association_type"`
+	Version         types.Int64  `tfsdk:"version"`
+	Port            types.Int64  `tfsdk:"port"`
+	// F5OS 2.0.0+ additive read-only state leaves.
+	Stratum       types.Int64  `tfsdk:"stratum"`
+	Authenticated types.Bool   `tfsdk:"authenticated"`
+	StateAddress  types.String `tfsdk:"state_address"`
+}
+
+// nullableInt64ToTF converts an optional int64 (nil = leaf absent on
+// device) into a Terraform Int64 value, mapping nil to Int64Null().
+func nullableInt64ToTF(v *int64) types.Int64 {
+	if v == nil {
+		return types.Int64Null()
+	}
+	return types.Int64Value(*v)
+}
+
+// nullableBoolToTF converts an optional bool into a Terraform Bool
+// value, mapping nil to BoolNull().
+func nullableBoolToTF(v *bool) types.Bool {
+	if v == nil {
+		return types.BoolNull()
+	}
+	return types.BoolValue(*v)
+}
+
+// nullableStringToTF converts an optional string pointer into a
+// Terraform String value, mapping nil to StringNull().
+func nullableStringToTF(v *string) types.String {
+	if v == nil {
+		return types.StringNull()
+	}
+	return types.StringValue(*v)
 }

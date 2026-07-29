@@ -537,6 +537,11 @@ type ntpServerConfig struct {
 	KeyID   *int64 `json:"f5-openconfig-system-ntp:key-id,omitempty"`
 	Prefer  bool   `json:"prefer"`
 	Iburst  bool   `json:"iburst"`
+	// F5OS 2.0.0+ additive config leaves. Pointers with omitempty so we
+	// never send them to devices below 2.0.0 (which reject the keys).
+	AssociationType *string `json:"association-type,omitempty"`
+	Version         *int64  `json:"version,omitempty"`
+	Port            *int64  `json:"port,omitempty"`
 }
 
 type ntpServerPayload struct {
@@ -566,18 +571,7 @@ func (c *F5os) CreateNTPServer(server string, payload []byte) error {
 }
 
 func (c *F5os) CreateNTPServerPayload(server string, plan NTPServerModel) ([]byte, error) {
-	cfg := ntpServerConfig{
-		Address: server,
-		Prefer:  plan.Prefer.ValueBool(),
-		Iburst:  plan.IBurst.ValueBool(),
-	}
-	// Only include key-id when explicitly set (not null/unknown) so that
-	// omitempty correctly omits the field when the user did not configure it,
-	// while still sending key_id=0 when the user explicitly sets it to zero.
-	if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() {
-		v := plan.KeyID.ValueInt64()
-		cfg.KeyID = &v
-	}
+	cfg := buildNTPServerConfig(server, plan)
 	payload := ntpServerPayload{
 		Server: []struct {
 			Address string          `json:"address"`
@@ -590,6 +584,38 @@ func (c *F5os) CreateNTPServerPayload(server string, plan NTPServerModel) ([]byt
 		},
 	}
 	return json.Marshal(payload)
+}
+
+// buildNTPServerConfig maps an NTPServerModel to the wire-level
+// ntpServerConfig used by both POST (Create) and PATCH (Update)
+// payloads. Only fields explicitly set in the plan are included; nil
+// pointers keep the RESTCONF payload compatible with pre-2.0.0 devices
+// via `omitempty`.
+func buildNTPServerConfig(server string, plan NTPServerModel) ntpServerConfig {
+	cfg := ntpServerConfig{
+		Address: server,
+		Prefer:  plan.Prefer.ValueBool(),
+		Iburst:  plan.IBurst.ValueBool(),
+	}
+	if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() {
+		v := plan.KeyID.ValueInt64()
+		cfg.KeyID = &v
+	}
+	// F5OS 2.0.0+ leaves. Version-gating happens in the resource layer;
+	// here we just include each leaf iff the caller populated it.
+	if !plan.AssociationType.IsNull() && !plan.AssociationType.IsUnknown() {
+		v := plan.AssociationType.ValueString()
+		cfg.AssociationType = &v
+	}
+	if !plan.Version.IsNull() && !plan.Version.IsUnknown() {
+		v := plan.Version.ValueInt64()
+		cfg.Version = &v
+	}
+	if !plan.Port.IsNull() && !plan.Port.IsUnknown() {
+		v := plan.Port.ValueInt64()
+		cfg.Port = &v
+	}
+	return cfg
 }
 
 func (c *F5os) GetNTPServer(server string) (*NTPServerStruct, error) {
@@ -608,12 +634,27 @@ func (c *F5os) GetNTPServer(server string) (*NTPServerStruct, error) {
 	}
 
 	entry := envelope.Server[0]
-	return &NTPServerStruct{
-		Address: entry.Config.Address,
-		KeyID:   entry.Config.KeyID,
-		Prefer:  entry.Config.Prefer,
-		IBurst:  entry.Config.IBurst,
-	}, nil
+	out := &NTPServerStruct{
+		Address:              entry.Config.Address,
+		KeyID:                entry.Config.KeyID,
+		Prefer:               entry.Config.Prefer,
+		IBurst:               entry.Config.IBurst,
+		AssociationType:      entry.Config.AssociationType,
+		Version:              entry.Config.Version,
+		Port:                 entry.Config.Port,
+		StateAssociationType: entry.State.AssociationType,
+		StateIBurst:          entry.State.IBurst,
+		StatePort:            entry.State.Port,
+		StatePrefer:          entry.State.Prefer,
+		StateStratum:         entry.State.Stratum,
+		StateVersion:         entry.State.Version,
+		StateAuthenticated:   entry.State.Authenticated,
+	}
+	if entry.State.Address != "" {
+		addr := entry.State.Address
+		out.StateAddress = &addr
+	}
+	return out, nil
 }
 
 // GetNTPGlobalConfig reads the global NTP service and authentication settings
@@ -637,15 +678,7 @@ func (c *F5os) GetNTPGlobalConfig() (service bool, auth bool, err error) {
 // "openconfig-system:server":[...] which is what PATCH on
 // /ntp/servers/server={addr} expects.
 func (c *F5os) UpdateNTPServerPayload(server string, plan NTPServerModel) ([]byte, error) {
-	cfg := ntpServerConfig{
-		Address: server,
-		Prefer:  plan.Prefer.ValueBool(),
-		Iburst:  plan.IBurst.ValueBool(),
-	}
-	if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() {
-		v := plan.KeyID.ValueInt64()
-		cfg.KeyID = &v
-	}
+	cfg := buildNTPServerConfig(server, plan)
 	// PATCH on /server={addr} expects "openconfig-system:server" key
 	payload := map[string]interface{}{
 		"openconfig-system:server": []map[string]interface{}{

@@ -604,6 +604,18 @@ type NTPServerModel struct {
 	IBurst            types.Bool   `tfsdk:"iburst"`
 	NTPService        types.Bool   `tfsdk:"ntp_service"`
 	NTPAuthentication types.Bool   `tfsdk:"ntp_authentication"`
+	// F5OS 2.0.0+ additive config leaves. Optional so callers on older
+	// devices (1.8.x) can leave them null without triggering diffs. The
+	// resource layer version-gates writes with a clear error when set on
+	// pre-2.0.0 devices.
+	AssociationType types.String `tfsdk:"association_type"`
+	Version         types.Int64  `tfsdk:"version"`
+	Port            types.Int64  `tfsdk:"port"`
+	// F5OS 2.0.0+ additive state leaves, populated by Read from the
+	// device's state container. Computed-only.
+	Stratum       types.Int64  `tfsdk:"stratum"`
+	Authenticated types.Bool   `tfsdk:"authenticated"`
+	StateAddress  types.String `tfsdk:"state_address"`
 }
 
 // ntpServerResponse models the RESTCONF JSON returned by
@@ -627,6 +639,7 @@ type ntpServerResponse struct {
 type ntpServerEntry struct {
 	Address string              `json:"address"`
 	Config  ntpServerReadConfig `json:"config"`
+	State   ntpServerReadState  `json:"state,omitempty"`
 }
 
 type ntpServerReadConfig struct {
@@ -634,6 +647,27 @@ type ntpServerReadConfig struct {
 	KeyID   *int64 `json:"f5-openconfig-system-ntp:key-id,omitempty"`
 	Prefer  bool   `json:"prefer,omitempty"`
 	IBurst  bool   `json:"iburst,omitempty"`
+	// F5OS 2.0.0+ additive fields. Pointers so a device that does not
+	// emit the leaf is distinguishable from a device that emitted the
+	// zero value.
+	AssociationType *string `json:"association-type,omitempty"`
+	Version         *int64  `json:"version,omitempty"`
+	Port            *int64  `json:"port,omitempty"`
+}
+
+// ntpServerReadState mirrors the state container returned by
+// GET /openconfig-system:system/ntp/openconfig-system:servers/server={addr}
+// on F5OS 2.0.0+. Only leaves the provider surfaces as computed
+// attributes are modeled here.
+type ntpServerReadState struct {
+	Address         string  `json:"address,omitempty"`
+	AssociationType *string `json:"association-type,omitempty"`
+	IBurst          *bool   `json:"iburst,omitempty"`
+	Port            *int64  `json:"port,omitempty"`
+	Prefer          *bool   `json:"prefer,omitempty"`
+	Stratum         *int64  `json:"stratum,omitempty"`
+	Version         *int64  `json:"version,omitempty"`
+	Authenticated   *bool   `json:"f5-openconfig-system-ntp:authenticated,omitempty"`
 }
 
 // ntpGlobalConfigResponse models the RESTCONF JSON returned by
@@ -657,7 +691,9 @@ type ntpGlobalConfigFields struct {
 // NTPServerStruct is the flattened Go representation returned by
 // GetNTPServer + GetNTPGlobalConfig for the provider Read method.
 // KeyID is a pointer so callers can distinguish "device returned 0"
-// from "device did not return key_id at all".
+// from "device did not return key_id at all". The same applies to the
+// F5OS 2.0.0+ additive config leaves (AssociationType/Version/Port)
+// and to every state leaf (which are only present on 2.0.0+).
 type NTPServerStruct struct {
 	Address           string
 	KeyID             *int64
@@ -665,4 +701,17 @@ type NTPServerStruct struct {
 	IBurst            bool
 	NTPService        bool
 	NTPAuthentication bool
+	// F5OS 2.0.0+ additive config leaves.
+	AssociationType *string
+	Version         *int64
+	Port            *int64
+	// F5OS 2.0.0+ additive state leaves (read-only).
+	StateAddress         *string
+	StateAssociationType *string
+	StateIBurst          *bool
+	StatePort            *int64
+	StatePrefer          *bool
+	StateStratum         *int64
+	StateVersion         *int64
+	StateAuthenticated   *bool
 }
