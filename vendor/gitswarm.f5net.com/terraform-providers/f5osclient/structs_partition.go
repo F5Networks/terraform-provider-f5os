@@ -507,6 +507,23 @@ type TlsCertKey struct {
 	KeyPassphrase          string `json:"f5-openconfig-aaa-tls:key-passphrase,omitempty"`
 	ConfirmKeyPassphrase   string `json:"f5-openconfig-aaa-tls:confirm-key-passphrase,omitempty"`
 	StoreTls               bool   `json:"f5-openconfig-aaa-tls:store-tls,omitempty"`
+	// F5OS 2.0.0+ additive config leaves for supplying an existing
+	// certificate and key instead of generating a self-signed cert.
+	// These live under the aaa-tls tls/config container and are set
+	// via PATCH (see F5os.ImportTlsCertKey). Emitted with omitempty
+	// so the create-self-signed-cert RPC payload is unaffected when
+	// the caller uses the self-signed workflow.
+	Certificate string `json:"f5-openconfig-aaa-tls:certificate,omitempty"`
+	Key         string `json:"f5-openconfig-aaa-tls:key,omitempty"`
+}
+
+// TlsCertKeyState mirrors the state container returned by
+// GET /openconfig-system:system/aaa/f5-openconfig-aaa-tls:tls on
+// F5OS 2.0.0+. Only the certificate leaf is exposed as read-only
+// (the key is never returned by the device). Pre-2.0.0 devices do
+// not populate this container.
+type TlsCertKeyState struct {
+	Certificate string `json:"certificate,omitempty"`
 }
 
 type F5ReqDNS struct {
