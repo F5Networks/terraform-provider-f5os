@@ -20,6 +20,12 @@ resource "f5os_ntp_server" "test" {
   iburst             = true
   ntp_service        = true
   ntp_authentication = true
+
+  # association_type, version, and port are only supported on F5OS
+  # 2.0.0 and later. Omit them on older devices.
+  association_type = "SERVER"
+  version          = 4
+  port             = 123
 }
 ```
 
@@ -32,15 +38,21 @@ resource "f5os_ntp_server" "test" {
 
 ### Optional
 
+- `association_type` (String) NTP association type. Requires F5OS 2.0.0 or later. Typical values are `SERVER`, `PEER`, or `POOL`; the device enforces the allowed set.
 - `iburst` (Boolean) Enable iburst for faster synchronization.
 - `key_id` (Number) Key ID used for authentication with the NTP server. This should be configured with a key ID that has been already created on the system.
 - `ntp_authentication` (Boolean) Enable or disable NTP authentication.
 - `ntp_service` (Boolean) Enable or disable the NTP service.
+- `port` (Number) UDP port to reach the NTP server on. Requires F5OS 2.0.0 or later.
 - `prefer` (Boolean) Set to true if this is the preferred server.
+- `version` (Number) NTP protocol version to use with this server. Requires F5OS 2.0.0 or later.
 
 ### Read-Only
 
+- `authenticated` (Boolean) Whether the association is authenticated (read-only, F5OS 2.0.0+).
 - `id` (String) Terraform synthetic ID (server address).
+- `state_address` (String) Resolved address for the NTP server as reported by the device (read-only, F5OS 2.0.0+).
+- `stratum` (Number) Reported stratum of the NTP server (read-only, F5OS 2.0.0+).
 
 ## Import
 
