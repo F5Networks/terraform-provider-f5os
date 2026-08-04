@@ -238,9 +238,10 @@ func TestUnitConvertInterfacesInfo(t *testing.T) {
 				{
 					Name: "1.0",
 					Config: struct {
-						Name    string `json:"name,omitempty"`
-						Type    string `json:"type,omitempty"`
-						Enabled bool   `json:"enabled,omitempty"`
+						Name        string  `json:"name,omitempty"`
+						Type        string  `json:"type,omitempty"`
+						Enabled     bool    `json:"enabled,omitempty"`
+						Description *string `json:"description,omitempty"`
 					}{
 						Name:    "1.0",
 						Type:    "iana-if-type:ethernetCsmacd",
@@ -304,6 +305,9 @@ func TestUnitConvertInterfacesInfo(t *testing.T) {
 							DuplexMode    string `json:"duplex-mode,omitempty"`
 							PortSpeed     string `json:"port-speed,omitempty"`
 						} `json:"config,omitempty"`
+						State struct {
+							Phyport *string `json:"f5-if-ethernet:phyport,omitempty"`
+						} `json:"state,omitempty"`
 					}{
 						Config: struct {
 							AutoNegotiate bool   `json:"auto-negotiate,omitempty"`
