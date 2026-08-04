@@ -159,6 +159,12 @@ type F5ReqInterface struct {
 		Name    string `json:"name,omitempty"`
 		Type    string `json:"type,omitempty"`
 		Enabled bool   `json:"enabled"`
+		// Description is a 2.0.0+ additive leaf on
+		// openconfig-interfaces:interfaces/interface/config. It is a
+		// pointer so the empty-string case (clearing the description)
+		// can still be serialized ("description":""), while a nil
+		// value omits the leaf entirely — the pre-2.0 wire shape.
+		Description *string `json:"description,omitempty"`
 	} `json:"config,omitempty"`
 	OpenconfigIfEthernetEthernet struct {
 		OpenconfigVlanSwitchedVlan struct {
@@ -450,6 +456,10 @@ type F5RespInterface struct {
 		Name    string `json:"name,omitempty"`
 		Type    string `json:"type,omitempty"`
 		Enabled bool   `json:"enabled,omitempty"`
+		// Description is a 2.0.0+ additive leaf. Pointer so callers
+		// can distinguish "device omitted the leaf" (pre-2.0) from
+		// "device returned an empty string" (2.0+ cleared value).
+		Description *string `json:"description,omitempty"`
 	} `json:"config,omitempty"`
 	State struct {
 		Name       string `json:"name,omitempty"`
@@ -487,6 +497,14 @@ type F5RespInterface struct {
 			DuplexMode    string `json:"duplex-mode,omitempty"`
 			PortSpeed     string `json:"port-speed,omitempty"`
 		} `json:"config,omitempty"`
+		// State exposes read-only fields on ethernet interfaces.
+		// Phyport is the F5OS 2.0.0+ f5-if-ethernet:phyport leaf,
+		// reported by the device for physical Ethernet ports. It is
+		// nil / omitted on pre-2.0.0 devices and on non-ethernet
+		// interface types.
+		State struct {
+			Phyport *string `json:"f5-if-ethernet:phyport,omitempty"`
+		} `json:"state,omitempty"`
 	} `json:"openconfig-if-ethernet:ethernet,omitempty"`
 }
 
