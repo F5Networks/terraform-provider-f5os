@@ -17,14 +17,12 @@
             "config": {
               "username": "admin",
               "last-change": 19433,
-              "tally-count": 0,
               "expiry-date": "-1",
               "role": "admin"
             },
             "state": {
               "username": "admin",
               "last-change": 19433,
-              "tally-count": 0,
               "expiry-date": "-1",
               "role": "admin"
             }
@@ -34,14 +32,12 @@
             "config": {
               "username": "root",
               "last-change": 0,
-              "tally-count": 0,
               "expiry-date": "-1",
               "role": "root"
             },
             "state": {
               "username": "root",
               "last-change": 0,
-              "tally-count": 0,
               "expiry-date": "-1",
               "role": "root"
             }

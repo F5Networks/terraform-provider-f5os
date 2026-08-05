@@ -1,0 +1,6 @@
+{
+  "f5-openconfig-aaa-ldap:ldap": {
+    "user-object-class": [],
+    "group-object-class": []
+  }
+}

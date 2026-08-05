@@ -106,6 +106,54 @@ using the mock server. Set `IsUnitTest: true` in the `resource.TestCase`.
 Test helpers in `provider_test.go`: `loadFixtureBytes`, `loadFixtureString`,
 `setup`, `teardown`, `testAccPreCheck`, `testAccPreUnitCheck`.
 
+### F5OS 2.0.0 mock helpers and fixtures
+
+For unit tests that need a 2.0.0-shaped device surface, use the helpers in
+`setup_mock_2_0_0_test.go` instead of hand-registering platform version and
+AAA endpoints:
+
+- `setupMockPlatformVersion2_0_0(mux)` — canonical 2.0.0 build (`2.0.0-22925`).
+- `setupMock2_0_0LoginPolicy(mux)` — mounts the login-policy GET handler.
+- `setupMock2_0_0PasswordPolicy(mux)` — mounts the password-policy GET handler
+  (returns v1.7 fields plus 2.0.0 additions `min-days`, `remember`, `warn-age`).
+- `setupMock2_0_0LdapObjectClasses(mux, empty bool)` — LDAP object-class
+  leaf-lists. Pass `true` to serve the empty-list variant that exercises
+  the client's "cleared to empty" vs "unmanaged" distinction, or `false`
+  for the populated variant.
+- `setupMock2_0_0AAA(mux)` — bundle: platform version + focused
+  login-policy / password-policy / LDAP endpoints (populated variant).
+  Deliberately does NOT register the wide `/aaa` container path — many
+  callers already mock it and `http.ServeMux` panics on duplicate
+  registration.
+- `setupMock2_0_0AAAContainer(t, mux)` — opt-in helper that serves the
+  full 2.0.0 aaa container (`f5os_auth_v2_0.json`) on
+  `/restconf/data/openconfig-system:system/aaa`. Takes `*testing.T` so
+  a duplicate registration is surfaced as `t.Fatalf` instead of a
+  binary-wide panic. Call it explicitly ONLY when your test does not
+  already register a handler on that path.
+
+Fixture files:
+
+- `fixtures/f5os_auth.json` — baseline aaa container; `tally-count` was
+  removed in 2.0.0 and is not present. Safe to use across all mock tests.
+- `fixtures/f5os_auth_v17.json` — v1.7 password-policy shape (has
+  `max-letter-repeat`/`max-sequence-repeat`/`max-class-repeat`, does not
+  have the 2.0.0 leaves). Also no `tally-count`.
+- `fixtures/f5os_auth_v2_0.json` — full 2.0.0 aaa container with expanded
+  password-policy, login-policy, and LDAP object-class leaf-lists.
+- `fixtures/aaa_login_policy_2_0_0.json` / `aaa_password_policy_2_0_0.json`
+  / `aaa_ldap_object_classes_2_0_0.json` (+ `_empty.json` variant) —
+  focused container responses for tests that only need one endpoint.
+- `fixtures/tenant_get_status_2_0_0_shape.json` — 2.0.0 tenant state:
+  carries `max-nodes`, `f5-tenant-mgmt-vlan:mgmt-vlan(-accessible)`,
+  `feature-flags`; deliberately omits pre-2.0 legacy leaves `instances`,
+  `cpu-allocations`, `primary-slot`, `image-version`, `mac-block`.
+
+Shape assertions in `TestUnitFixtures2_0_0Shape` (in
+`setup_mock_2_0_0_smoke_test.go`) guard against fixture drift — if you
+edit any of these files, run that test to confirm the required leaves
+are still present or absent as documented.
+
 ### Acceptance tests (real device)
 
 Require env vars: `F5OS_HOST`, `F5OS_USERNAME`, `F5OS_PASSWORD`, and `TF_ACC=1`.

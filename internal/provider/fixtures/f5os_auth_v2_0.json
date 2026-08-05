@@ -8,7 +8,15 @@
         "ldap_version": 3,
         "ssl": "off",
         "active_directory": false,
-        "tls_reqcert": "demand"
+        "tls_reqcert": "demand",
+        "user-object-class": [
+          "posixAccount",
+          "person"
+        ],
+        "group-object-class": [
+          "posixGroup",
+          "groupOfNames"
+        ]
       },
       "f5-system-aaa:users": {
         "user": [
@@ -111,7 +119,17 @@
         "unlock-time": 60,
         "root-lockout": true,
         "root-unlock-time": 60,
-        "max-age": 0
+        "max-age": 0,
+        "min-days": 1,
+        "remember": 5,
+        "warn-age": 7
+      }
+    },
+    "f5-openconfig-aaa-login-policy:login-policy": {
+      "config": {
+        "admin-role-limit": true,
+        "restconf-max-session-limit": 20,
+        "ssh-max-session-limit": 20
       }
     }
   }
