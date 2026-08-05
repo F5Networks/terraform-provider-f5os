@@ -46,6 +46,10 @@ import (
 func testAccProxyPreCheck(t *testing.T) {
 	t.Helper()
 
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
+
 	// Check standard F5OS env vars
 	for _, envVar := range []string{"F5OS_HOST", "F5OS_USERNAME", "F5OS_PASSWORD"} {
 		if os.Getenv(envVar) == "" {

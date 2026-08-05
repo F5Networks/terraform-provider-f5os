@@ -706,6 +706,9 @@ func TestAuthResourceMocked_DeleteSurfacesClearError(t *testing.T) {
 //
 // Safety: always keeps "local" first; restores original baseline in Cleanup.
 func TestAccAuthResourceDeleteRestoresOriginal(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	preExisting := []string{"local", "ldap"}
 
 	client, err := newTestClientFromEnv()
@@ -1095,6 +1098,9 @@ func TestAuthResourceMocked_RoleGIDUpdateAddsNewRole(t *testing.T) {
 //  5. CheckDestroy verifies the device has operator GID 9050
 //  6. t.Cleanup restores the true baseline captured in step 1.
 func TestAccAuthResourceDeleteRestoresRoleGIDs(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	preExistingGID := int64(9050)
 
 	client, err := newTestClientFromEnv()
@@ -1809,6 +1815,9 @@ func testAccCheckRoleGIDApplied(rolename string, expectedGID int) tfresource.Tes
 //   - Restores the original operator GID after the test via t.Cleanup
 //   - Pre-flight check skips gracefully if the device blocks role writes
 func TestAccAuthResourceWithRoles(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	// Pre-flight: check if we can modify role config on this device
 	client, err := newTestClientFromEnv()
 	if err != nil {
@@ -2510,6 +2519,9 @@ func testAccCheckPasswordPolicyApplied(expected *f5os.PasswordPolicyConfig) tfre
 //   - Restores original password policy on destroy
 //   - Uses t.Cleanup to restore baseline even if test fails
 func TestAccAuthResourcePasswordPolicy(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
@@ -3570,6 +3582,9 @@ resource "f5os_auth" "test" {
 //   - Uses safe password policy values (won't lock users out)
 //   - Restores the original password policy in t.Cleanup
 func TestAccAuthResourcePasswordPolicyAllFields(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
@@ -3704,6 +3719,9 @@ resource "f5os_auth" "test" {
 //   - Restores original GIDs in t.Cleanup
 //   - Pre-flight check skips if role writes are denied
 func TestAccAuthResourceWithRolesUpdateAddsRole(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
@@ -3845,6 +3863,9 @@ resource "f5os_auth" "test" {
 //
 // Safety: uses safe password policy values; restores baseline on cleanup.
 func TestAccAuthResourcePasswordPolicyDriftDetection(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
@@ -4150,6 +4171,9 @@ func testAccCheckLoginPolicyApplied(adminRoleLimit bool, restconfLimit, sshLimit
 //   - login_policy Delete is a no-op, so the true device baseline is captured
 //     up front and restored in t.Cleanup
 func TestAccAuthResourceLoginPolicy(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
@@ -4550,6 +4574,9 @@ func testAccCheckLdapApplied(userClasses, groupClasses []string) tfresource.Test
 //   - ldap Delete is a no-op, so the true device baseline is captured up front
 //     and restored in t.Cleanup
 func TestAccAuthResourceLdap(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
