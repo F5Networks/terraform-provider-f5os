@@ -157,11 +157,29 @@ func (r *CfgBackupResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	entries := obj["f5-utils-file-transfer:output"].(map[string]any)["entries"].([]any)
+	// Defensive parsing: the device response shape has been stable,
+	// but an unexpected/error payload (or partial response during a
+	// device restart) can cause direct type assertions to panic and
+	// take down the plugin process. Walk the response with guarded
+	// assertions and treat "not present or shape unexpected" as a
+	// missing resource so Terraform sees drift instead of crashing.
+	output, ok := obj["f5-utils-file-transfer:output"].(map[string]any)
+	if !ok {
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	rawEntries, ok := output["entries"].([]any)
+	if !ok {
+		resp.State.RemoveResource(ctx)
+		return
+	}
 	exists := false
-	for _, v := range entries {
-		m := v.(map[string]any)
-		if m["name"].(string) == name {
+	for _, v := range rawEntries {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		if nm, ok := m["name"].(string); ok && nm == name {
 			exists = true
 			break
 		}

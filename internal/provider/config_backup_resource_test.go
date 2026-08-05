@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"sync/atomic"
 	"testing"
@@ -16,14 +17,22 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// f5osClient is the subset of *f5os.F5os methods the test helpers need.
+// Using an interface makes it easy to pass either a real client or a
+// mock (see cfgBackupExistsOnDevice's inline interface).
+type f5osClient interface {
+	GetConfigBackup() ([]byte, error)
+	DeleteConfigBackup(string) error
+}
+
 // testAccCheckCfgBackupExists queries the device directly to confirm that
 // a config backup file with the given name is present in the configs/ listing.
-func testAccCheckCfgBackupExists(backupName string) resource.TestCheckFunc {
+// The client is passed in by the caller so a single session can be reused
+// across the whole test — F5OS 2.0 rate-limits authentication and a fresh
+// NewSession per Check will trip a lockout and start returning 401s
+// mid-test (observed on shared DUTs in CI).
+func testAccCheckCfgBackupExists(client f5osClient, backupName string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		client, err := newTestClientFromEnv()
-		if err != nil {
-			return fmt.Errorf("failed to create f5os client: %w", err)
-		}
 		return cfgBackupExistsOnDevice(client, backupName)
 	}
 }
@@ -48,61 +57,116 @@ func cfgBackupExistsOnDevice(client interface{ GetConfigBackup() ([]byte, error)
 		return fmt.Errorf("unexpected response structure: missing entries")
 	}
 	for _, v := range entries {
-		m, _ := v.(map[string]any)
-		if m["name"].(string) == name {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		if nm, ok := m["name"].(string); ok && nm == name {
 			return nil
 		}
 	}
 	return fmt.Errorf("config backup %q not found on device", name)
 }
 
-// testAccCheckCfgBackupDestroy verifies that the test backup files have been
-// removed from the device after Terraform destroys the resource.
-func testAccCheckCfgBackupDestroy(s *terraform.State) error {
-	client, err := newTestClientFromEnv()
-	if err != nil {
-		// Cannot connect — treat as destroyed
+// testAccCheckCfgBackupDestroy returns a CheckDestroy that reuses the given
+// client. See the comment on testAccCheckCfgBackupExists for why we cache
+// the session instead of creating a fresh one on every invocation.
+func testAccCheckCfgBackupDestroy(client f5osClient) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		for _, rs := range s.RootModule().Resources {
+			if rs.Type != "f5os_config_backup" {
+				continue
+			}
+			name := rs.Primary.Attributes["name"]
+			if err := cfgBackupExistsOnDevice(client, name); err == nil {
+				return fmt.Errorf("config backup %q still exists on device after destroy", name)
+			}
+		}
 		return nil
 	}
-	for _, rs := range s.RootModule().Resources {
-		if rs.Type != "f5os_config_backup" {
-			continue
-		}
-		name := rs.Primary.Attributes["name"]
-		if err := cfgBackupExistsOnDevice(client, name); err == nil {
-			return fmt.Errorf("config backup %q still exists on device after destroy", name)
-		}
+}
+
+// testAccCleanupCfgBackup does a best-effort delete of the named backup
+// file on the device. The client's DeleteConfigBackup returns a
+// generic error for any non-success response and does not distinguish
+// "file absent" from other failures, so we swallow every error and
+// rely on the subsequent Create to surface any real device-side
+// problem. Cleanup is intentionally opportunistic.
+//
+// The filename must be passed with the "configs/" prefix — F5OS 2.0
+// rejects a bare filename with "Only configs/ diags/shared/ paths are
+// allowed for Delete file operation." (The resource's own Delete
+// method — CfgBackupResource.Delete — does the same prefixing.)
+//
+// Used to bracket TestAccCfgBackupCreate against a stale
+// `test_backup_92dh7s` file left behind by a previous failed run
+// (e.g., an "export operation timed out" that the DUT eventually
+// completed after the poll loop gave up). A lingering file makes the
+// next Create fail because the database-backup step refuses to
+// overwrite the existing file until an operator manually deletes it.
+func testAccCleanupCfgBackup(t *testing.T, client f5osClient, name string) {
+	t.Helper()
+	if client == nil {
+		t.Logf("cleanup: no client available; skipping delete of %q", name)
+		return
 	}
-	return nil
+	if err := client.DeleteConfigBackup("configs/" + name); err != nil {
+		// Swallow: the file may simply not exist. This is expected
+		// on a clean run and must not fail the test.
+		t.Logf("cleanup: DeleteConfigBackup(%q) returned %s (ignored)", name, err)
+		return
+	}
+	t.Logf("cleanup: deleted stale backup %q from device", name)
 }
 
 func TestAccCfgBackupCreate(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
+	// The backup filename is a shared identifier on the DUT: if a
+	// previous run left one behind, Create fails. Delete it up front,
+	// and again after the test to keep the DUT clean for the next run.
+	//
+	// A single f5osclient session is created here and threaded through
+	// every helper. F5OS 2.0 has a stricter auth rate-limit than 1.x;
+	// creating a fresh session per Check (as the old code did) trips
+	// the lockout ~80s into the test and every subsequent request —
+	// including the framework's own destroy — returns 401. Caching
+	// the client eliminates that failure mode.
+	const name = "test_backup_92dh7s"
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Fatalf("failed to create f5os client: %s", err)
+	}
+	testAccCleanupCfgBackup(t, client, name)
+	t.Cleanup(func() { testAccCleanupCfgBackup(t, client, name) })
+
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		CheckDestroy:             testAccCheckCfgBackupDestroy,
+		CheckDestroy:             testAccCheckCfgBackupDestroy(client),
 		Steps: []resource.TestStep{
 			// Step 1: Create the backup and verify state + device
 			{
 				Config: cfgBackupConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_config_backup.test", "name", "test_backup_92dh7s"),
+					resource.TestCheckResourceAttr("f5os_config_backup.test", "name", name),
 					resource.TestCheckResourceAttr("f5os_config_backup.test", "remote_path", "/upload/upload.php"),
 					resource.TestCheckResourceAttr("f5os_config_backup.test", "protocol", "https"),
 					resource.TestCheckResourceAttr("f5os_config_backup.test", "remote_user", "corpuser"),
 					resource.TestCheckResourceAttr("f5os_config_backup.test", "remote_password", "password"),
-					resource.TestCheckResourceAttr("f5os_config_backup.test", "timeout", "150"),
-					resource.TestCheckResourceAttr("f5os_config_backup.test", "id", "test_backup_92dh7s"),
-					testAccCheckCfgBackupExists("test_backup_92dh7s"),
+					resource.TestCheckResourceAttr("f5os_config_backup.test", "timeout", "300"),
+					resource.TestCheckResourceAttr("f5os_config_backup.test", "id", name),
+					testAccCheckCfgBackupExists(client, name),
 				),
 			},
 			// Step 2: Update a mutable attribute (remote_path) to exercise Update
 			{
 				Config: cfgBackupConfigUpdated,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_config_backup.test", "name", "test_backup_92dh7s"),
+					resource.TestCheckResourceAttr("f5os_config_backup.test", "name", name),
 					resource.TestCheckResourceAttr("f5os_config_backup.test", "remote_path", "/upload/upload_v2.php"),
-					testAccCheckCfgBackupExists("test_backup_92dh7s"),
+					testAccCheckCfgBackupExists(client, name),
 				),
 			},
 			// Step 3: Destroy is automatic; CheckDestroy verifies cleanup
@@ -160,7 +224,7 @@ func TestUnitCfgBackup(t *testing.T) {
 				"f5-utils-file-transfer:transfer-operation": [
 					{
 						"local-file-path": "configs/test_cfg_backup",
-						"remote-host": "10.255.0.142",
+						"remote-host": "10.145.42.244",
 						"remote-file-path": "/upload/test_cfg_backup",
 						"operation": "Export file",
 						"protocol": "HTTPS   ",
@@ -527,21 +591,26 @@ resource "f5os_config_backup" "test" {
 const cfgBackupConfig = `
 resource "f5os_config_backup" "test" {
   name            = "test_backup_92dh7s"
-  remote_host     = "10.255.0.142"
+  remote_host     = "10.145.42.244"
   remote_user     = "corpuser"
   remote_password = "password"
   remote_path     = "/upload/upload.php"
   protocol        = "https"
+  # 300s (vs. the schema default of 150s) absorbs transient slowness on
+  # the shared upload target 10.145.42.244 that has caused the client's
+  # "export operation timed out" retry loop to exit prematurely on CI.
+  timeout         = 300
 }
 `
 
 const cfgBackupConfigUpdated = `
 resource "f5os_config_backup" "test" {
   name            = "test_backup_92dh7s"
-  remote_host     = "10.255.0.142"
+  remote_host     = "10.145.42.244"
   remote_user     = "corpuser"
   remote_password = "password"
   remote_path     = "/upload/upload_v2.php"
   protocol        = "https"
+  timeout         = 300
 }
 `

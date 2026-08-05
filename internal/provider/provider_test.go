@@ -6,7 +6,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
@@ -180,4 +182,94 @@ func setupMockPlatformVersion(m *http.ServeMux, version string) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `{"f5-system-image:install":{"install-os-version":"%s","install-status":"success"}}`, version)
 	})
+}
+
+// TestSessionCacheConcurrencyDedupe exercises the session-cache
+// "double-check" pattern used in Configure by simulating concurrent
+// callers that attempt to get-or-create a session for the same cache
+// key. The test does not call the networked NewSession path; it
+// simulates creation to avoid external dependencies while validating
+// the concurrency semantics (only one final cache entry and all
+// callers receive the same pointer).
+func TestSessionCacheConcurrencyDedupe(t *testing.T) {
+	const goroutines = 20
+
+	// Ensure a clean starting state.
+	sessionCacheMu.Lock()
+	sessionCache = map[string]*f5ossdk.F5os{}
+	sessionCacheMu.Unlock()
+
+	host := "unit-test-host"
+	port := 8888
+	user := "tester"
+	password := "pw"
+	disableSSL := false
+	headers := map[string]string{}
+
+	cacheKey := sessionCacheKey(host, port, user, password, disableSSL, headers)
+
+	results := make(chan *f5ossdk.F5os, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+
+			// Read phase (fast, uses the mutex as in Configure).
+			sessionCacheMu.Lock()
+			client := sessionCache[cacheKey]
+			sessionCacheMu.Unlock()
+
+			if client == nil {
+				// Simulate the expensive creation path (NewSession)
+				// without performing network I/O. Sleep briefly to
+				// increase the chance of interleaving between
+				// goroutines.
+				time.Sleep(5 * time.Millisecond)
+				created := &f5ossdk.F5os{
+					Host:     host,
+					User:     user,
+					Password: password,
+				}
+
+				// Double-check + store, matching the provider's pattern.
+				sessionCacheMu.Lock()
+				if existing, ok := sessionCache[cacheKey]; ok {
+					client = existing
+				} else {
+					sessionCache[cacheKey] = created
+					client = created
+				}
+				sessionCacheMu.Unlock()
+			}
+
+			results <- client
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	// Verify all goroutines received the same pointer and the cache
+	// has one entry.
+	var first *f5ossdk.F5os
+	for c := range results {
+		if first == nil {
+			first = c
+			continue
+		}
+		if c != first {
+			t.Fatalf("concurrent callers received different client pointers: %p vs %p", first, c)
+		}
+	}
+
+	sessionCacheMu.Lock()
+	if len(sessionCache) != 1 {
+		t.Fatalf("expected 1 entry in sessionCache, got %d", len(sessionCache))
+	}
+	if sessionCache[cacheKey] != first {
+		t.Fatalf("sessionCache entry does not match returned clients: cache=%p returned=%p", sessionCache[cacheKey], first)
+	}
+	sessionCacheMu.Unlock()
 }
