@@ -1039,7 +1039,7 @@ func TestUnitUserGetRolesFailureDuringUpdate(t *testing.T) {
 			{
 				PreConfig: func() {
 					st.mu.Lock()
-					// The SDK retries each request 3 times with 10s delay.
+					// The SDK retries each request up to 6 times with 10s delay.
 					// Before the Update apply, the framework calls Read which
 					// also invokes getUserRoles (consuming retries from the
 					// counter). We set the counter high enough to fail ALL
@@ -1047,7 +1047,7 @@ func TestUnitUserGetRolesFailureDuringUpdate(t *testing.T) {
 					// refresh and the Update's own call. The post-apply Read
 					// may also fail, producing a non-empty plan, which we
 					// tolerate with ExpectNonEmptyPlan.
-					st.failGetRolesCount = 9
+					st.failGetRolesCount = 18
 					st.mu.Unlock()
 				},
 				Config:             testAccUserResourceConfig("unittest_getfail", "admin"),
@@ -1255,7 +1255,7 @@ func TestUnitUserDeleteWithGetUserRolesFailure(t *testing.T) {
 				PreConfig: func() {
 					st.mu.Lock()
 					// Set counter high to fail all getUserRoles calls during destroy
-					st.failGetRolesCount = 10
+					st.failGetRolesCount = 20
 					st.mu.Unlock()
 				},
 				Config:  testAccUserResourceConfig("deleterolesfailmock", "operator"),

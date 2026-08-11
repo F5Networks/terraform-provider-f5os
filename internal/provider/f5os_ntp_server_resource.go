@@ -75,16 +75,19 @@ func (r *NTPServerResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			// Create/Update; on 2.0.0+ they are passed through to the
 			// device.
 			"association_type": schema.StringAttribute{
-				MarkdownDescription: "NTP association type. Requires F5OS 2.0.0 or later. Typical values are `SERVER`, `PEER`, or `POOL`; the device enforces the allowed set.",
+				MarkdownDescription: "NTP association type. Requires F5OS 2.0.0 or later. Typical values are `SERVER`, `PEER`, or `POOL`; the device enforces the allowed set. Optional+Computed: if omitted, the device populates a default and the value is mirrored into state so `terraform import` round-trips and out-of-band changes surface as drift.",
 				Optional:            true,
+				Computed:            true,
 			},
 			"version": schema.Int64Attribute{
-				MarkdownDescription: "NTP protocol version to use with this server. Requires F5OS 2.0.0 or later.",
+				MarkdownDescription: "NTP protocol version to use with this server. Requires F5OS 2.0.0 or later. Optional+Computed: if omitted, the device populates a default and the value is mirrored into state.",
 				Optional:            true,
+				Computed:            true,
 			},
 			"port": schema.Int64Attribute{
-				MarkdownDescription: "UDP port to reach the NTP server on. Requires F5OS 2.0.0 or later.",
+				MarkdownDescription: "UDP port to reach the NTP server on. Requires F5OS 2.0.0 or later. Optional+Computed: if omitted, the device populates a default and the value is mirrored into state.",
 				Optional:            true,
+				Computed:            true,
 			},
 			// F5OS 2.0.0+ read-only state leaves. Populated by Read from
 			// the device's state container. Null on pre-2.0.0 devices.
@@ -132,40 +135,12 @@ func (r *NTPServerResource) Create(ctx context.Context, req resource.CreateReque
 	}
 
 	// Patch global NTP config (service enable / authentication enable)
-	// when either attribute is explicitly set in the plan (not null and not
-	// unknown).  Unknown means the user omitted the attribute and Terraform
-	// is letting the provider compute it.
-	if !plan.NTPService.IsNull() && !plan.NTPService.IsUnknown() || !plan.NTPAuthentication.IsNull() && !plan.NTPAuthentication.IsUnknown() {
-		var svc, auth *bool
-		if !plan.NTPService.IsNull() && !plan.NTPService.IsUnknown() {
-			v := plan.NTPService.ValueBool()
-			svc = &v
-		}
-		if !plan.NTPAuthentication.IsNull() && !plan.NTPAuthentication.IsUnknown() {
-			v := plan.NTPAuthentication.ValueBool()
-			auth = &v
-		}
-		if err := r.client.PatchNTPGlobalConfig(svc, auth); err != nil {
-			resp.Diagnostics.AddError("NTP Global Config Error", err.Error())
-			return
-		}
-	}
-
-	// When ntp_service / ntp_authentication are omitted from the config they
-	// arrive as Unknown (Computed).  Resolve them from the device so the
-	// state always contains concrete values after apply.
-	if plan.NTPService.IsUnknown() || plan.NTPAuthentication.IsUnknown() {
-		svc, auth, err := r.client.GetNTPGlobalConfig()
-		if err != nil {
-			resp.Diagnostics.AddError("NTP Global Config Read Error", err.Error())
-			return
-		}
-		if plan.NTPService.IsUnknown() {
-			plan.NTPService = types.BoolValue(svc)
-		}
-		if plan.NTPAuthentication.IsUnknown() {
-			plan.NTPAuthentication = types.BoolValue(auth)
-		}
+	// and resolve any Unknown Computed values from the device. See
+	// resolveAndPatchGlobalNTP for the shared implementation used by
+	// both Create and Update.
+	if diags := r.resolveAndPatchGlobalNTP(&plan, "NTP Global Config Error"); diags.HasError() {
+		resp.Diagnostics.Append(diags...)
+		return
 	}
 
 	tflog.Info(ctx, "Creating NTP Server", map[string]any{
@@ -192,14 +167,22 @@ func (r *NTPServerResource) Read(ctx context.Context, req resource.ReadRequest, 
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	// write the debug print for state variable
+	// Log current state using the Terraform value-type .String()
+	// representations so Null/Unknown values render safely instead of
+	// being coerced through .ValueBool()/.ValueInt64() (which return
+	// the zero value and misrepresent the field).
 	tflog.Debug(ctx, "MDEBUG: Current State", map[string]any{
-		"server":             state.Server.ValueString(),
-		"key_id":             state.KeyID.ValueInt64(),
-		"prefer":             state.Prefer.ValueBool(),
-		"iburst":             state.IBurst.ValueBool(),
-		"ntp_service":        state.NTPService.ValueBool(),
-		"ntp_authentication": state.NTPAuthentication.ValueBool(),
+		"server": state.Server.String(),
+		"key_id": func() any {
+			if state.KeyID.IsNull() || state.KeyID.IsUnknown() {
+				return nil
+			}
+			return state.KeyID.ValueInt64()
+		}(),
+		"prefer":             state.Prefer.String(),
+		"iburst":             state.IBurst.String(),
+		"ntp_service":        state.NTPService.String(),
+		"ntp_authentication": state.NTPAuthentication.String(),
 	})
 
 	ntp, err := r.client.GetNTPServer(state.Server.ValueString())
@@ -214,8 +197,12 @@ func (r *NTPServerResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	state.ID = types.StringValue(state.Server.ValueString())
+	// Mirror the device canonical address into state.Server first, then
+	// derive state.ID from it. Assigning ID before overwriting Server
+	// would capture the pre-read (user-provided) address, causing an
+	// id/server mismatch when the device normalizes the address.
 	state.Server = types.StringValue(ntp.Address)
+	state.ID = types.StringValue(state.Server.ValueString())
 	if ntp.KeyID != nil {
 		state.KeyID = types.Int64Value(*ntp.KeyID)
 	} else {
@@ -226,11 +213,11 @@ func (r *NTPServerResource) Read(ctx context.Context, req resource.ReadRequest, 
 	state.NTPService = types.BoolValue(ntpService)
 	state.NTPAuthentication = types.BoolValue(ntpAuth)
 
-	// F5OS 2.0.0+ additive config leaves. Mirror the device
-	// unconditionally so out-of-band removal (downgrade, admin edit)
-	// surfaces as drift rather than sticking to a stale plan value.
-	// On pre-2.0.0 devices the leaves are always absent, so these
-	// stay null.
+	// F5OS 2.0.0+ additive config leaves. These are Optional+Computed:
+	// the user may set them explicitly, or the device populates them
+	// with its own defaults (observed on 1.8.x as well). Mirror the
+	// device unconditionally so import round-trips and out-of-band
+	// changes surface as drift.
 	state.AssociationType = nullableStringToTF(ntp.AssociationType)
 	state.Version = nullableInt64ToTF(ntp.Version)
 	state.Port = nullableInt64ToTF(ntp.Port)
@@ -278,36 +265,12 @@ func (r *NTPServerResource) Update(ctx context.Context, req resource.UpdateReque
 	}
 
 	// Patch global NTP config (service enable / authentication enable)
-	// when either attribute is explicitly set in the plan.
-	if !plan.NTPService.IsNull() && !plan.NTPService.IsUnknown() || !plan.NTPAuthentication.IsNull() && !plan.NTPAuthentication.IsUnknown() {
-		var svc, auth *bool
-		if !plan.NTPService.IsNull() && !plan.NTPService.IsUnknown() {
-			v := plan.NTPService.ValueBool()
-			svc = &v
-		}
-		if !plan.NTPAuthentication.IsNull() && !plan.NTPAuthentication.IsUnknown() {
-			v := plan.NTPAuthentication.ValueBool()
-			auth = &v
-		}
-		if err := r.client.PatchNTPGlobalConfig(svc, auth); err != nil {
-			resp.Diagnostics.AddError("NTP Global Config Update Error", err.Error())
-			return
-		}
-	}
-
-	// Resolve unknown computed values from the device.
-	if plan.NTPService.IsUnknown() || plan.NTPAuthentication.IsUnknown() {
-		svc, auth, err := r.client.GetNTPGlobalConfig()
-		if err != nil {
-			resp.Diagnostics.AddError("NTP Global Config Read Error", err.Error())
-			return
-		}
-		if plan.NTPService.IsUnknown() {
-			plan.NTPService = types.BoolValue(svc)
-		}
-		if plan.NTPAuthentication.IsUnknown() {
-			plan.NTPAuthentication = types.BoolValue(auth)
-		}
+	// and resolve any Unknown Computed values from the device. See
+	// resolveAndPatchGlobalNTP for the shared implementation used by
+	// both Create and Update.
+	if diags := r.resolveAndPatchGlobalNTP(&plan, "NTP Global Config Update Error"); diags.HasError() {
+		resp.Diagnostics.Append(diags...)
+		return
 	}
 
 	// Populate F5OS 2.0.0+ read-only state leaves so Computed attributes
@@ -369,6 +332,52 @@ func (r *NTPServerResource) validate200Fields(plan f5os.NTPServerModel) diag.Dia
 	return diags
 }
 
+// resolveAndPatchGlobalNTP applies the shared post-write global-NTP
+// flow used by both Create and Update:
+//  1. If ntp_service or ntp_authentication is explicitly set in the
+//     plan (not Null and not Unknown), PATCH the device's global NTP
+//     config.  Unknown means the user omitted the attribute and
+//     Terraform is letting the provider compute it, so we do not
+//     touch the device.
+//  2. If either attribute is Unknown after the patch, fetch the
+//     current device values so Terraform's state ends up with
+//     concrete booleans (Computed attributes may not remain Unknown).
+//
+// patchErrTitle is used as the diagnostic title for a PatchNTPGlobalConfig
+// failure so Create and Update can surface their own error label.
+func (r *NTPServerResource) resolveAndPatchGlobalNTP(plan *f5os.NTPServerModel, patchErrTitle string) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if !plan.NTPService.IsNull() && !plan.NTPService.IsUnknown() || !plan.NTPAuthentication.IsNull() && !plan.NTPAuthentication.IsUnknown() {
+		var svc, auth *bool
+		if !plan.NTPService.IsNull() && !plan.NTPService.IsUnknown() {
+			v := plan.NTPService.ValueBool()
+			svc = &v
+		}
+		if !plan.NTPAuthentication.IsNull() && !plan.NTPAuthentication.IsUnknown() {
+			v := plan.NTPAuthentication.ValueBool()
+			auth = &v
+		}
+		if err := r.client.PatchNTPGlobalConfig(svc, auth); err != nil {
+			diags.AddError(patchErrTitle, err.Error())
+			return diags
+		}
+	}
+	if plan.NTPService.IsUnknown() || plan.NTPAuthentication.IsUnknown() {
+		svc, auth, err := r.client.GetNTPGlobalConfig()
+		if err != nil {
+			diags.AddError("NTP Global Config Read Error", err.Error())
+			return diags
+		}
+		if plan.NTPService.IsUnknown() {
+			plan.NTPService = types.BoolValue(svc)
+		}
+		if plan.NTPAuthentication.IsUnknown() {
+			plan.NTPAuthentication = types.BoolValue(auth)
+		}
+	}
+	return diags
+}
+
 // refreshComputedStateLeaves fetches the current NTP server entry from
 // the device and copies the read-only 2.0.0+ state leaves plus any
 // config leaves the device chose to echo back onto plan. This gives
@@ -396,20 +405,37 @@ func (r *NTPServerResource) refreshComputedStateLeaves(plan *f5os.NTPServerModel
 		plan.Stratum = types.Int64Null()
 		plan.Authenticated = types.BoolNull()
 		plan.StateAddress = types.StringNull()
+		// 2.0.0+ Optional+Computed config leaves also need concrete
+		// values. If the caller did not set them (Unknown), fall back
+		// to null; if the caller set them, keep the plan value.
+		if plan.AssociationType.IsUnknown() {
+			plan.AssociationType = types.StringNull()
+		}
+		if plan.Version.IsUnknown() {
+			plan.Version = types.Int64Null()
+		}
+		if plan.Port.IsUnknown() {
+			plan.Port = types.Int64Null()
+		}
 		return diags
 	}
-	// Config leaves: only overwrite if the device returned a value.
-	// This preserves plan-declared values on devices that echo config
-	// verbatim, but also picks up device-side defaults when the caller
-	// omitted the leaf.
+	// Config leaves are Optional+Computed. Mirror the device value so
+	// the state always reflects reality after apply, whether the user
+	// set the attribute or the device populated a default.
 	if ntp.AssociationType != nil {
 		plan.AssociationType = types.StringValue(*ntp.AssociationType)
+	} else {
+		plan.AssociationType = types.StringNull()
 	}
 	if ntp.Version != nil {
 		plan.Version = types.Int64Value(*ntp.Version)
+	} else {
+		plan.Version = types.Int64Null()
 	}
 	if ntp.Port != nil {
 		plan.Port = types.Int64Value(*ntp.Port)
+	} else {
+		plan.Port = types.Int64Null()
 	}
 	// Read-only state leaves. nullableXToTF maps nil to *Null().
 	plan.Stratum = nullableInt64ToTF(ntp.StateStratum)

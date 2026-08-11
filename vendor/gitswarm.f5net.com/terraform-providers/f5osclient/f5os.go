@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
@@ -97,13 +98,42 @@ type F5os struct {
 	// as the production default of 20 seconds. Set to a short duration
 	// (e.g. 1ms) in unit tests to avoid slow test suites.
 	PollInterval time.Duration
+	// tokenMu guards writes to Token. The Terraform provider caches a
+	// single *F5os per (host, port, user, password, tls, headers) tuple
+	// and the plugin framework can invoke resource operations
+	// concurrently, so the 401 refresh path in doRequest must not race
+	// with concurrent readers of Token.
+	tokenMu sync.Mutex
+}
+
+// setToken atomically replaces the session token.
+func (p *F5os) setToken(t string) {
+	p.tokenMu.Lock()
+	p.Token = t
+	p.tokenMu.Unlock()
+}
+
+// getToken atomically returns the current session token.
+func (p *F5os) getToken() string {
+	p.tokenMu.Lock()
+	defer p.tokenMu.Unlock()
+	return p.Token
 }
 
 // pollInterval returns the PollInterval if set, otherwise returns the
-// provided default duration.
+// provided default duration. When neither is available, it also honors
+// the F5OS_POLL_INTERVAL environment variable so unit tests that create
+// short-lived sessions (via NewSession) can shrink internal retry
+// delays without having to reach through to set the PollInterval field
+// after construction.
 func (p *F5os) pollInterval(defaultInterval time.Duration) time.Duration {
 	if p.PollInterval > 0 {
 		return p.PollInterval
+	}
+	if v := os.Getenv("F5OS_POLL_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
 	}
 	return defaultInterval
 }
@@ -259,28 +289,110 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 	for k, v := range f5osObj.CustomHeaders {
 		req.Header.Set(k, v)
 	}
-	res, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	respData, err := io.ReadAll(res.Body)
-	f5osLogger.Info("[NewSession]", "Status Code:", hclog.Fmt("%+v", res.StatusCode))
-	if res.StatusCode == 401 {
-		mapData := make(map[string]interface{})
-		json.Unmarshal(respData, &mapData)
-		errorNew := struct {
-			Status  string          `json:"status"`
-			Message string          `json:"message"`
-			Details json.RawMessage `json:"details"`
-		}{
-			Status:  res.Status,
-			Message: mapData["ietf-restconf:errors"].(map[string]interface{})["error"].([]interface{})[0].(map[string]interface{})["error-tag"].(string),
-			Details: json.RawMessage(string(respData)),
+	// Retry NewSession on transient transport errors (e.g. RESTCONF
+	// listener bouncing during cipher reconfig) and on 401
+	// access-denied (F5OS 2.0.0 auth rate-limit). The delay honors
+	// F5OS_POLL_INTERVAL so unit tests exercising this path do not
+	// sleep for real; production leaves the env var unset and gets the
+	// 10s default.
+	var res *http.Response
+	var respData []byte
+	{
+		const sessionRetries = 6
+		sessionDelay := 10 * time.Second
+		if v := os.Getenv("F5OS_POLL_INTERVAL"); v != "" {
+			if d, perr := time.ParseDuration(v); perr == nil && d > 0 {
+				sessionDelay = d
+			}
 		}
-		jsonData, _ := json.Marshal(errorNew)
-		return nil, fmt.Errorf("%+v", string(jsonData))
-		//return nil, fmt.Errorf("\"message\": \"%+v\", \"deatils\": \"%+v\"", res.Status, string(respData))
+		var lastAuthErr error
+		var lastAuthBody []byte
+		var lastAuthStatus string
+		var lastTransportErr error
+		succeeded := false
+		for attempt := 0; attempt < sessionRetries; attempt++ {
+			// A fresh request is required per attempt because
+			// http.Request bodies are single-shot; NewSession's body is
+			// nil, but the Basic-Auth header is safe to reuse. We still
+			// rebuild to be defensive.
+			retryReq, rerr := http.NewRequest(method, urlString, nil)
+			if rerr != nil {
+				return nil, rerr
+			}
+			retryReq.Header.Set("Content-Type", contentTypeHeader)
+			retryReq.SetBasicAuth(f5osObj.User, f5osObj.Password)
+			for k, v := range f5osObj.CustomHeaders {
+				retryReq.Header.Set(k, v)
+			}
+			res, err = client.Do(retryReq)
+			if err != nil {
+				msg := err.Error()
+				if strings.Contains(msg, "context deadline exceeded") ||
+					strings.Contains(msg, "connection refused") ||
+					strings.Contains(msg, "connection reset") ||
+					strings.Contains(msg, "EOF") ||
+					strings.Contains(msg, "no such host") {
+					f5osLogger.Info("[NewSession]", "Transient transport error, retrying", hclog.Fmt("attempt=%d err=%s", attempt+1, msg))
+					lastTransportErr = err
+					time.Sleep(sessionDelay)
+					continue
+				}
+				return nil, err
+			}
+			// Read body up-front so we can retry on 401 without a leak.
+			respData, _ = io.ReadAll(res.Body)
+			res.Body.Close()
+			f5osLogger.Info("[NewSession]", "Status Code:", hclog.Fmt("%+v", res.StatusCode))
+			if res.StatusCode == 401 {
+				// F5OS 2.0.0 auth rate-limit: back off and retry.
+				lastAuthStatus = res.Status
+				lastAuthBody = respData
+				lastAuthErr = fmt.Errorf("HTTP 401 (access-denied) on NewSession, retrying")
+				f5osLogger.Info("[NewSession]", "401 access-denied, retrying (auth rate-limit)", hclog.Fmt("attempt=%d", attempt+1))
+				time.Sleep(sessionDelay)
+				continue
+			}
+			succeeded = true
+			break
+		}
+		if !succeeded {
+			// Precedence: 401 wins over transient transport error,
+			// because a 401 is a concrete device response that carries
+			// diagnostic detail (the ietf-restconf error body) whereas
+			// a transient transport error is nearly always downstream
+			// of the same rate-limit or listener-bounce condition.
+			if lastAuthErr != nil {
+				// Preserve the pre-retry error shape so callers that
+				// inspect the JSON payload still get the same content.
+				mapData := make(map[string]interface{})
+				_ = json.Unmarshal(lastAuthBody, &mapData)
+				var tag string
+				if errs, ok := mapData["ietf-restconf:errors"].(map[string]interface{}); ok {
+					if arr, ok := errs["error"].([]interface{}); ok && len(arr) > 0 {
+						if first, ok := arr[0].(map[string]interface{}); ok {
+							if t, ok := first["error-tag"].(string); ok {
+								tag = t
+							}
+						}
+					}
+				}
+				errorNew := struct {
+					Status  string          `json:"status"`
+					Message string          `json:"message"`
+					Details json.RawMessage `json:"details"`
+				}{
+					Status:  lastAuthStatus,
+					Message: tag,
+					Details: json.RawMessage(string(lastAuthBody)),
+				}
+				jsonData, _ := json.Marshal(errorNew)
+				return nil, fmt.Errorf("%+v", string(jsonData))
+			}
+			if lastTransportErr != nil {
+				return nil, fmt.Errorf("NewSession login failed after retries: %w", lastTransportErr)
+			}
+			return nil, fmt.Errorf("NewSession login failed after retries with no response")
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -325,15 +437,19 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 		f5osLogger.Debug("[doRequest]", "Request body", hclog.Fmt("%+v", string(body)))
 	}
 
-	retries := 3
+	// retries is deliberately 6 (was 3) so that combined with the 10s
+	// inter-attempt delay we cover the ~60s window in which F5OS
+	// bounces its RESTCONF listener during cipher / httpd reconfig.
+	retries := 6
 	delay := p.pollInterval(10 * time.Second)
+	var lastErr error
 	for i := 0; i < retries; i++ {
 
 		req, err := http.NewRequest(op, path, bytes.NewBuffer(body))
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("X-Auth-Token", p.Token)
+		req.Header.Set("X-Auth-Token", p.getToken())
 		req.Header.Set("Content-Type", contentTypeHeader)
 		for k, v := range p.CustomHeaders {
 			req.Header.Set(k, v)
@@ -345,37 +461,94 @@ func (p *F5os) doRequest(op, path string, body []byte) ([]byte, error) {
 
 		resp, err := client.Do(req)
 		if err != nil {
-			if !strings.Contains(err.Error(), "context deadline exceeded") {
+			lastErr = err
+			// Retry on transient transport errors that occur when the
+			// RESTCONF listener bounces (e.g. during cipher reconfig):
+			//   - context deadline exceeded
+			//   - connection refused / reset
+			//   - EOF
+			//   - no such host (DNS blip)
+			msg := err.Error()
+			if strings.Contains(msg, "context deadline exceeded") ||
+				strings.Contains(msg, "connection refused") ||
+				strings.Contains(msg, "connection reset") ||
+				strings.Contains(msg, "EOF") ||
+				strings.Contains(msg, "no such host") {
+				f5osLogger.Debug("[doRequest]", "Transient transport error, retrying", hclog.Fmt("attempt=%d err=%s", i+1, msg))
+				time.Sleep(delay)
+				continue
+			}
+			return nil, err
+		}
+
+		// From here on `resp` is non-nil. We must close its body before
+		// each iteration boundary; deferring inside the loop would stack
+		// up to `retries` open bodies, defeating keep-alive and pinning
+		// transport connections until doRequest returns.
+
+		if resp.StatusCode == 200 || resp.StatusCode == 201 || resp.StatusCode == 204 || resp.StatusCode == 404 {
+			f5osLogger.Debug("[doRequest]", "Resp code :", hclog.Fmt("%+v", resp.StatusCode))
+			data, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return data, readErr
+		}
+
+		if resp.StatusCode == 401 && i != retries-1 {
+			// Drain and close the 401 body so the connection can be reused.
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			var f5osObj = F5osConfig{Host: p.Host, User: p.User, Password: p.Password, Transport: p.Transport, UserAgent: p.UserAgent, Teem: p.Teem, ConfigOptions: p.ConfigOptions, DisableSSLVerify: p.DisableSSLVerify, Port: p.Port, CustomHeaders: p.CustomHeaders}
+			f5os, refreshErr := NewSession(&f5osObj)
+			if refreshErr != nil {
+				// Transient during listener bounce or auth rate-limit —
+				// keep retrying.
+				f5osLogger.Debug("[doRequest]", "401 refresh failed, retrying", hclog.Fmt("attempt=%d err=%s", i+1, refreshErr))
+				lastErr = refreshErr
+				time.Sleep(delay)
+				continue
+			}
+			// Update the token on the parent so subsequent calls
+			// through this same *F5os don't keep hitting 401.
+			p.setToken(f5os.Token)
+			lastErr = fmt.Errorf("HTTP 401 from %s %s (refreshed session, retrying)", op, path)
+			time.Sleep(delay)
+			continue
+		}
+
+		if resp.StatusCode >= 400 && i == retries-1 {
+			byteData, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			var errorNew F5osError
+			_ = json.Unmarshal(byteData, &errorNew)
+			if err := errorNew.Error(); err != nil && err.Error() != "" {
 				return nil, err
 			}
+			// Fallback: response did not match F5osError schema, or the
+			// error message was empty. Return the raw body (or status)
+			// so the caller sees something useful instead of "".
+			bodyStr := strings.TrimSpace(string(byteData))
+			if bodyStr == "" {
+				return nil, fmt.Errorf("HTTP %d from %s %s (empty response body)", resp.StatusCode, op, path)
+			}
+			return nil, fmt.Errorf("HTTP %d from %s %s: %s", resp.StatusCode, op, path, bodyStr)
+		}
+
+		// Non-terminal 4xx/5xx (not 401 handled above): record and
+		// retry. Drain the body so the connection can be reused.
+		byteData, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		bodyStr := strings.TrimSpace(string(byteData))
+		if bodyStr == "" {
+			lastErr = fmt.Errorf("HTTP %d from %s %s (empty response body)", resp.StatusCode, op, path)
 		} else {
-			defer resp.Body.Close()
-			if resp.StatusCode == 200 || resp.StatusCode == 201 || resp.StatusCode == 204 || resp.StatusCode == 404 {
-				f5osLogger.Debug("[doRequest]", "Resp code :", hclog.Fmt("%+v", resp.StatusCode))
-				return io.ReadAll(resp.Body)
-			}
-			if resp.StatusCode == 401 && i != retries-1 {
-				var f5osObj = F5osConfig{Host: p.Host, User: p.User, Password: p.Password, Transport: p.Transport, UserAgent: p.UserAgent, Teem: p.Teem, ConfigOptions: p.ConfigOptions, DisableSSLVerify: p.DisableSSLVerify, Port: p.Port, CustomHeaders: p.CustomHeaders}
-				f5os, err := NewSession(&f5osObj)
-				if err != nil {
-					return nil, err
-				}
-				req.Header.Set("X-Auth-Token", f5os.Token)
-				req.Header.Set("Content-Type", contentTypeHeader)
-				for k, v := range p.CustomHeaders {
-					req.Header.Set(k, v)
-				}
-			}
-			if resp.StatusCode >= 400 && i == retries-1 {
-				byteData, _ := io.ReadAll(resp.Body)
-				var errorNew F5osError
-				json.Unmarshal(byteData, &errorNew)
-				return nil, errorNew.Error()
-			}
+			lastErr = fmt.Errorf("HTTP %d from %s %s: %s", resp.StatusCode, op, path, bodyStr)
 		}
 		time.Sleep(delay)
 	}
-	return nil, nil
+	if lastErr != nil {
+		return nil, fmt.Errorf("%s %s failed after %d retries: %w", op, path, retries, lastErr)
+	}
+	return nil, fmt.Errorf("%s %s failed after %d retries with no response", op, path, retries)
 }
 
 func (p *F5os) doTenantRequest(op, path string, body []byte) ([]byte, error) {

@@ -584,12 +584,12 @@ func TestUnitInterfaceDeleteRemoveNativeVlansError(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/interface_get_r5k_status.json"))
 	})
 
-	// RemoveNativeVlans DELETE: fail first 3 attempts (one doRequest retry
+	// RemoveNativeVlans DELETE: fail first 6 attempts (one doRequest retry
 	// cycle), then succeed for post-test cleanup.
 	var nativeDeleteCount int32
 	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=1.0/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:native-vlan", func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&nativeDeleteCount, 1)
-		if n <= 3 {
+		if n <= 6 {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"remove native vlan failed"}]}}`)
 		} else {
@@ -662,12 +662,12 @@ func TestUnitInterfaceDeleteRemoveTrunkVlansError(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=1.0/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:native-vlan", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	// RemoveTrunkVlans DELETE: fail first 3 attempts for trunk-vlans=10,
+	// RemoveTrunkVlans DELETE: fail first 6 attempts for trunk-vlans=10,
 	// then succeed for post-test cleanup.
 	var trunkDeleteCount int32
 	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=1.0/openconfig-if-ethernet:ethernet/openconfig-vlan:switched-vlan/openconfig-vlan:config/openconfig-vlan:trunk-vlans=10", func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&trunkDeleteCount, 1)
-		if n <= 3 {
+		if n <= 6 {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"remove trunk vlan failed"}]}}`)
 		} else {

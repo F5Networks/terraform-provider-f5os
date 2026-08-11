@@ -331,7 +331,7 @@ func TestAuthResourceMocked_ErrorHandling(t *testing.T) {
 
 	client, err := f5os.NewSession(config)
 	assert.NoError(t, err, "Client initialization should not fail")
-	// Use a short poll/retry interval so the 3-retry loop doesn't take 30s.
+	// Use a short poll/retry interval so the 6-retry loop doesn't take 60s.
 	client.PollInterval = time.Millisecond
 
 	// Test that errors are properly handled
@@ -622,12 +622,12 @@ func TestAuthResourceMocked_DeleteFallbackWhenNoSnapshot(t *testing.T) {
 // from removing the resource from state while the device is left with the
 // Terraform-managed auth_order still applied.
 func TestAuthResourceMocked_DeleteSurfacesClearError(t *testing.T) {
-	// The client retries a failed request up to 3 times before surfacing the
-	// error. We fail exactly one ClearAuthOrder cycle (3 attempts) so the
+	// The client retries a failed request up to 6 times before surfacing the
+	// error. We fail exactly one ClearAuthOrder cycle (6 attempts) so the
 	// resource's Delete surfaces an error, then allow subsequent DELETEs to
 	// succeed so the test framework's own post-test cleanup can complete.
 	deleteAttempts := 0
-	failDeleteAttempts := 3
+	failDeleteAttempts := 6
 
 	testAccPreUnitCheck(t)
 

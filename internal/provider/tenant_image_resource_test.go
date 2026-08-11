@@ -2989,12 +2989,12 @@ func TestUnitTenantImageDeleteError(t *testing.T) {
 			"in-use": false, "type": "vm-image",
 			"status": "replicated", "date": "2023-3-27", "size": "2.27 GB"}]}`)
 	})
-	// Delete fails on the first 3 calls (exhausting doRequest's retry loop)
+	// Delete fails on the first 6 calls (exhausting doRequest's retry loop)
 	// then succeeds on subsequent calls so post-test cleanup completes.
 	var deleteCallCount int
 	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
 		deleteCallCount++
-		if deleteCallCount <= 3 {
+		if deleteCallCount <= 6 {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-message":"delete failed: image in use"}]}}`)
 		} else {

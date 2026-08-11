@@ -38,14 +38,14 @@ resource "f5os_ntp_server" "test" {
 
 ### Optional
 
-- `association_type` (String) NTP association type. Requires F5OS 2.0.0 or later. Typical values are `SERVER`, `PEER`, or `POOL`; the device enforces the allowed set.
+- `association_type` (String) NTP association type. Requires F5OS 2.0.0 or later. Typical values are `SERVER`, `PEER`, or `POOL`; the device enforces the allowed set. Optional+Computed: if omitted, the device populates a default and the value is mirrored into state so `terraform import` round-trips and out-of-band changes surface as drift.
 - `iburst` (Boolean) Enable iburst for faster synchronization.
 - `key_id` (Number) Key ID used for authentication with the NTP server. This should be configured with a key ID that has been already created on the system.
 - `ntp_authentication` (Boolean) Enable or disable NTP authentication.
 - `ntp_service` (Boolean) Enable or disable the NTP service.
-- `port` (Number) UDP port to reach the NTP server on. Requires F5OS 2.0.0 or later.
+- `port` (Number) UDP port to reach the NTP server on. Requires F5OS 2.0.0 or later. Optional+Computed: if omitted, the device populates a default and the value is mirrored into state.
 - `prefer` (Boolean) Set to true if this is the preferred server.
-- `version` (Number) NTP protocol version to use with this server. Requires F5OS 2.0.0 or later.
+- `version` (Number) NTP protocol version to use with this server. Requires F5OS 2.0.0 or later. Optional+Computed: if omitted, the device populates a default and the value is mirrored into state.
 
 ### Read-Only
 

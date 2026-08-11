@@ -71,7 +71,7 @@ type partitionMockState struct {
 
 	// "Count" variants — if > 0, the next N HTTP requests for this
 	// operation fail, then the counter decrements to 0 and the operation
-	// succeeds again. doRequest retries 3 times, so set to >= 3 to
+	// succeeds again. doRequest retries up to 6 times, so set to >= 6 to
 	// guarantee the caller sees an error. These are checked before the
 	// sticky variants.
 	errGetSlotsCount        int
@@ -544,11 +544,11 @@ func TestUnitPartitionGetPartitionErrorOnRead(t *testing.T) {
 				),
 			},
 			// Step 2: Read refresh fails because GetPartition returns an error.
-			// Uses errGetPartitionCount = 3 to cover all doRequest retries,
+			// Uses errGetPartitionCount = 6 to cover all doRequest retries,
 			// then the post-test auto-destroy succeeds.
 			{
 				PreConfig: func() {
-					st.errGetPartitionCount = 3
+					st.errGetPartitionCount = 6
 				},
 				Config:      testAccPartitionCreateConfig,
 				ExpectError: regexp.MustCompile(`Unable to Read/Get Partition`),
@@ -608,7 +608,7 @@ func TestUnitPartitionReadSlotError(t *testing.T) {
 			},
 			{
 				PreConfig: func() {
-					st.errGetSlotsCount = 3
+					st.errGetSlotsCount = 6
 				},
 				Config:      testAccPartitionCreateConfig,
 				ExpectError: regexp.MustCompile(`Unable to Read Partition slots`),
@@ -640,7 +640,7 @@ func TestUnitPartitionDeleteError(t *testing.T) {
 			},
 			{
 				PreConfig: func() {
-					st.errDeletePartitionCount = 3
+					st.errDeletePartitionCount = 6
 				},
 				Config:      testAccPartitionCreateConfig,
 				Destroy:     true,
@@ -673,7 +673,7 @@ func TestUnitPartitionDeleteSlotDisassociateError(t *testing.T) {
 			},
 			{
 				PreConfig: func() {
-					st.errSetSlotCount = 3
+					st.errSetSlotCount = 6
 				},
 				Config:      testAccPartitionCreateConfig,
 				Destroy:     true,
@@ -706,7 +706,7 @@ func TestUnitPartitionDeleteGetSlotsError(t *testing.T) {
 			},
 			{
 				PreConfig: func() {
-					st.errGetSlotsCount = 3
+					st.errGetSlotsCount = 6
 				},
 				Config:      testAccPartitionCreateConfig,
 				Destroy:     true,
@@ -801,7 +801,7 @@ func TestUnitPartitionUpdateGetSlotsError(t *testing.T) {
 			},
 			{
 				PreConfig: func() {
-					st.errGetSlotsCount = 3
+					st.errGetSlotsCount = 6
 				},
 				Config:      testAccPartitionUpdateConfig,
 				ExpectError: regexp.MustCompile(`Unable to Read Partition slots`),
@@ -833,7 +833,7 @@ func TestUnitPartitionUpdateSlotError(t *testing.T) {
 			},
 			{
 				PreConfig: func() {
-					st.errSetSlotCount = 3
+					st.errSetSlotCount = 6
 				},
 				Config:      testAccPartitionUpdateConfig,
 				ExpectError: regexp.MustCompile(`Unable to disassociate slots from Partition|Unable to update slots on Partition`),
@@ -939,8 +939,8 @@ func TestUnitPartitionUpdateGetPartitionError(t *testing.T) {
 			{
 				PreConfig: func() {
 					// GetPartition is called post-update to refresh state.
-					// Use count=3 so all retries fail, then reset.
-					st.errGetPartitionCount = 3
+					// Use count=6 so all retries fail, then reset.
+					st.errGetPartitionCount = 6
 				},
 				Config:      testAccPartitionUpdateConfig,
 				ExpectError: regexp.MustCompile(`Unable to Read/Get Partition`),
@@ -963,7 +963,7 @@ func TestUnitPartitionUpdatePostGetSlotsError(t *testing.T) {
 
 	// The update config changes slots ([1,2] → [1,2,3]), so Update's
 	// slot-update section calls GetPartitionSlots first. With
-	// errGetSlotsCount=3, all doRequest retries fail on that call,
+	// errGetSlotsCount=6, all doRequest retries fail on that call,
 	// producing the "Unable to Read Partition slots" error.
 	resource.Test(t, resource.TestCase{
 		IsUnitTest:               true,
@@ -979,9 +979,9 @@ func TestUnitPartitionUpdatePostGetSlotsError(t *testing.T) {
 				PreConfig: func() {
 					// This will fail the GetPartitionSlots call in Update's
 					// slot-update section first, but we need it to fail
-					// in the post-update section. Let's use errGetSlotsCount=3
+					// in the post-update section. Let's use errGetSlotsCount=6
 					// which fires on the update step.
-					st.errGetSlotsCount = 3
+					st.errGetSlotsCount = 6
 				},
 				Config:      testAccPartitionUpdateConfig,
 				ExpectError: regexp.MustCompile(`Unable to Read Partition slots`),

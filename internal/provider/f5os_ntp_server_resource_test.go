@@ -1314,10 +1314,10 @@ func TestUnitNTPDeleteError(t *testing.T) {
 			_, _ = w.Write([]byte(`{"openconfig-system:server":[{"address":"10.20.30.40","config":{"address":"10.20.30.40","f5-openconfig-system-ntp:key-id":123,"prefer":true,"iburst":true}}]}`))
 		case "DELETE":
 			count := atomic.AddInt32(&deleteAttempts, 1)
-			// doRequest retries 3 times. Fail the first 3 attempts
+			// doRequest retries up to 6 times. Fail the first 6 attempts
 			// (covering the error path), then let subsequent attempts
 			// succeed (post-test cleanup).
-			if count <= 3 {
+			if count <= 6 {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"delete NTP server failed"}]}}`))
 			} else {
@@ -1350,7 +1350,7 @@ func TestUnitNTPDeleteError(t *testing.T) {
 				),
 			},
 			// Step 2: Remove resource from config — triggers destroy via plan diff.
-			// The DELETE handler returns 500 for the first 3 attempts
+			// The DELETE handler returns 500 for the first 6 attempts
 			// (one full doRequest retry cycle), exercising the error path.
 			// Subsequent delete attempts succeed (for post-test cleanup).
 			{
@@ -1700,13 +1700,13 @@ func testAccCheckNTPServer200FieldsOnDevice(server, expectAssoc string, expectVe
 			}
 			return fmt.Errorf("expected port=%d on device, got %d", expectPort, got)
 		}
-		// State container must be populated on 2.0+ devices. The exact
-		// stratum value is dynamic (depends on the upstream reachability
-		// of the configured server), so only assert that the field is
-		// present. state_address must resolve to the configured address.
-		if ntp.StateStratum == nil {
-			return fmt.Errorf("device did not return state/stratum for NTP server %s; the 2.0 state container appears to be missing from the Read path", server)
-		}
+		// State container on 2.0+ devices: the leaves are populated
+		// lazily by the NTP daemon. For unreachable test peers (e.g.
+		// 10.255.255.x), state/stratum is not populated until the peer
+		// syncs, and state/address may be "NXDOMAIN". Only assert on
+		// leaves the device consistently populates for any configured
+		// server: authenticated (always known) and address (always set,
+		// even if it is NXDOMAIN for unresolvable hosts).
 		if ntp.StateAuthenticated == nil {
 			return fmt.Errorf("device did not return state/authenticated for NTP server %s", server)
 		}
@@ -1737,7 +1737,9 @@ func TestAccF5osNTPServer2_0Fields(t *testing.T) {
 					resource.TestCheckResourceAttr("f5os_ntp_server.test200", "version", "4"),
 					resource.TestCheckResourceAttr("f5os_ntp_server.test200", "port", "123"),
 					// Terraform state: computed 2.0 state leaves populated.
-					resource.TestCheckResourceAttrSet("f5os_ntp_server.test200", "stratum"),
+					// stratum is only set once the peer syncs; for
+					// non-routable test IPs the daemon leaves it null,
+					// so we only assert the leaves that are always set.
 					resource.TestCheckResourceAttrSet("f5os_ntp_server.test200", "authenticated"),
 					resource.TestCheckResourceAttrSet("f5os_ntp_server.test200", "state_address"),
 					// Direct device verification: config + state on device.
@@ -2072,6 +2074,13 @@ func TestUnitNTPRefreshComputedStateLeavesWarning(t *testing.T) {
 		Stratum:       types.Int64Value(999),
 		Authenticated: types.BoolValue(true),
 		StateAddress:  types.StringValue("stale.example.com"),
+		// Pre-populate the Optional+Computed config leaves as Unknown
+		// so we can assert the helper normalizes them to Null when the
+		// post-write GET fails (Computed attributes may not remain
+		// Unknown in final state).
+		AssociationType: types.StringUnknown(),
+		Version:         types.Int64Unknown(),
+		Port:            types.Int64Unknown(),
 	}
 
 	diags := r.refreshComputedStateLeaves(plan)
@@ -2095,5 +2104,16 @@ func TestUnitNTPRefreshComputedStateLeavesWarning(t *testing.T) {
 	}
 	if !plan.StateAddress.IsNull() {
 		t.Errorf("expected StateAddress to be null after warning fallback, got %s", plan.StateAddress.String())
+	}
+	// Optional+Computed config leaves: Unknown must be normalized to
+	// Null so Terraform accepts the state as consistent.
+	if !plan.AssociationType.IsNull() {
+		t.Errorf("expected AssociationType to be null after warning fallback, got %s", plan.AssociationType.String())
+	}
+	if !plan.Version.IsNull() {
+		t.Errorf("expected Version to be null after warning fallback, got %s", plan.Version.String())
+	}
+	if !plan.Port.IsNull() {
+		t.Errorf("expected Port to be null after warning fallback, got %s", plan.Port.String())
 	}
 }
