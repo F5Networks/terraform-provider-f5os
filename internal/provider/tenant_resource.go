@@ -198,6 +198,7 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 			"memory": schema.Int64Attribute{
 				MarkdownDescription: "The amount of memory that should be provided to the tenant in MB.\n More information on memory sizing for [Velos](https://clouddocs.f5.com/training/community/velos-training/html/velos_performance_and_sizing.html#memory-sizing)/[rSeries](https://clouddocs.f5.com/training/community/rseries-training/html/rseries_performance_and_sizing.html#memory-sizing)",
 				Optional:            true,
+				Computed:            true,
 			},
 			"status": schema.StringAttribute{
 				Computed:            true,
@@ -453,8 +454,16 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	} else {
 		data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].Config.Storage.Size))
 	}
-	memoryInt, _ := strconv.Atoi(respData.F5TenantsTenant[0].State.Memory)
-	if !data.Memory.IsNull() {
+	// memory is Optional+Computed. When the user configured a known value it was
+	// already sent to the device via calculateMemory, so we preserve the planned
+	// value to avoid a "provider produced inconsistent result after apply" error
+	// if the device normalizes it. When the plan value is null/unknown (import,
+	// or auto-calculated) we adopt the device-reported value so that import and
+	// subsequent reads populate memory instead of leaving it null.
+	if !data.Memory.IsNull() && !data.Memory.IsUnknown() {
+		// keep the user-configured value as-is
+	} else {
+		memoryInt, _ := strconv.Atoi(respData.F5TenantsTenant[0].State.Memory)
 		data.Memory = types.Int64Value(int64(memoryInt))
 	}
 	data.Cryptos = types.StringValue(respData.F5TenantsTenant[0].State.Cryptos)

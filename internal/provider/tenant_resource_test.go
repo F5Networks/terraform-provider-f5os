@@ -1028,11 +1028,16 @@ resource "f5os_tenant" "df_bigip_test" {
 // tenantTestImage returns the BIG-IP tenant image name to use in acceptance
 // tests. Set F5OS_TENANT_IMAGE to override the default. Unit tests use the
 // mock server and instead reference tenantUnitTestImage.
+//
+// The default returns the same image name that the acc:tenant_image CI job
+// imports (testAccImageName in tenant_image_resource_test.go), because the
+// tenant CI job runs after acc:tenant_image and relies on that image
+// already being present on the DUT. Keep this in sync with testAccImageName.
 func tenantTestImage() string {
 	if v := os.Getenv("F5OS_TENANT_IMAGE"); v != "" {
 		return v
 	}
-	return "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+	return testAccImageName
 }
 
 // tenantUnitTestImage is the placeholder tenant image name used by unit tests
