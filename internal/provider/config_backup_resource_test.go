@@ -368,9 +368,8 @@ func TestUnitCfgBackupCreateError(t *testing.T) {
 // TestUnitCfgBackupDeleteError verifies the Delete error path when
 // DeleteConfigBackup fails. Step 1 creates the resource successfully,
 // then step 2 destroys it but the delete endpoint returns an error.
-// The doRequest client retries 3 times on HTTP 500, so the first 3
-// calls must all fail for the error to propagate. Subsequent calls
-// succeed to allow framework cleanup.
+// The doRequest client retries up to 6 times on HTTP 500, so every
+// delete call in the retry window must fail for the error to propagate.
 func TestUnitCfgBackupDeleteError(t *testing.T) {
 	testAccPreUnitCheck(t)
 	setupCfgBackupMockProvider()
@@ -383,9 +382,10 @@ func TestUnitCfgBackupDeleteError(t *testing.T) {
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/delete", func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&deleteCallCount, 1)
-		// doRequest retries 3 times on 500; the first 3 calls must all fail
-		// so that the error propagates. After that, succeed for cleanup.
-		if n <= 3 {
+		// doRequest retries up to 6 times on 500; every call in the
+		// retry window must fail so that the error propagates. After
+		// that, succeed for framework cleanup.
+		if n <= 6 {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = fmt.Fprint(w, `{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"delete failed: resource locked"}]}}`)
 			return

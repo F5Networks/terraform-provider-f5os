@@ -457,8 +457,8 @@ func TestUnitDeleteCertKeyAPIError(t *testing.T) {
 		w.Header().Set("Content-Type", "application/yang-data+json")
 		if r.Method == "DELETE" {
 			deleteCallCount++
-			if deleteCallCount <= 3 {
-				// First 3 calls = one logical delete attempt (doRequest retries 3 times)
+			if deleteCallCount <= 6 {
+				// First 6 calls = one logical delete attempt (doRequest retries up to 6 times)
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = fmt.Fprint(w, `{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"delete failed"}]}}`)
 			} else {
@@ -1070,6 +1070,10 @@ func TestUnitTlsCertKeyReadGetErrorPreservesState(t *testing.T) {
 			case http.MethodGet:
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = fmt.Fprint(w, `{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"internal"}]}}`)
+			case http.MethodDelete:
+				// Framework post-test destroy: succeed so the test
+				// isn't wedged trying to clean up.
+				w.WriteHeader(http.StatusNoContent)
 			default:
 				w.WriteHeader(http.StatusMethodNotAllowed)
 			}
