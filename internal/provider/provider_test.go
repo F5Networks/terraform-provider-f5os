@@ -78,10 +78,37 @@ func testAccPreUnitCheck(t *testing.T) {
 	_ = os.Setenv("F5OS_POLL_INTERVAL", "1ms")
 }
 
+// unitTestLoginURI is the RESTCONF path NewSession uses to authenticate.
+// Kept in sync with the client's uriLogin constant.
+const unitTestLoginURI = "/restconf/data/openconfig-system:system/aaa"
+
 func setup() {
 	// test server
 	mux = http.NewServeMux()
-	server = httptest.NewServer(mux)
+	// Wrap the mux so the login endpoint always yields an X-Auth-Token.
+	// NewSession rejects a login response without a token, but many unit
+	// tests only register their resource-specific data endpoints (or a
+	// handler on the login path itself, for a different purpose such as a
+	// token-lifetime PATCH) and rely on a successful session handshake.
+	//
+	// For the login path we pre-set a default X-Auth-Token before invoking
+	// the mux. A registered handler can still overwrite the header, but if
+	// it does not (the common case), the token is present so the session is
+	// created. If no handler is registered for the login path at all, we
+	// answer it directly.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == unitTestLoginURI {
+			w.Header().Set("X-Auth-Token", "test-token")
+			if _, pattern := mux.Handler(r); pattern == "" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
+		}
+		mux.ServeHTTP(w, r)
+	})
+	server = httptest.NewServer(handler)
 }
 
 func teardown() {
@@ -114,9 +141,28 @@ func loadFixtureString(path string) string {
 	return string(loadFixtureBytes(path))
 }
 
-// newTestClientFromEnv creates a fresh f5osclient session from the standard
+// testClientCache caches f5osclient sessions keyed by the connection
+// parameters (host|user|port) so that repeated calls to newTestClientFromEnv
+// during a test run reuse a single authenticated session instead of logging in
+// again for every check function.
+//
+// Each acceptance test spins up many custom check functions, and each one used
+// to call f5ossdk.NewSession — a full login + setPlatformType handshake. On
+// devices with a strict AAA login policy (e.g. F5OS 2.0.0) that burst of logins
+// trips the auth rate-limiter and check functions start getting 401
+// access-denied. Reusing one session per connection eliminates the churn.
+var (
+	testClientCacheMu sync.Mutex
+	testClientCache   = map[string]*f5ossdk.F5os{}
+)
+
+// newTestClientFromEnv returns an f5osclient session built from the standard
 // F5OS_HOST / F5OS_USERNAME (or F5OS_USER) / F5OS_PASSWORD / F5OS_PORT
 // environment variables. Port defaults to 8888 to match the provider.
+//
+// The session is cached and reused across calls with the same connection
+// parameters to avoid re-authenticating on every acceptance-test check
+// function, which can trip the device's auth rate-limiter.
 //
 // Use this in acceptance-test check functions that need an independent client
 // to verify device state outside of the Terraform resource lifecycle.
@@ -133,6 +179,16 @@ func newTestClientFromEnv() (*f5ossdk.F5os, error) {
 			port = v
 		}
 	}
+
+	key := fmt.Sprintf("%s|%s|%d", host, user, port)
+
+	testClientCacheMu.Lock()
+	defer testClientCacheMu.Unlock()
+
+	if client, ok := testClientCache[key]; ok && client != nil {
+		return client, nil
+	}
+
 	cfg := &f5ossdk.F5osConfig{
 		Host:             host,
 		User:             user,
@@ -140,7 +196,12 @@ func newTestClientFromEnv() (*f5ossdk.F5os, error) {
 		Port:             port,
 		DisableSSLVerify: true,
 	}
-	return f5ossdk.NewSession(cfg)
+	client, err := f5ossdk.NewSession(cfg)
+	if err != nil {
+		return nil, err
+	}
+	testClientCache[key] = client
+	return client, nil
 }
 
 // testAccPreCheckPlatformRSeries creates a throwaway f5osclient session to

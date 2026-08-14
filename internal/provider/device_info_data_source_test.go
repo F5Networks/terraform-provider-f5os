@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -306,7 +307,7 @@ func TestUnitConvertInterfacesInfo(t *testing.T) {
 							PortSpeed     string `json:"port-speed,omitempty"`
 						} `json:"config,omitempty"`
 						State struct {
-							Phyport *string `json:"f5-if-ethernet:phyport,omitempty"`
+							Phyport *json.Number `json:"f5-if-ethernet:phyport,omitempty"`
 						} `json:"state,omitempty"`
 					}{
 						Config: struct {

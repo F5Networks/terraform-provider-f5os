@@ -64,7 +64,7 @@ cve-scan:
     # `go 1.25` sources. `go install @latest` otherwise builds it with the
     # toolchain pinned by x/vuln's go.mod, whose type-checker rejects newer
     # language versions with "package requires newer Go version".
-    - export GOTOOLCHAIN=go1.25.12
+    - export GOTOOLCHAIN=go1.25.13
     - go install golang.org/x/vuln/cmd/govulncheck@latest
     - export GOFLAGS=-mod=vendor
     - govulncheck -show verbose ./...
@@ -191,6 +191,24 @@ unit-tests:
     # ACC_RUN is the -run regex selecting this group's TestAcc* functions.
     # Per-job timeout in minutes (Go test -timeout). Override per job as needed.
     ACC_TIMEOUT: "60m"
+    # Per-DUT tenant image selection. Different F5OS versions accept different
+    # BIG-IP tenant image builds: F5OS 1.8.x accepts BIGIP-17.1.0.1, but F5OS
+    # 2.0.0 rejects that build with "file-type-check-failed" and requires a
+    # 17.5.x image. The acc:tenant_image and acc:tenant groups read these from
+    # the environment (see tenant_image_resource_test.go: F5OS_TENANT_IMAGE /
+    # F5OS_IMAGE_REMOTE_HOST / F5OS_IMAGE_REMOTE_PATH). When empty the test
+    # code falls back to its historical 17.1.0.1 defaults, so 1.8.x DUTs need
+    # no configuration. For a 2.0.0 DUT, set these three variables on the
+    # pipeline schedule (Settings > CI/CD > Pipeline schedules) to a compatible
+    # 17.5.x image, e.g.:
+    #   F5OS_TENANT_IMAGE=BIGIP-tmos-um-17.5.0-0.0.158.ALL-F5OS.qcow2.zip.bundle
+    #   F5OS_IMAGE_REMOTE_PATH=v17.5.0/dist/release/VM
+    # Declared here (defaulting to the schedule/pipeline value, or empty) so the
+    # requirement is discoverable and so schedule-level overrides propagate to
+    # the job environment.
+    F5OS_TENANT_IMAGE: "${F5OS_TENANT_IMAGE}"
+    F5OS_IMAGE_REMOTE_HOST: "${F5OS_IMAGE_REMOTE_HOST}"
+    F5OS_IMAGE_REMOTE_PATH: "${F5OS_IMAGE_REMOTE_PATH}"
   script:
     - |
       if [ -z "${ACC_RUN}" ]; then
@@ -198,6 +216,10 @@ unit-tests:
         exit 1
       fi
     - echo "Running acceptance group -run='${ACC_RUN}' (timeout ${ACC_TIMEOUT})"
+    - |
+      if [ -n "${F5OS_TENANT_IMAGE}" ] || [ -n "${F5OS_IMAGE_REMOTE_PATH}" ] || [ -n "${F5OS_IMAGE_REMOTE_HOST}" ]; then
+        echo "Tenant image override: F5OS_TENANT_IMAGE='${F5OS_TENANT_IMAGE}' F5OS_IMAGE_REMOTE_HOST='${F5OS_IMAGE_REMOTE_HOST}' F5OS_IMAGE_REMOTE_PATH='${F5OS_IMAGE_REMOTE_PATH}'"
+      fi
     - |
       go test -v -parallel=1 -cover -timeout "${ACC_TIMEOUT}" \
         -coverprofile "cover_${CI_JOB_NAME_SLUG}.out" \
@@ -219,6 +241,20 @@ unit-tests:
     expire_in: 30 days
   allow_failure: true
   timeout: 75m  # 15m buffer over default ACC_TIMEOUT (60m); override in jobs with longer ACC_TIMEOUT
+  # Acceptance jobs run against a shared, real F5OS device. The DUT can
+  # briefly refuse connections (restconf restart, transient network hiccup,
+  # rate-limiting after rapid session churn), which surfaces as
+  # "connect: connection refused" or empty-error responses that the test
+  # harness cannot defend against. Retry up to twice on script/runner
+  # failure so a transient DUT hiccup does not fail the pipeline. Genuine
+  # code failures reproduce on the retries.
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
 
 # The jobs below are ordered least-disruptive first, most-disruptive last.
 # Each `needs` the previous job so they run one after another. The shared

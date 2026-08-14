@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -218,6 +217,14 @@ func TestAuthResourceUnit_DeleteWithNilRequest(t *testing.T) {
 func setupMockServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/restconf/data/openconfig-system:system/aaa":
+			// Login endpoint (uriLogin). NewSession requires an
+			// X-Auth-Token on the response to consider the login
+			// successful; without it the session is rejected.
+			w.Header().Set("X-Auth-Token", "test-token")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{}`)
 		case "/restconf/data/openconfig-system:system/aaa/authentication/config":
 			switch r.Method {
 			case "GET":
@@ -315,7 +322,11 @@ func TestAuthResourceMocked_ClientMethods(t *testing.T) {
 }
 
 func TestAuthResourceMocked_ErrorHandling(t *testing.T) {
-	// Test with server that returns errors
+	// Server that returns errors (and no X-Auth-Token) for every request,
+	// including the login. NewSession must reject a login response that
+	// carries no auth token, so session creation itself fails here.
+	// Keep the retry backoff short so the 6-attempt loop doesn't take 60s.
+	t.Setenv("F5OS_POLL_INTERVAL", "1ms")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = fmt.Fprint(w, "Internal Server Error")
@@ -329,14 +340,11 @@ func TestAuthResourceMocked_ErrorHandling(t *testing.T) {
 		DisableSSLVerify: true,
 	}
 
+	// A login that returns no auth token must fail session creation and
+	// return a nil client rather than a session with an empty token.
 	client, err := f5os.NewSession(config)
-	assert.NoError(t, err, "Client initialization should not fail")
-	// Use a short poll/retry interval so the 6-retry loop doesn't take 60s.
-	client.PollInterval = time.Millisecond
-
-	// Test that errors are properly handled
-	_, err = client.GetAuthOrder()
-	assert.Error(t, err, "Expected error for server error")
+	assert.Error(t, err, "NewSession should fail when login returns no auth token")
+	assert.Nil(t, client, "Client should be nil when session creation fails")
 }
 
 func TestAuthResourceMocked_ComplexConfig(t *testing.T) {
@@ -1471,6 +1479,10 @@ func TestAuthResourceIntegration_HTTPMethods(t *testing.T) {
 
 		switch req.Method {
 		case "GET":
+			// The login (uriLogin) is a GET; NewSession requires an
+			// X-Auth-Token on the response to accept the session. The
+			// same header is harmless on the GetAuthOrder data GET.
+			w.Header().Set("X-Auth-Token", "test-token")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprint(w, `{"openconfig-system:config": {"authentication-method": ["openconfig-aaa-types:LOCAL"]}}`)
@@ -1690,7 +1702,11 @@ func TestAccAuthResource(t *testing.T) {
 				// remote_roles: import reads all device roles, not just
 				// user-declared ones, so imported state won't match config.
 				// password_policy: not implemented.
-				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy"},
+				// ldap / login_policy: these 2.0.0-only containers always
+				// exist on the device and import reads them back, but this
+				// test's config doesn't declare them, so they appear only in
+				// the imported state.
+				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy", "ldap", "login_policy"},
 			},
 			// Step 3: Update — change auth_order to local + tacacs
 			{
@@ -1898,6 +1914,8 @@ func TestAccAuthResourceWithRoles(t *testing.T) {
 				ImportStateVerifyIgnore: []string{
 					"remote_roles",    // import reads all device roles, not just user-declared
 					"password_policy", // not implemented
+					"ldap",            // 2.0.0-only container present on device, not declared here
+					"login_policy",    // 2.0.0-only container present on device, not declared here
 				},
 			},
 			// Step 3: Update — change auth_order and operator GID
@@ -2171,6 +2189,13 @@ func setupMockServerWithPasswordPolicy() *httptest.Server {
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/openconfig-system:system/aaa"):
+			// Login endpoint (uriLogin). NewSession requires an
+			// X-Auth-Token on the response to accept the session.
+			w.Header().Set("X-Auth-Token", "test-token")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{}`)
 		case strings.HasSuffix(r.URL.Path, "/aaa/f5-openconfig-aaa-password-policy:password-policy/config"):
 			switch r.Method {
 			case "GET":
@@ -2574,6 +2599,8 @@ func TestAccAuthResourcePasswordPolicy(t *testing.T) {
 				ImportStateVerifyIgnore: []string{
 					"remote_roles",    // import reads all device roles, not just user-declared
 					"password_policy", // import reads all device fields, not just user-declared
+					"ldap",            // 2.0.0-only container present on device, not declared here
+					"login_policy",    // 2.0.0-only container present on device, not declared here
 				},
 			},
 			// Step 3: Update password_policy
@@ -4229,10 +4256,12 @@ func TestAccAuthResourceLoginPolicy(t *testing.T) {
 			},
 			// Step 3: Import
 			{
-				ResourceName:            "f5os_auth.test",
-				ImportState:             true,
-				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy"},
+				ResourceName:      "f5os_auth.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				// ldap: 2.0.0-only container present on device, read back on
+				// import but not declared by this login_policy-focused config.
+				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy", "ldap"},
 			},
 		},
 	})
@@ -4295,22 +4324,35 @@ func setupLdapMock(t *testing.T, currentLdap map[string]interface{}) {
 				"f5-openconfig-aaa-ldap:ldap": currentLdap,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
-		case "PATCH":
-			var payload map[string]map[string]interface{}
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			if ldap, ok := payload["f5-openconfig-aaa-ldap:ldap"]; ok {
-				for k, v := range ldap {
-					currentLdap[k] = v
-				}
-			}
-			w.WriteHeader(http.StatusNoContent)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
+	// The client writes each object-class leaf-list to its own resource path
+	// with PUT (replace semantics), or DELETE to clear it. Mirror that here so
+	// the mock state reflects the same replace behavior the device exhibits.
+	for _, leaf := range []string{"user-object-class", "group-object-class"} {
+		leaf := leaf
+		mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap/"+leaf, func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case "PUT":
+				var payload map[string]interface{}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if v, ok := payload["f5-openconfig-aaa-ldap:"+leaf]; ok {
+					currentLdap[leaf] = v
+				}
+				w.WriteHeader(http.StatusNoContent)
+			case "DELETE":
+				delete(currentLdap, leaf)
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+		})
+	}
 }
 
 // TestUnitAuthResourceLdap2_0_0 exercises the ldap nested block on an F5OS
@@ -4393,21 +4435,29 @@ func setupLdapDriftMock(t *testing.T, drift *map[string]interface{}) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case "GET":
+		if r.Method == "GET" {
 			w.Header().Set("Content-Type", "application/yang-data+json")
 			w.WriteHeader(http.StatusOK)
 			resp := map[string]interface{}{
 				"f5-openconfig-aaa-ldap:ldap": *drift,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
-		case "PATCH":
-			// Accept but do not persist: the caller drives GET state via *drift.
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
 		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	})
+	// Accept the client's per-leaf PUT/DELETE writes but do not persist: the
+	// caller drives GET state via *drift to simulate out-of-band eviction.
+	for _, leaf := range []string{"user-object-class", "group-object-class"} {
+		mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap/"+leaf, func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case "PUT", "DELETE":
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+		})
+	}
 }
 
 // TestUnitAuthResourceLdapDriftSurfaced verifies the non-import drift branch of

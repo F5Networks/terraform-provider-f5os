@@ -299,7 +299,7 @@ func (r *InterfaceResource) interfaceResourceModelToState(ctx context.Context, r
 	// Phyport is read-only and only populated on 2.0.0+ ethernet
 	// interfaces. Null everywhere else.
 	if respData.OpenconfigInterfacesInterface[0].OpenconfigIfEthernetEthernet.State.Phyport != nil {
-		data.Phyport = types.StringValue(*respData.OpenconfigInterfacesInterface[0].OpenconfigIfEthernetEthernet.State.Phyport)
+		data.Phyport = types.StringValue(respData.OpenconfigInterfacesInterface[0].OpenconfigIfEthernetEthernet.State.Phyport.String())
 	} else {
 		data.Phyport = types.StringNull()
 	}

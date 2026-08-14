@@ -64,7 +64,7 @@ jobs:
       # language versions with "package requires newer Go version".
       - run: go install golang.org/x/vuln/cmd/govulncheck@latest
         env:
-          GOTOOLCHAIN: go1.25.12
+          GOTOOLCHAIN: go1.25.13
       - run: govulncheck -show verbose ./...
 
   # Run unit tests in a matrix with Terraform CLI versions

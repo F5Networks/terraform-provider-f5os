@@ -352,8 +352,41 @@ func NewSession(f5osObj *F5osConfig) (*F5os, error) {
 				time.Sleep(sessionDelay)
 				continue
 			}
-			succeeded = true
-			break
+			// Success requires BOTH a 2xx status and a non-empty auth
+			// token. A response that lacks the token would otherwise
+			// yield a session with an empty Token, masking the failure
+			// until a later call fails with a cryptic auth error.
+			tokenVal := strings.TrimSpace(res.Header.Get("X-Auth-Token"))
+			statusOk := res.StatusCode >= 200 && res.StatusCode <= 299
+			if statusOk && tokenVal != "" {
+				succeeded = true
+				break
+			}
+
+			// 2xx but no token: malformed login response — retry.
+			if statusOk {
+				lastTransportErr = fmt.Errorf("HTTP %d from NewSession (missing auth token)", res.StatusCode)
+				f5osLogger.Info("[NewSession]", "missing auth token on success status, retrying", hclog.Fmt("attempt=%d status=%d", attempt+1, res.StatusCode))
+				time.Sleep(sessionDelay)
+				continue
+			}
+
+			// Server-side failures (5xx) are often transient (listener
+			// bounce during cipher reconfig, rate-limit) — retry.
+			if res.StatusCode >= 500 {
+				lastTransportErr = fmt.Errorf("HTTP %d from NewSession", res.StatusCode)
+				f5osLogger.Info("[NewSession]", "server error, retrying", hclog.Fmt("attempt=%d status=%d", attempt+1, res.StatusCode))
+				time.Sleep(sessionDelay)
+				continue
+			}
+
+			// Non-retriable client/auth failures (e.g. 403/404; 401 is
+			// handled above): fail fast rather than burning retries.
+			bodyStr := strings.TrimSpace(string(respData))
+			if bodyStr == "" {
+				bodyStr = http.StatusText(res.StatusCode)
+			}
+			return nil, fmt.Errorf("NewSession failed: HTTP %d: %s", res.StatusCode, bodyStr)
 		}
 		if !succeeded {
 			// Precedence: 401 wins over transient transport error,
@@ -556,69 +589,101 @@ func (p *F5os) doTenantRequest(op, path string, body []byte) ([]byte, error) {
 	if len(body) > 0 {
 		f5osLogger.Debug("[doTenantRequest]", "Request body", hclog.Fmt("%+v", string(body)))
 	}
-	req, err := http.NewRequest(op, path, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("X-Auth-Token", p.Token)
-	req.Header.Set("Content-Type", contentTypeHeader)
-	for k, v := range p.CustomHeaders {
-		req.Header.Set(k, v)
-	}
-	client := &http.Client{
-		Transport: p.Transport,
-		Timeout:   p.ConfigOptions.APICallTimeout,
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	f5osLogger.Info("[doTenantRequest]", "Resp CODE", hclog.Fmt("%+v", resp.StatusCode))
-	if resp.StatusCode == 200 || resp.StatusCode == 201 {
-		return io.ReadAll(resp.Body)
-	}
-	if resp.StatusCode >= 400 {
-		respData, _ := io.ReadAll(resp.Body)
-		mapData := make(map[string]interface{})
-		json.Unmarshal(respData, &mapData)
-		errMsg := ""
-		if val, ok := mapData["ietf-restconf:errors"]; ok {
-			if val.(map[string]interface{})["error"].([]interface{})[0].(map[string]interface{})["error-message"] != nil {
-				errMsg = val.(map[string]interface{})["error"].([]interface{})[0].(map[string]interface{})["error-message"].(string)
+
+	// Retry with session refresh on 401. A long-running tenant operation
+	// (e.g. a multi-minute image import) can outlive the RESTCONF token, so
+	// a follow-up call such as GetImage may return 401 even though the
+	// session was valid when it started. Without this, callers would fail
+	// with a spurious auth error (and, in the tenant-image resource, be
+	// re-driven into a duplicate import). This mirrors doRequest's 401
+	// handling: on 401 we re-authenticate, update the shared token, and
+	// retry the same request. The final attempt falls through to the
+	// existing {status,message,details} error shape that callers parse.
+	retries := 6
+	delay := p.pollInterval(10 * time.Second)
+	var lastErr error
+	for i := 0; i < retries; i++ {
+		req, err := http.NewRequest(op, path, bytes.NewBuffer(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("X-Auth-Token", p.getToken())
+		req.Header.Set("Content-Type", contentTypeHeader)
+		for k, v := range p.CustomHeaders {
+			req.Header.Set(k, v)
+		}
+		client := &http.Client{
+			Transport: p.Transport,
+			Timeout:   p.ConfigOptions.APICallTimeout,
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		f5osLogger.Info("[doTenantRequest]", "Resp CODE", hclog.Fmt("%+v", resp.StatusCode))
+
+		if resp.StatusCode == 200 || resp.StatusCode == 201 {
+			data, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return data, readErr
+		}
+
+		if resp.StatusCode == 401 && i != retries-1 {
+			// Drain and close the 401 body so the connection can be reused.
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			var f5osObj = F5osConfig{Host: p.Host, User: p.User, Password: p.Password, Transport: p.Transport, UserAgent: p.UserAgent, Teem: p.Teem, ConfigOptions: p.ConfigOptions, DisableSSLVerify: p.DisableSSLVerify, Port: p.Port, CustomHeaders: p.CustomHeaders}
+			f5os, refreshErr := NewSession(&f5osObj)
+			if refreshErr != nil {
+				// Transient during listener bounce or auth rate-limit —
+				// keep retrying.
+				f5osLogger.Debug("[doTenantRequest]", "401 refresh failed, retrying", hclog.Fmt("attempt=%d err=%s", i+1, refreshErr))
+				lastErr = refreshErr
+				time.Sleep(delay)
+				continue
 			}
+			// Update the token on the parent so subsequent calls through
+			// this same *F5os don't keep hitting 401.
+			p.setToken(f5os.Token)
+			lastErr = fmt.Errorf("HTTP 401 from %s %s (refreshed session, retrying)", op, path)
+			time.Sleep(delay)
+			continue
 		}
-		f5osLogger.Info("[doTenantRequest]", "Resp Msg", hclog.Fmt("%+v", errMsg))
-		json.Unmarshal(respData, &mapData)
-		errorNew := struct {
-			Status  string          `json:"status"`
-			Message string          `json:"message"`
-			Details json.RawMessage `json:"details"`
-		}{
-			Status:  resp.Status,
-			Message: errMsg,
-			Details: json.RawMessage(string(respData)),
+
+		if resp.StatusCode >= 400 {
+			respData, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			mapData := make(map[string]interface{})
+			json.Unmarshal(respData, &mapData)
+			errMsg := ""
+			if val, ok := mapData["ietf-restconf:errors"]; ok {
+				if val.(map[string]interface{})["error"].([]interface{})[0].(map[string]interface{})["error-message"] != nil {
+					errMsg = val.(map[string]interface{})["error"].([]interface{})[0].(map[string]interface{})["error-message"].(string)
+				}
+			}
+			f5osLogger.Info("[doTenantRequest]", "Resp Msg", hclog.Fmt("%+v", errMsg))
+			errorNew := struct {
+				Status  string          `json:"status"`
+				Message string          `json:"message"`
+				Details json.RawMessage `json:"details"`
+			}{
+				Status:  resp.Status,
+				Message: errMsg,
+				Details: json.RawMessage(string(respData)),
+			}
+			jsonData, _ := json.Marshal(errorNew)
+			return nil, fmt.Errorf("%+v", string(jsonData))
 		}
-		jsonData, _ := json.Marshal(errorNew)
-		return nil, fmt.Errorf("%+v", string(jsonData))
 
-		// byteData, _ := io.ReadAll(resp.Body)
-		// var errorNew F5osError
-		// json.Unmarshal(byteData, &errorNew)
-		// return nil, errorNew.Error()
-
-		// byteData, _ := io.ReadAll(resp.Body)
-		// errorNew := struct {
-		// 	Message string          `json:"message"`
-		// 	Details json.RawMessage `json:"details"`
-		// }{
-		// 	Message: resp.Status,
-		// 	Details: json.RawMessage(string(byteData)),
-		// }
-		// jsonData, _ := json.Marshal(errorNew)
-		// return nil, fmt.Errorf("%+v", string(jsonData))
+		// Unexpected 2xx/3xx that is not 200/201: preserve the previous
+		// behavior of returning (nil, nil).
+		resp.Body.Close()
+		return nil, nil
 	}
-	return nil, nil
+	if lastErr != nil {
+		return nil, fmt.Errorf("%s %s failed after %d retries: %w", op, path, retries, lastErr)
+	}
+	return nil, fmt.Errorf("%s %s failed after %d retries with no response", op, path, retries)
 }
 
 func (p *F5os) SendTeem(teemDataInput any) error {
@@ -1133,7 +1198,7 @@ func (p *F5os) UploadImagePostRequest(path string, formData io.Reader, headers m
 
 	req.Header.Set("File-Upload-Id", headers["File-Upload-Id"])
 	req.Header.Set("Content-Type", headers["Content-Type"])
-	req.Header.Set("X-Auth-Token", p.Token)
+	req.Header.Set("X-Auth-Token", p.getToken())
 
 	client := &http.Client{
 		Transport: p.Transport,
@@ -1382,7 +1447,7 @@ func (p *F5os) setPlatformType() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Auth-Token", p.Token)
+	req.Header.Set("X-Auth-Token", p.getToken())
 	req.Header.Set("Content-Type", contentTypeHeader)
 	client := &http.Client{
 		Transport: p.Transport,
@@ -1491,7 +1556,7 @@ func (p *F5os) setPlatformVersion(uriPlatformVersion string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Auth-Token", p.Token)
+	req.Header.Set("X-Auth-Token", p.getToken())
 	req.Header.Set("Content-Type", contentTypeHeader)
 	client := &http.Client{
 		Transport: p.Transport,
@@ -1537,7 +1602,7 @@ func (p *F5os) setChassisVersion(uriChassisVersion string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Auth-Token", p.Token)
+	req.Header.Set("X-Auth-Token", p.getToken())
 	req.Header.Set("Content-Type", contentTypeHeader)
 	client := &http.Client{
 		Transport: p.Transport,
