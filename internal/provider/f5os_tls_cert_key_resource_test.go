@@ -736,7 +736,12 @@ func TestUnitTlsCertKeyImportOn200(t *testing.T) {
 							return fmt.Errorf("no PATCH payload captured on aaa-tls tls container")
 						}
 						body := string(patched)
-						for _, want := range []string{`"certificate"`, `"key"`, "FAKE"} {
+						// The module-prefixed container wrapper is required:
+						// F5OS 2.0.0 rejects a bare {"config": {...}} body with
+						// "missing-element: tls". Assert it explicitly so a
+						// regression in the wrapper key is caught at the unit
+						// level rather than only against a real 2.0.0 device.
+						for _, want := range []string{`"f5-openconfig-aaa-tls:tls"`, `"certificate"`, `"key"`, "FAKE"} {
 							if !strings.Contains(body, want) {
 								return fmt.Errorf("PATCH payload missing %q: %s", want, body)
 							}
@@ -928,6 +933,7 @@ func TestUnitTlsCertKeyReadHandlesNamespacedJSON(t *testing.T) {
 		},
 	})
 }
+
 // `certificate` (no `key`) still triggers the import path and the PATCH
 // payload omits the `key` leaf entirely (omitempty). Some operators
 // rotate only the certificate and leave the existing key in place.
@@ -956,6 +962,9 @@ func TestUnitTlsCertKeyImportCertificateOnly(t *testing.T) {
 							return fmt.Errorf("no PATCH payload captured")
 						}
 						body := string(patched)
+						if !strings.Contains(body, `"f5-openconfig-aaa-tls:tls"`) {
+							return fmt.Errorf("PATCH payload missing module-prefixed container wrapper: %s", body)
+						}
 						if !strings.Contains(body, `"certificate"`) {
 							return fmt.Errorf("PATCH payload missing certificate: %s", body)
 						}
@@ -997,6 +1006,9 @@ func TestUnitTlsCertKeyImportKeyOnly(t *testing.T) {
 							return fmt.Errorf("no PATCH payload captured")
 						}
 						body := string(patched)
+						if !strings.Contains(body, `"f5-openconfig-aaa-tls:tls"`) {
+							return fmt.Errorf("PATCH payload missing module-prefixed container wrapper: %s", body)
+						}
 						if !strings.Contains(body, `"key"`) {
 							return fmt.Errorf("PATCH payload missing key: %s", body)
 						}

@@ -683,6 +683,48 @@ func testAccCheckTenantMaxNodesOnDevice(tenantName string, expected int) resourc
 	}
 }
 
+// testAccCheckTenantMacBlockHandledOnDevice fetches the raw tenant state from
+// the device and verifies the provider's mac-block contract holds on a real
+// 2.0.0 device: mac-pool-size (which the provider reads to derive
+// mac_block_size) is present, and the tenant Create/Read succeeded regardless
+// of whether the legacy state.mac-data.f5-tenant-l2-inline:mac-block leaf-list
+// is present.
+//
+// NOTE: the codebase previously assumed F5OS 2.0.0 removed the mac-block
+// leaf-list entirely (see fixture tenant_get_status_2_0_0_shape.json and unit
+// test TestUnitTenantMacBlockAbsent2_0_0). On the real 2.0.0-22925 device this
+// leaf-list is in fact STILL PRESENT. That is fine functionally — the provider
+// never consumes it (only mac-pool-size is read) — so this check verifies the
+// provider tolerates whichever shape the device returns rather than asserting
+// absence. The presence is logged so the discrepancy is visible in test output.
+// The check reads the raw JSON (not the decoded struct) so the observed shape
+// is not masked by the struct's omitempty tags.
+func testAccCheckTenantMacBlockHandledOnDevice(tenantName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTestClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+		raw, err := client.GetTenantRequest(fmt.Sprintf("/f5-tenants:tenants/tenant=%s/state", tenantName))
+		if err != nil {
+			return fmt.Errorf("failed to read raw tenant state: %w", err)
+		}
+		body := string(raw)
+		// mac-pool-size is the leaf the provider actually reads; it must be
+		// present on 2.0.0.
+		if !strings.Contains(body, "mac-pool-size") {
+			return fmt.Errorf("expected mac-pool-size to be present in tenant %q state on 2.0.0, but it is absent: %s", tenantName, body)
+		}
+		if strings.Contains(body, "f5-tenant-l2-inline:mac-block\"") {
+			// Present on this build — provider ignores it, so this is not an
+			// error, but surface it so the fixture/unit-test assumption
+			// (mac-block removed on 2.0.0) can be reconciled with reality.
+			fmt.Printf("[acc] NOTE: tenant %q state on this 2.0.0 build still includes the f5-tenant-l2-inline:mac-block leaf-list; provider ignores it (reads mac-pool-size only)\n", tenantName)
+		}
+		return nil
+	}
+}
+
 // testAccPreCheckTenant2_0_0 runs the standard acceptance pre-check and then
 // skips the test unless the device is running F5OS 2.0.0 or later, since
 // max_nodes and the associated read-only state fields only exist on 2.0.0+.
@@ -704,6 +746,12 @@ func testAccPreCheckTenant2_0_0(t *testing.T) {
 }
 
 func testAccTenantMaxNodesConfigFunc() string {
+	return testAccTenantMaxNodesConfigForNodes(8)
+}
+
+// testAccTenantMaxNodesConfigForNodes returns the max_nodes tenant config with
+// a parameterized max_nodes value so the Update path can be exercised.
+func testAccTenantMaxNodesConfigForNodes(maxNodes int) string {
 	return fmt.Sprintf(`
 resource "f5os_tenant" "max_nodes_test" {
   name              = "test-max-nodes"
@@ -714,10 +762,10 @@ resource "f5os_tenant" "max_nodes_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
-  max_nodes         = 8
+  virtual_disk_size = %d
+  max_nodes         = %d
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize(), maxNodes)
 }
 
 // TestAccTenantMaxNodes2_0_0 verifies, against a real F5OS 2.0.0+ device, that
@@ -744,8 +792,19 @@ func TestAccTenantMaxNodes2_0_0(t *testing.T) {
 					resource.TestCheckResourceAttrSet("f5os_tenant.max_nodes_test", "clustering_as_service"),
 					// Direct device API verification.
 					testAccCheckTenantMaxNodesOnDevice("test-max-nodes", 8),
+					// Verify the provider's mac-block contract on a real 2.0.0
+					// device (mac-pool-size present and consumed; mac-block
+					// leaf-list tolerated whether present or absent).
+					testAccCheckTenantMacBlockHandledOnDevice("test-max-nodes"),
 				),
 			},
+			// NOTE: an in-place max_nodes update step is intentionally omitted.
+			// On the 2.0.0-22925 device the platform rejects changing max-nodes
+			// on an existing tenant ("<n> is out of range" for values other than
+			// the create-time value), so the write-path Update for max-nodes is
+			// exercised by the unit tests (mock) instead. Create + device verify
+			// + import below cover the read/create paths on a real device.
+			//
 			// Step 2: Import — max_nodes can only be populated if
 			// tenantResourceModeltoState reads State.MaxNodes from the device.
 			{
@@ -772,9 +831,9 @@ resource "f5os_tenant" "type_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }
 
 func TestAccTenantDeployResourceTypeField(t *testing.T) {
@@ -1020,9 +1079,9 @@ resource "f5os_tenant" "df_bigip_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }
 
 // ---------------------------------------------------------------------------
@@ -1042,6 +1101,22 @@ func tenantTestImage() string {
 		return v
 	}
 	return testAccImageName
+}
+
+// tenantTestDiskSize returns the virtual_disk_size (GB) to use in tenant
+// acceptance configs. Different BIG-IP images enforce different minimum disk
+// sizes: the default 17.1.0.1 image accepts 83, but newer builds (e.g. a
+// 21.1.0 image on a 2.0.0 DUT) reject it with "Storage size(83) must be
+// greater than or equal to 86". Override with F5OS_TENANT_DISK_SIZE on the
+// pipeline schedule to match the image selected via F5OS_TENANT_IMAGE. The
+// default 83 preserves existing behavior on the 17.1.0.1 image.
+func tenantTestDiskSize() int {
+	if v := os.Getenv("F5OS_TENANT_DISK_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 83
 }
 
 // testAccPreCheckTenant is the PreCheck for tenant acceptance tests. In
@@ -1090,9 +1165,9 @@ resource "f5os_tenant" "test2" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }
 
 func testAccTenantWithVlansConfigFunc(vlans []int) string {
@@ -1113,10 +1188,10 @@ resource "f5os_tenant" "vlans_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
   vlans             = [%s]
 }
-`, tenantTestImage(), vlanStr)
+`, tenantTestImage(), tenantTestDiskSize(), vlanStr)
 }
 
 func testAccTenantWithoutVlansConfigFunc() string {
@@ -1130,9 +1205,9 @@ resource "f5os_tenant" "vlans_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }
 
 func testAccTenantDeployTC4ResourceConfigFunc() string {
@@ -1146,9 +1221,9 @@ resource "f5os_tenant" "test2" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }
 
 // --- Unit test configs (keep hardcoded image for mock server) ---
@@ -3011,10 +3086,10 @@ resource "f5os_tenant" "mac_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
   mac_block_size    = "small"
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }
 
 // TestAccTenantExplicitMemory verifies the memory attribute is correctly set
@@ -3060,8 +3135,8 @@ resource "f5os_tenant" "mem_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
   memory            = 8192
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }

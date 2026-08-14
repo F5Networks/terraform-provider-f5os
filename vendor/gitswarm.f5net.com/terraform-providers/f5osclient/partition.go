@@ -428,11 +428,21 @@ func coalesce(a, b string) string {
 // certificate + key onto the aaa-tls tls/config container. Both
 // leaves are optional — the caller decides which to set — but at
 // least one must be non-empty for the request to be meaningful.
+//
+// The body must be wrapped in the module-prefixed container key
+// "f5-openconfig-aaa-tls:tls" to match the PATCH target path. A bare
+// {"config": {...}} body is rejected by F5OS 2.0.0. The device's
+// verbatim error text uses its internal short module name
+// (error-tag "missing-element", message "missing element: tls in
+// /oc-sys:system/oc-sys:aaa/f5-aaa-tls:tls"); the RESTCONF path and
+// this payload use the public "f5-openconfig-aaa-tls" module name.
 type tlsImportPayload struct {
-	Config struct {
-		Certificate string `json:"certificate,omitempty"`
-		Key         string `json:"key,omitempty"`
-	} `json:"config"`
+	Tls struct {
+		Config struct {
+			Certificate string `json:"certificate,omitempty"`
+			Key         string `json:"key,omitempty"`
+		} `json:"config"`
+	} `json:"f5-openconfig-aaa-tls:tls"`
 }
 
 // GetTlsCertKey reads the aaa-tls tls container and returns the
@@ -472,8 +482,8 @@ func (p *F5os) ImportTlsCertKey(certificate, key string) error {
 		return fmt.Errorf("ImportTlsCertKey: at least one of certificate or key must be non-empty")
 	}
 	var payload tlsImportPayload
-	payload.Config.Certificate = certificate
-	payload.Config.Key = key
+	payload.Tls.Config.Certificate = certificate
+	payload.Tls.Config.Key = key
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal aaa-tls import payload: %w", err)
