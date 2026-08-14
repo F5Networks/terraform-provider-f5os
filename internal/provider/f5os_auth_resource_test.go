@@ -2661,6 +2661,26 @@ resource "f5os_auth" "test" {
 		expected.MaxClassRepeat = &classRep
 	}
 
+	// v2.0.0+ added min_days, remember, warn_age. These are non-disruptive
+	// (they govern password age/history warnings, not lockout), so they are
+	// safe to exercise on a shared DUT.
+	if platformVersionAtLeast(deviceVersion, "v2.0") {
+		config += `
+    min_days = 0
+    remember = 3
+    warn_age = 7`
+
+		checks = append(checks,
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.min_days", "0"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.remember", "3"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.warn_age", "7"),
+		)
+		minDays, remember, warnAge := int64(0), int64(3), int64(7)
+		expected.MinDays = &minDays
+		expected.Remember = &remember
+		expected.WarnAge = &warnAge
+	}
+
 	config += `
   }
 }
@@ -2710,6 +2730,25 @@ resource "f5os_auth" "test" {
 		expected.MaxLetterRepeat = &letterRep
 		expected.MaxSequenceRepeat = &seqRep
 		expected.MaxClassRepeat = &classRep
+	}
+
+	// v2.0.0+ min_days, remember, warn_age — use different values from the
+	// Create step to exercise the Update path for these leaves.
+	if platformVersionAtLeast(deviceVersion, "v2.0") {
+		config += `
+    min_days = 1
+    remember = 5
+    warn_age = 14`
+
+		checks = append(checks,
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.min_days", "1"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.remember", "5"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.warn_age", "14"),
+		)
+		minDays, remember, warnAge := int64(1), int64(5), int64(14)
+		expected.MinDays = &minDays
+		expected.Remember = &remember
+		expected.WarnAge = &warnAge
 	}
 
 	config += `
