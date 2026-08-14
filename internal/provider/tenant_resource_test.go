@@ -19,7 +19,7 @@ import (
 
 func TestAccTenantDeployResource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -51,7 +51,7 @@ func TestAccTenantDeployResource(t *testing.T) {
 
 func TestAccTenantDeployResourceTC4(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -697,6 +697,10 @@ func testAccPreCheckTenant2_0_0(t *testing.T) {
 	if !platformVersionAtLeast(client.PlatformVersion, "v2.0") {
 		t.Skipf("skipping: test requires F5OS 2.0.0+ but device reports %q", client.PlatformVersion)
 	}
+	// Ensure the tenant image is present (the test creates a tenant that
+	// references it). Done after the version gate so we don't import on
+	// devices where the test would skip.
+	testAccEnsureImageNamed(t, tenantTestImage())
 }
 
 func testAccTenantMaxNodesConfigFunc() string {
@@ -775,7 +779,7 @@ resource "f5os_tenant" "type_test" {
 
 func TestAccTenantDeployResourceTypeField(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -873,7 +877,7 @@ func testAccCheckTenantNoVlansOnDevice(tenantName string) resource.TestCheckFunc
 // is reserved for testing per the skill safety rules).
 func TestAccTenantVlansPopulatedInState(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenantVlans(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -919,7 +923,7 @@ func TestAccTenantVlansPopulatedInState(t *testing.T) {
 
 func TestAccTenantNoVlansInState(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -975,7 +979,7 @@ func testAccCheckTenantNoDeploymentFileOnDevice(tenantName string) resource.Test
 // BIG-IP tenant, deployment_file is absent in state and empty on device.
 func TestAccTenantDeploymentFileAbsentForBigIP(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -1038,6 +1042,32 @@ func tenantTestImage() string {
 		return v
 	}
 	return testAccImageName
+}
+
+// testAccPreCheckTenant is the PreCheck for tenant acceptance tests. In
+// addition to the standard env-var check it ensures the tenant image
+// (tenantTestImage()) is present on the DUT, importing it if necessary.
+//
+// The tenant resource's Create fails fast with a 404 ("Tenant Image ... not
+// found") if the image is absent. On shared devices the image can be
+// deleted/re-imported by concurrent jobs (e.g. acc:tenant_image), so relying
+// on another job to have left it in place is racy. Ensuring it here makes the
+// tenant tests self-sufficient and mirrors the tenant_image tests'
+// testAccPreCheckWithSetup pattern.
+func testAccPreCheckTenant(t *testing.T) {
+	testAccPreCheck(t)
+	testAccEnsureImageNamed(t, tenantTestImage())
+}
+
+// testAccPreCheckTenantVlans is the PreCheck for the tenant VLAN test. In
+// addition to ensuring the tenant image, it ensures VLANs 3910/3920/3930 exist
+// on the DUT. A tenant that references a VLAN which does not exist fails Create
+// with a 400 "illegal reference .../config/vlans". These VLANs are not
+// guaranteed to persist on shared devices between runs, so the test ensures
+// them itself (3900-3999 is the reserved test range).
+func testAccPreCheckTenantVlans(t *testing.T) {
+	testAccPreCheckTenant(t)
+	testAccEnsureVlans(t, 3910, 3920, 3930)
 }
 
 // tenantUnitTestImage is the placeholder tenant image name used by unit tests
@@ -2943,7 +2973,7 @@ func testAccCheckTenantMemoryOnDevice(tenantName string, expectedMemory int) res
 // This test exercises the mac_block_size logic in tenantResourceModeltoState.
 func TestAccTenantMacBlockSize(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -2992,7 +3022,7 @@ resource "f5os_tenant" "mac_test" {
 // This test exercises the explicit memory branch in calculateMemory.
 func TestAccTenantExplicitMemory(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{

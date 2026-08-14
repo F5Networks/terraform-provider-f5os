@@ -1350,34 +1350,63 @@ func (c *F5os) GetLdapConfig() (*LdapConfig, error) {
 	return &parsed.Ldap, nil
 }
 
-// SetLdapConfig updates the LDAP container config on the device using PATCH.
-// Only leaf-lists with non-nil slices are included in the payload: a nil slice
-// is omitted (leaving the leaf-list unmanaged), while a non-nil empty slice is
-// sent as [] to clear the leaf-list on the device. Available on F5OS 2.0.0+.
+// SetLdapConfig updates the LDAP object-class leaf-lists on the device.
+//
+// Each managed leaf-list is written with PUT to its own resource path, which
+// gives replace semantics: the leaf-list on the device is set to exactly the
+// supplied values. This is deliberately NOT a PATCH of the ldap container —
+// RESTCONF PATCH applies YANG "merge" semantics to leaf-lists, which appends
+// the supplied entries to whatever is already on the device rather than
+// replacing them. Under PATCH, setting user-object-class to ["posixAccount"]
+// when the device already held ["posixAccount","inetOrgPerson"] leaves both
+// entries in place, so the value read back does not match what was written and
+// Terraform reports "Provider produced inconsistent result after apply".
+//
+// Leaf-list handling preserves the nil/empty distinction:
+//   - nil slice: unmanaged — the leaf-list is left untouched.
+//   - non-nil non-empty slice: PUT to replace the leaf-list with these values.
+//   - non-nil empty slice: DELETE the leaf-list to clear it (an empty PUT body
+//     is a no-op on the device, so DELETE is used to remove all entries).
+//
+// Available on F5OS 2.0.0+.
 func (c *F5os) SetLdapConfig(config *LdapConfig) error {
-	ldap := make(map[string]interface{})
-	if config.UserObjectClass != nil {
-		ldap["user-object-class"] = config.UserObjectClass
+	if err := c.setLdapLeafList("user-object-class", config.UserObjectClass); err != nil {
+		return err
 	}
-	if config.GroupObjectClass != nil {
-		ldap["group-object-class"] = config.GroupObjectClass
+	if err := c.setLdapLeafList("group-object-class", config.GroupObjectClass); err != nil {
+		return err
 	}
+	return nil
+}
 
-	// Nothing to send: both leaf-lists are unmanaged (nil). Skip the round-trip
-	// rather than PATCH an empty container, whose device behavior is undefined.
-	if len(ldap) == 0 {
+// setLdapLeafList writes a single LDAP object-class leaf-list using replace
+// semantics. A nil values slice leaves the leaf-list unmanaged; a non-nil empty
+// slice clears it via DELETE; a non-nil non-empty slice replaces it via PUT.
+func (c *F5os) setLdapLeafList(leaf string, values []string) error {
+	// nil: unmanaged — do not touch the leaf-list.
+	if values == nil {
 		return nil
 	}
 
-	payload := map[string]interface{}{"f5-openconfig-aaa-ldap:ldap": ldap}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal ldap config payload: %w", err)
+	path := fmt.Sprintf("%s/%s", uriAAALdap, leaf)
+
+	// Non-nil empty slice: clear the leaf-list. A PUT of [] is a no-op on the
+	// device, so DELETE is used to remove all entries.
+	if len(values) == 0 {
+		if err := c.DeleteRequest(path); err != nil {
+			return fmt.Errorf("DELETE ldap %s failed: %w", leaf, err)
+		}
+		return nil
 	}
 
-	_, err = c.PatchRequest(uriAAALdap, body)
+	// Non-empty: PUT to replace the leaf-list with exactly these values.
+	payload := map[string]interface{}{fmt.Sprintf("f5-openconfig-aaa-ldap:%s", leaf): values}
+	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("PATCH ldap config failed: %w", err)
+		return fmt.Errorf("failed to marshal ldap %s payload: %w", leaf, err)
+	}
+	if _, err := c.PutRequest(path, body); err != nil {
+		return fmt.Errorf("PUT ldap %s failed: %w", leaf, err)
 	}
 	return nil
 }

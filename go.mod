@@ -2,7 +2,7 @@ module gitswarm.f5net.com/terraform-providers/terraform-provider-f5os
 
 go 1.25.0
 
-toolchain go1.25.12
+toolchain go1.25.13
 
 require (
 	github.com/hashicorp/terraform-plugin-docs v0.14.1
@@ -13,7 +13,7 @@ require (
 	github.com/hashicorp/terraform-plugin-testing v1.2.0
 	github.com/stretchr/testify v1.8.4
 	gitswarm.f5net.com/terraform-providers/f5osclient v1.1.5
-	golang.org/x/mod v0.37.0
+	golang.org/x/mod v0.40.0
 )
 
 require (

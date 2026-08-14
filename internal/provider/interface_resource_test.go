@@ -1320,7 +1320,7 @@ resource "f5os_interface" "test_interface" {
 		Steps: []resource.TestStep{
 			{
 				Config: testUnitInterfaceDescriptionConfig,
-				Check: resource.TestCheckResourceAttr("f5os_interface.test_interface", "description", "uplink to leaf-01"),
+				Check:  resource.TestCheckResourceAttr("f5os_interface.test_interface", "description", "uplink to leaf-01"),
 			},
 			{
 				Config: updated,
@@ -1416,7 +1416,7 @@ func TestUnitInterfaceDescriptionOutOfBandClear(t *testing.T) {
 			// drift-detected state after refresh; RefreshState alone
 			// would exit before Terraform reconciles.
 			{
-				PreConfig: func() { dropDescription.Store(true) },
+				PreConfig:    func() { dropDescription.Store(true) },
 				RefreshState: true,
 				// After refresh the device no longer reports the leaf,
 				// so plan is non-empty (description drifted to null on
@@ -1458,6 +1458,69 @@ func TestUnitInterfaceModelToStateEmptyResponse(t *testing.T) {
 			assert.True(t, data.TrunkVlans.IsNull(), "TrunkVlans should be null")
 			assert.True(t, data.Description.IsNull(), "Description should be null")
 			assert.True(t, data.Phyport.IsNull(), "Phyport should be null")
+		})
+	}
+}
+
+// TestUnitInterfacePhyportWireTypes guards against a regression where
+// some F5OS builds emit the f5-if-ethernet:phyport leaf as a JSON
+// number (e.g. 1) while others emit it as a JSON string (e.g. "1").
+// The client struct declares Phyport as *json.Number so it unmarshals
+// from either form; interfaceResourceModelToState then renders it to
+// the string state via String(). Before the fix, a numeric phyport
+// failed GetInterfaceInfo with:
+//
+//	json: cannot unmarshal number into Go struct field
+//	  ...f5-if-ethernet:phyport of type string
+//
+// which broke the whole interface read on those devices.
+func TestUnitInterfacePhyportWireTypes(t *testing.T) {
+	cases := map[string]struct {
+		body string
+		want string
+	}{
+		"numeric phyport": {
+			body: `{
+  "openconfig-interfaces:interface": [
+    {
+      "name": "1.0",
+      "openconfig-if-ethernet:ethernet": {
+        "state": { "f5-if-ethernet:phyport": 1 }
+      }
+    }
+  ]
+}`,
+			want: "1",
+		},
+		"string phyport": {
+			body: `{
+  "openconfig-interfaces:interface": [
+    {
+      "name": "1.0",
+      "openconfig-if-ethernet:ethernet": {
+        "state": { "f5-if-ethernet:phyport": "1" }
+      }
+    }
+  ]
+}`,
+			want: "1",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var respData f5ossdk.F5RespOpenconfigInterface
+			// Must unmarshal cleanly regardless of the wire type.
+			if !assert.NoError(t, json.Unmarshal([]byte(tc.body), &respData)) {
+				return
+			}
+
+			r := &InterfaceResource{}
+			data := &InterfaceResourceModel{}
+			r.interfaceResourceModelToState(context.Background(), &respData, data)
+
+			assert.False(t, data.Phyport.IsNull(), "Phyport should be populated")
+			assert.Equal(t, tc.want, data.Phyport.ValueString())
 		})
 	}
 }

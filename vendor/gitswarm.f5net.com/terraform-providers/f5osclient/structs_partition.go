@@ -7,7 +7,11 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 
 package f5os
 
-import "github.com/hashicorp/terraform-plugin-framework/types"
+import (
+	"encoding/json"
+
+	"github.com/hashicorp/terraform-plugin-framework/types"
+)
 
 type EulaPayload struct {
 	RegKey    string   `json:"f5-system-licensing-install:registration-key,omitempty"`
@@ -502,8 +506,14 @@ type F5RespInterface struct {
 		// reported by the device for physical Ethernet ports. It is
 		// nil / omitted on pre-2.0.0 devices and on non-ethernet
 		// interface types.
+		//
+		// The wire representation of this leaf is not consistent across
+		// F5OS builds: some devices emit it as a JSON string (e.g.
+		// "1") while others emit a bare JSON number (e.g. 1).
+		// json.Number unmarshals from either form without error and
+		// renders to a string via String() for the Terraform state.
 		State struct {
-			Phyport *string `json:"f5-if-ethernet:phyport,omitempty"`
+			Phyport *json.Number `json:"f5-if-ethernet:phyport,omitempty"`
 		} `json:"state,omitempty"`
 	} `json:"openconfig-if-ethernet:ethernet,omitempty"`
 }
