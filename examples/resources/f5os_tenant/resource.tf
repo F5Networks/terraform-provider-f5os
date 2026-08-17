@@ -11,4 +11,8 @@ resource "f5os_tenant" "test3" {
   vlans             = [1, 2]
   running_state     = "deployed"
   virtual_disk_size = 82
+
+  # max_nodes is only supported on F5OS 2.0.0 and later; ignored on earlier
+  # versions.
+  max_nodes = 2
 }
