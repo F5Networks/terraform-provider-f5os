@@ -1,0 +1,37 @@
+{
+    "f5-tenants:state": {
+        "name": "testtenant-ecosys2",
+        "unit-key-hash": "REDACTED-FAKE-UNIT-KEY-HASH-FOR-TESTING-ONLY==",
+        "type": "BIG-IP",
+        "image": "dumm_image_unit_test.qcow2.zip.bundle",
+        "nodes": [
+            1
+        ],
+        "max-nodes": 8,
+        "mgmt-ip": "10.10.10.26",
+        "prefix-length": 24,
+        "dag-ipv6-prefix-length": 128,
+        "gateway": "10.10.10.1",
+        "vlans": [1],
+        "cryptos": "enabled",
+        "vcpu-cores-per-node": 8,
+        "memory": "29184",
+        "storage": {
+            "size": 82
+        },
+        "running-state": "configured",
+        "mac-data": {
+            "base-mac": "f4:15:63:fb:a0:1a",
+            "mac-pool-size": 1
+        },
+        "appliance-mode": {
+            "enabled": false
+        },
+        "f5-tenant-mgmt-vlan:mgmt-vlan": 4094,
+        "f5-tenant-mgmt-vlan:mgmt-vlan-accessible": true,
+        "feature-flags": {
+            "clustering-as-service": true
+        },
+        "status": "Configured"
+    }
+}

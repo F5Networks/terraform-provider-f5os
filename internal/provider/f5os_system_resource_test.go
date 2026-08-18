@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,11 +18,14 @@ import (
 const (
 	// devicePreCheckTimeout is how long testAccPreCheckWithRetry and
 	// testAccCheckSystemDestroy wait for the device before giving up.
-	devicePreCheckTimeout = 90 * time.Second
+	// On F5OS 2.0.0 the RESTCONF listener can take longer than 90s to
+	// come back after cipher / SSH reconfig from a prior test, so give
+	// it 3 minutes.
+	devicePreCheckTimeout = 180 * time.Second
 
 	// deviceStepTimeout is how long PreConfig closures between test steps
 	// wait for the device before giving up.
-	deviceStepTimeout = 60 * time.Second
+	deviceStepTimeout = 120 * time.Second
 )
 
 // ---------------------------------------------------------------------------
@@ -237,6 +241,34 @@ func testAccPreCheckWithRetry(t *testing.T) {
 	testAccPreCheck(t)
 }
 
+// testAccPreCheckSkipOnFIPS skips the test when the device has the
+// f5-security-fips-module container present. FIPS-mode F5OS enforces a
+// YANG "when" condition on
+// /openconfig-system:system/f5-security-ciphers:security/services that
+// blocks any write to the httpd or sshd cipher lists, so tests which
+// exercise those fields cannot pass. Call from PreCheck for every
+// system test whose config includes httpd_ciphersuite or any sshd_*
+// list attribute.
+func testAccPreCheckSkipOnFIPS(t *testing.T) {
+	t.Helper()
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Fatalf("FIPS pre-check: failed to create client: %v", err)
+	}
+	// Probing /f5-security-ciphers:security returns the FIPS module
+	// container inline when the device runs in FIPS mode.
+	data, err := client.GetRequest("/openconfig-system:system/f5-security-ciphers:security")
+	if err != nil {
+		// If we can't probe, don't skip — let the real test run and
+		// surface any error normally.
+		return
+	}
+	if bytes.Contains(data, []byte("f5-security-fips-module:fips-module")) {
+		t.Skipf("skipping: device is running in FIPS mode; ciphers YANG " +
+			"container rejects all writes when FIPS is enabled")
+	}
+}
+
 // testAccWaitForDeviceStabilization waits for the device to stabilize after
 // configuration changes. Call this between test steps that modify system
 // settings which may trigger service restarts.
@@ -411,7 +443,10 @@ func testAccCheckSystemDestroy(s *terraform.State) error {
 
 func TestAccSystemCreateTC1Resource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheckWithRetry(t) },
+		PreCheck: func() {
+			testAccPreCheckWithRetry(t)
+			testAccPreCheckSkipOnFIPS(t)
+		},
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			// Read testing
@@ -429,8 +464,8 @@ func TestAccSystemCreateTC1Resource(t *testing.T) {
 					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_ciphers.0", "aes256-ctr"),
 					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_ciphers.1", "aes256-gcm@openssh.com"),
 					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_kex_alg.0", "ecdh-sha2-nistp384"),
-					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_mac_alg.0", "hmac-sha1-96"),
-					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_hkey_alg.0", "ssh-rsa"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_mac_alg.0", "hmac-sha2-256"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_hkey_alg.0", "ssh-ed25519"),
 					// Wait for device to stabilize after cipher/hostname changes
 					testAccWaitForDeviceStabilization(),
 				),
@@ -447,7 +482,10 @@ func TestAccSystemCreateTC1Resource(t *testing.T) {
 
 func TestAccSystemUpdateTC2Resource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheckWithRetry(t) },
+		PreCheck: func() {
+			testAccPreCheckWithRetry(t)
+			testAccPreCheckSkipOnFIPS(t)
+		},
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			// Read testing
@@ -465,8 +503,8 @@ func TestAccSystemUpdateTC2Resource(t *testing.T) {
 					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_ciphers.0", "aes256-ctr"),
 					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_ciphers.1", "aes256-gcm@openssh.com"),
 					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_kex_alg.0", "ecdh-sha2-nistp384"),
-					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_mac_alg.0", "hmac-sha1-96"),
-					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_hkey_alg.0", "ssh-rsa"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_mac_alg.0", "hmac-sha2-256"),
+					resource.TestCheckResourceAttr("f5os_system.system_settings", "sshd_hkey_alg.0", "ssh-ed25519"),
 					// Wait for device to stabilize after cipher/hostname changes
 					testAccWaitForDeviceStabilization(),
 				),
@@ -497,7 +535,6 @@ func TestAccSystemUpdateTC2Resource(t *testing.T) {
 	})
 }
 
-
 const testAccSystemCreateResourceConfig = `
 resource "f5os_system" "system_settings" {
   hostname = "system.example.net"
@@ -510,8 +547,8 @@ resource "f5os_system" "system_settings" {
   httpd_ciphersuite = "ECDHE-RSA-AES256-GCM-SHA384"
   sshd_ciphers = ["aes256-ctr", "aes256-gcm@openssh.com"]
   sshd_kex_alg = ["ecdh-sha2-nistp384"]
-  sshd_mac_alg = ["hmac-sha1-96"]
-  sshd_hkey_alg = ["ssh-rsa"]
+  sshd_mac_alg = ["hmac-sha2-256"]
+  sshd_hkey_alg = ["ssh-ed25519"]
 }`
 
 const testAccSystemUpdateResourceConfig = `
@@ -526,15 +563,13 @@ resource "f5os_system" "system_settings" {
   httpd_ciphersuite = "ECDHE-RSA-AES256-GCM-SHA384"
   sshd_ciphers = ["aes256-ctr"]
   sshd_kex_alg = ["ecdh-sha2-nistp384", "ecdh-sha2-nistp521"]
-  sshd_mac_alg = ["hmac-sha1-96"]
-  sshd_hkey_alg = ["ssh-rsa"]
+  sshd_mac_alg = ["hmac-sha2-256"]
+  sshd_hkey_alg = ["ssh-ed25519"]
 }`
 
 // ---------------------------------------------------------------------------
 // Acceptance test helpers
 // ---------------------------------------------------------------------------
-
-
 
 // testAccCheckSystemSSHListsOnDevice queries the device cipher service
 // endpoints directly and verifies the sshd ciphers, kex, macs, and hkey
@@ -646,7 +681,7 @@ func testAccCheckSystemHostnameOnDevice(expected string) resource.TestCheckFunc 
 // - sshd_ciphers includes aes256-ctr + aes256-gcm (broadly supported)
 // - sshd_kex_alg includes ecdh-sha2-nistp256 + nistp384 (broadly supported)
 // - sshd_hkey_alg includes all 4 baseline algorithms (no reduction)
-// - sshd_mac_alg includes hmac-sha1-96 (matches baseline)
+// - sshd_mac_alg includes hmac-sha2-256 (allowed on both 1.8 and 2.0)
 const testAccSystemReadSSHListsConfig = `
 resource "f5os_system" "read_test" {
   hostname          = "r5900-read-test"
@@ -659,17 +694,28 @@ resource "f5os_system" "read_test" {
   httpd_ciphersuite = "ECDHE-RSA-AES256-GCM-SHA384"
   sshd_ciphers      = ["aes256-ctr", "aes256-gcm@openssh.com"]
   sshd_kex_alg      = ["ecdh-sha2-nistp256", "ecdh-sha2-nistp384"]
-  sshd_mac_alg      = ["hmac-sha1-96"]
+  sshd_mac_alg      = ["hmac-sha2-256"]
   sshd_hkey_alg     = ["ecdsa-sha2-nistp256", "rsa-sha2-256", "rsa-sha2-512", "ssh-ed25519"]
 }
 `
 
 func TestAccSystemReadPopulatesSSHLists(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheckWithRetry(t) },
+		PreCheck: func() {
+			testAccPreCheckWithRetry(t)
+			testAccPreCheckSkipOnFIPS(t)
+		},
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
+				// PreConfig runs before Terraform operations; wait for device
+				// availability in case a prior test left the RESTCONF listener
+				// bouncing after cipher reconfig.
+				PreConfig: func() {
+					if err := waitForDeviceAvailable(deviceStepTimeout); err != nil {
+						t.Fatalf("Device not available before create step: %v", err)
+					}
+				},
 				Config: testAccSystemReadSSHListsConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					// --- Terraform state assertions ---
@@ -693,23 +739,24 @@ func TestAccSystemReadPopulatesSSHLists(t *testing.T) {
 					resource.TestCheckResourceAttr("f5os_system.read_test", "sshd_kex_alg.0", "ecdh-sha2-nistp256"),
 					resource.TestCheckResourceAttr("f5os_system.read_test", "sshd_kex_alg.1", "ecdh-sha2-nistp384"),
 					resource.TestCheckResourceAttr("f5os_system.read_test", "sshd_mac_alg.#", "1"),
-					resource.TestCheckResourceAttr("f5os_system.read_test", "sshd_mac_alg.0", "hmac-sha1-96"),
+					resource.TestCheckResourceAttr("f5os_system.read_test", "sshd_mac_alg.0", "hmac-sha2-256"),
 					resource.TestCheckResourceAttr("f5os_system.read_test", "sshd_hkey_alg.#", "4"),
 					resource.TestCheckResourceAttr("f5os_system.read_test", "sshd_hkey_alg.0", "ecdsa-sha2-nistp256"),
 					resource.TestCheckResourceAttr("f5os_system.read_test", "sshd_hkey_alg.1", "rsa-sha2-256"),
 					resource.TestCheckResourceAttr("f5os_system.read_test", "sshd_hkey_alg.2", "rsa-sha2-512"),
 					resource.TestCheckResourceAttr("f5os_system.read_test", "sshd_hkey_alg.3", "ssh-ed25519"),
 
+					// Wait for device to stabilize after cipher/hostname changes
+					// (RESTCONF listener briefly drops during cipher reconfig)
+					testAccWaitForDeviceStabilization(),
 					// --- Direct device API assertions ---
 					testAccCheckSystemHostnameOnDevice("r5900-read-test"),
 					testAccCheckSystemSSHListsOnDevice(
 						[]string{"aes256-ctr", "aes256-gcm@openssh.com"},
 						[]string{"ecdh-sha2-nistp256", "ecdh-sha2-nistp384"},
-						[]string{"hmac-sha1-96"},
+						[]string{"hmac-sha2-256"},
 						[]string{"ecdsa-sha2-nistp256", "rsa-sha2-256", "rsa-sha2-512", "ssh-ed25519"},
 					),
-					// Wait for device to stabilize after cipher/hostname changes
-					testAccWaitForDeviceStabilization(),
 				),
 			},
 		},
@@ -733,7 +780,7 @@ resource "f5os_system" "crud_test" {
   httpd_ciphersuite = "ECDHE-RSA-AES256-GCM-SHA384"
   sshd_ciphers      = ["aes256-ctr", "aes256-gcm@openssh.com"]
   sshd_kex_alg      = ["ecdh-sha2-nistp256", "ecdh-sha2-nistp384"]
-  sshd_mac_alg      = ["hmac-sha1-96"]
+  sshd_mac_alg      = ["hmac-sha2-256"]
   sshd_hkey_alg     = ["ecdsa-sha2-nistp256", "rsa-sha2-256", "rsa-sha2-512", "ssh-ed25519"]
 }
 `
@@ -750,19 +797,30 @@ resource "f5os_system" "crud_test" {
   httpd_ciphersuite = "ECDHE-RSA-AES256-GCM-SHA384"
   sshd_ciphers      = ["aes128-ctr", "aes256-ctr"]
   sshd_kex_alg      = ["ecdh-sha2-nistp384"]
-  sshd_mac_alg      = ["hmac-sha1-96"]
+  sshd_mac_alg      = ["hmac-sha2-256"]
   sshd_hkey_alg     = ["ecdsa-sha2-nistp256", "rsa-sha2-256", "rsa-sha2-512", "ssh-ed25519"]
 }
 `
 
 func TestAccSystemCRUDResource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheckWithRetry(t) },
+		PreCheck: func() {
+			testAccPreCheckWithRetry(t)
+			testAccPreCheckSkipOnFIPS(t)
+		},
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckSystemDestroy,
 		Steps: []resource.TestStep{
 			// Step 1: Create and verify via direct API
 			{
+				// PreConfig runs before Terraform operations; wait for device
+				// availability in case a prior test left the RESTCONF listener
+				// bouncing after cipher reconfig.
+				PreConfig: func() {
+					if err := waitForDeviceAvailable(deviceStepTimeout); err != nil {
+						t.Fatalf("Device not available before create step: %v", err)
+					}
+				},
 				Config: testAccSystemCRUDCreateConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					// Terraform state assertions
@@ -779,6 +837,9 @@ func TestAccSystemCRUDResource(t *testing.T) {
 					resource.TestCheckResourceAttr("f5os_system.crud_test", "sshd_mac_alg.#", "1"),
 					resource.TestCheckResourceAttr("f5os_system.crud_test", "sshd_hkey_alg.#", "4"),
 
+					// Wait for device to stabilize after cipher/hostname changes
+					// (RESTCONF listener briefly drops during cipher reconfig)
+					testAccWaitForDeviceStabilization(),
 					// Direct device API assertions
 					testAccCheckSystemHostnameOnDevice("r5900-crud-test"),
 					testAccCheckSystemSettingsOnDevice(
@@ -788,11 +849,9 @@ func TestAccSystemCRUDResource(t *testing.T) {
 					testAccCheckSystemSSHListsOnDevice(
 						[]string{"aes256-ctr", "aes256-gcm@openssh.com"},
 						[]string{"ecdh-sha2-nistp256", "ecdh-sha2-nistp384"},
-						[]string{"hmac-sha1-96"},
+						[]string{"hmac-sha2-256"},
 						[]string{"ecdsa-sha2-nistp256", "rsa-sha2-256", "rsa-sha2-512", "ssh-ed25519"},
 					),
-					// Wait for device to stabilize after cipher/hostname changes
-					testAccWaitForDeviceStabilization(),
 				),
 			},
 			// Step 2: Import state
@@ -826,6 +885,9 @@ func TestAccSystemCRUDResource(t *testing.T) {
 					resource.TestCheckResourceAttr("f5os_system.crud_test", "token_lifetime", "20"),
 					resource.TestCheckResourceAttr("f5os_system.crud_test", "sshd_idle_timeout", "3600"),
 
+					// Wait for device to stabilize after cipher changes
+					// (RESTCONF listener briefly drops during cipher reconfig)
+					testAccWaitForDeviceStabilization(),
 					// Direct device API assertions
 					testAccCheckSystemHostnameOnDevice("r5900-crud-test"),
 					testAccCheckSystemSettingsOnDevice(
@@ -835,11 +897,9 @@ func TestAccSystemCRUDResource(t *testing.T) {
 					testAccCheckSystemSSHListsOnDevice(
 						[]string{"aes128-ctr", "aes256-ctr"},
 						[]string{"ecdh-sha2-nistp384"},
-						[]string{"hmac-sha1-96"},
+						[]string{"hmac-sha2-256"},
 						[]string{"ecdsa-sha2-nistp256", "rsa-sha2-256", "rsa-sha2-512", "ssh-ed25519"},
 					),
-					// Wait for device to stabilize after cipher changes
-					testAccWaitForDeviceStabilization(),
 				),
 			},
 			// Step 4: Destroy is automatic — CheckDestroy verifies cleanup

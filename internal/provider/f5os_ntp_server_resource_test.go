@@ -6,11 +6,15 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+
+	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
 // ---------------------------------------------------------------------------
@@ -51,8 +55,6 @@ resource "f5os_ntp_server" "test" {
   ntp_authentication = true
 }
 `
-
-
 
 // ---------------------------------------------------------------------------
 // Direct API verification: check NTP server exists on device with expected values
@@ -922,7 +924,6 @@ func TestAccNTPServerKeyIDOmitted(t *testing.T) {
 					// Direct device API verification — key_id defaults to 0
 					testAccCheckNTPServerOnDevice("10.255.255.3", 0, true, true),
 				),
-
 			},
 			// Step 2: Destroy is automatic — CheckDestroy verifies cleanup.
 			// Note: Update steps are intentionally omitted. The NTP server
@@ -1313,10 +1314,10 @@ func TestUnitNTPDeleteError(t *testing.T) {
 			_, _ = w.Write([]byte(`{"openconfig-system:server":[{"address":"10.20.30.40","config":{"address":"10.20.30.40","f5-openconfig-system-ntp:key-id":123,"prefer":true,"iburst":true}}]}`))
 		case "DELETE":
 			count := atomic.AddInt32(&deleteAttempts, 1)
-			// doRequest retries 3 times. Fail the first 3 attempts
+			// doRequest retries up to 6 times. Fail the first 6 attempts
 			// (covering the error path), then let subsequent attempts
 			// succeed (post-test cleanup).
-			if count <= 3 {
+			if count <= 6 {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"operation-failed","error-message":"delete NTP server failed"}]}}`))
 			} else {
@@ -1349,7 +1350,7 @@ func TestUnitNTPDeleteError(t *testing.T) {
 				),
 			},
 			// Step 2: Remove resource from config — triggers destroy via plan diff.
-			// The DELETE handler returns 500 for the first 3 attempts
+			// The DELETE handler returns 500 for the first 6 attempts
 			// (one full doRequest retry cycle), exercising the error path.
 			// Subsequent delete attempts succeed (for post-test cleanup).
 			{
@@ -1622,4 +1623,497 @@ func TestAccF5osNTPServerResource(t *testing.T) {
 			// Step 4: Destroy is automatic — CheckDestroy verifies cleanup
 		},
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance test: F5OS 2.0.0+ additive fields against a real 2.0+ device
+// ---------------------------------------------------------------------------
+
+// testAccNTPServer200FieldsConfig exercises the 2.0-only additive
+// config leaves (association_type, version, port). Uses a distinct
+// server address so it does not collide with TestAccF5osNTPServerResource
+// on shared DUTs.
+const testAccNTPServer200FieldsConfig = `
+resource "f5os_ntp_server" "test200" {
+  server           = "10.255.255.2"
+  prefer           = true
+  iburst           = true
+  ntp_service      = true
+  association_type = "SERVER"
+  version          = 4
+  port             = 123
+}
+`
+
+// testAccPreCheckNTPServer2_0 skips when the target device is not
+// running F5OS 2.0.0+; the association_type/version/port config leaves
+// and stratum/authenticated/state_address state leaves only exist on
+// 2.0.0+.
+func testAccPreCheckNTPServer2_0(t *testing.T) {
+	t.Helper()
+	testAccPreCheck(t)
+
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Fatalf("testAccPreCheckNTPServer2_0: failed to create session: %s", err)
+	}
+	if !platformVersionAtLeast(client.PlatformVersion, "v2.0") {
+		t.Skipf("skipping: test requires F5OS 2.0.0+ but device reports %q", client.PlatformVersion)
+	}
+}
+
+// testAccCheckNTPServer200FieldsOnDevice queries the NTP server entry
+// directly on the device and verifies the 2.0-only config leaves match
+// the plan and that the read-only state leaves (stratum,
+// authenticated, state_address) are populated. This catches
+// regressions where the resource claims the values in Terraform state
+// but the device did not actually accept them, or where the Read path
+// stops surfacing the state container.
+func testAccCheckNTPServer200FieldsOnDevice(server, expectAssoc string, expectVersion, expectPort int64) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		client, err := newTestClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create F5OS client: %w", err)
+		}
+		ntp, err := client.GetNTPServer(server)
+		if err != nil {
+			return fmt.Errorf("failed to read NTP server %s from device: %w", server, err)
+		}
+		if ntp.AssociationType == nil || *ntp.AssociationType != expectAssoc {
+			var got string
+			if ntp.AssociationType != nil {
+				got = *ntp.AssociationType
+			}
+			return fmt.Errorf("expected association_type=%q on device, got %q", expectAssoc, got)
+		}
+		if ntp.Version == nil || *ntp.Version != expectVersion {
+			var got int64
+			if ntp.Version != nil {
+				got = *ntp.Version
+			}
+			return fmt.Errorf("expected version=%d on device, got %d", expectVersion, got)
+		}
+		if ntp.Port == nil || *ntp.Port != expectPort {
+			var got int64
+			if ntp.Port != nil {
+				got = *ntp.Port
+			}
+			return fmt.Errorf("expected port=%d on device, got %d", expectPort, got)
+		}
+		// State container on 2.0+ devices: the leaves are populated
+		// lazily by the NTP daemon. For unreachable test peers (e.g.
+		// 10.255.255.x), state/stratum is not populated until the peer
+		// syncs, and state/address may be "NXDOMAIN". Only assert on
+		// leaves the device consistently populates for any configured
+		// server: authenticated (always known) and address (always set,
+		// even if it is NXDOMAIN for unresolvable hosts).
+		if ntp.StateAuthenticated == nil {
+			return fmt.Errorf("device did not return state/authenticated for NTP server %s", server)
+		}
+		if ntp.StateAddress == nil || *ntp.StateAddress == "" {
+			return fmt.Errorf("device did not return state/address for NTP server %s", server)
+		}
+		return nil
+	}
+}
+
+// TestAccF5osNTPServer2_0Fields exercises the F5OS 2.0.0+ additive
+// config leaves (association_type, version, port) and asserts that
+// the computed read-only state leaves (stratum, authenticated,
+// state_address) come back populated from the device. Skips on
+// pre-2.0 devices.
+func TestAccF5osNTPServer2_0Fields(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheckNTPServer2_0(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckNTPServerDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccNTPServer200FieldsConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// Terraform state: 2.0 config leaves round-tripped.
+					resource.TestCheckResourceAttr("f5os_ntp_server.test200", "server", "10.255.255.2"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test200", "association_type", "SERVER"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test200", "version", "4"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test200", "port", "123"),
+					// Terraform state: computed 2.0 state leaves populated.
+					// stratum is only set once the peer syncs; for
+					// non-routable test IPs the daemon leaves it null,
+					// so we only assert the leaves that are always set.
+					resource.TestCheckResourceAttrSet("f5os_ntp_server.test200", "authenticated"),
+					resource.TestCheckResourceAttrSet("f5os_ntp_server.test200", "state_address"),
+					// Direct device verification: config + state on device.
+					testAccCheckNTPServer200FieldsOnDevice("10.255.255.2", "SERVER", 4, 123),
+				),
+			},
+			// Import round-trip must preserve the 2.0 leaves.
+			{
+				ResourceName:      "f5os_ntp_server.test200",
+				ImportState:       true,
+				ImportStateVerify: true,
+				// stratum/authenticated/state_address are dynamic; the
+				// device may report different values between the create
+				// step and the import refresh.
+				ImportStateVerifyIgnore: []string{"stratum", "authenticated", "state_address"},
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// F5OS 2.0.0+ additive fields (association_type, version, port) and
+// read-only state leaves (stratum, authenticated, state_address)
+// ---------------------------------------------------------------------------
+
+// testUnitNTPServer200FieldsConfig sets all three F5OS 2.0.0+ config
+// leaves so the payload builder and version-gate are exercised.
+const testUnitNTPServer200FieldsConfig = `
+resource "f5os_ntp_server" "test" {
+  server           = "10.20.30.40"
+  key_id           = 123
+  prefer           = true
+  iburst           = true
+  association_type = "SERVER"
+  version          = 4
+  port             = 123
+}
+`
+
+// TestUnitNTPServer200FieldsPayload verifies that association_type,
+// version, and port are marshaled into the Create payload and that the
+// Read helper surfaces the corresponding config and state leaves
+// returned by the device.
+func TestUnitNTPServer200FieldsPayload(t *testing.T) {
+	testAccPreUnitCheck(t)
+	defer teardown()
+
+	setupMockPlatformVersion(mux, "2.0.0-22925")
+
+	var (
+		postBody atomic.Value // []byte
+	)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			body, _ := io.ReadAll(r.Body)
+			postBody.Store(body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			// Return both the config leaves the resource just wrote
+			// and the F5OS 2.0.0+ state container so Read can surface
+			// stratum/authenticated/state_address.
+			_, _ = w.Write([]byte(`{
+				"openconfig-system:server": [
+					{
+						"address": "10.20.30.40",
+						"config": {
+							"address": "10.20.30.40",
+							"f5-openconfig-system-ntp:key-id": 123,
+							"prefer": true,
+							"iburst": true,
+							"association-type": "SERVER",
+							"version": 4,
+							"port": 123
+						},
+						"state": {
+							"address": "10.20.30.40",
+							"association-type": "SERVER",
+							"iburst": true,
+							"port": 123,
+							"prefer": true,
+							"stratum": 3,
+							"version": 4,
+							"f5-openconfig-system-ntp:authenticated": true
+						}
+					}
+				]
+			}`))
+		case http.MethodPatch, http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPatch:
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:config":{"enabled":true,"enable-ntp-auth":false}}`))
+		}
+	})
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testUnitNTPServer200FieldsConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "association_type", "SERVER"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "version", "4"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "port", "123"),
+					// State leaves surfaced by Read post-Create.
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "stratum", "3"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "authenticated", "true"),
+					resource.TestCheckResourceAttr("f5os_ntp_server.test", "state_address", "10.20.30.40"),
+					// Verify the Create payload contained the new leaves.
+					func(_ *terraform.State) error {
+						raw, ok := postBody.Load().([]byte)
+						if !ok || len(raw) == 0 {
+							return fmt.Errorf("no POST payload captured")
+						}
+						var envelope struct {
+							Server []struct {
+								Config map[string]interface{} `json:"config"`
+							} `json:"server"`
+						}
+						if err := json.Unmarshal(raw, &envelope); err != nil {
+							return fmt.Errorf("payload not valid JSON: %w; body=%s", err, string(raw))
+						}
+						if len(envelope.Server) != 1 {
+							return fmt.Errorf("expected 1 server entry, got %d; body=%s", len(envelope.Server), string(raw))
+						}
+						cfg := envelope.Server[0].Config
+						if cfg["association-type"] != "SERVER" {
+							return fmt.Errorf("association-type not in payload: %v", cfg)
+						}
+						if _, ok := cfg["version"]; !ok {
+							return fmt.Errorf("version not in payload: %v", cfg)
+						}
+						if _, ok := cfg["port"]; !ok {
+							return fmt.Errorf("port not in payload: %v", cfg)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitNTPServer200FieldsPayloadOmittedNotSerialized verifies that
+// when the caller does not set association_type / version / port, none
+// of them appear in the payload. Guards against a regression where the
+// omitempty tags are lost and pre-2.0.0 devices start rejecting POSTs.
+func TestUnitNTPServer200FieldsPayloadOmittedNotSerialized(t *testing.T) {
+	testAccPreUnitCheck(t)
+	defer teardown()
+
+	setupMockPlatformVersion(mux, "1.8.3-23453")
+
+	var postBody atomic.Value
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			body, _ := io.ReadAll(r.Body)
+			postBody.Store(body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			// No state container: pre-2.0.0 devices do not emit it.
+			_, _ = w.Write([]byte(`{
+				"openconfig-system:server": [{
+					"address":"10.20.30.40",
+					"config":{"address":"10.20.30.40","f5-openconfig-system-ntp:key-id":123,"prefer":true,"iburst":true}
+				}]
+			}`))
+		case http.MethodPatch, http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPatch:
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"openconfig-system:config":{"enabled":true,"enable-ntp-auth":true}}`))
+		}
+	})
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testUnitNTPServerBasicConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// State leaves come back null on a pre-2.0.0 device.
+					resource.TestCheckNoResourceAttr("f5os_ntp_server.test", "association_type"),
+					resource.TestCheckNoResourceAttr("f5os_ntp_server.test", "version"),
+					resource.TestCheckNoResourceAttr("f5os_ntp_server.test", "port"),
+					resource.TestCheckNoResourceAttr("f5os_ntp_server.test", "stratum"),
+					resource.TestCheckNoResourceAttr("f5os_ntp_server.test", "authenticated"),
+					resource.TestCheckNoResourceAttr("f5os_ntp_server.test", "state_address"),
+					func(_ *terraform.State) error {
+						raw, ok := postBody.Load().([]byte)
+						if !ok || len(raw) == 0 {
+							return fmt.Errorf("no POST payload captured")
+						}
+						// The 2.0.0 leaves must NOT appear when the user
+						// did not set them, so pre-2.0.0 devices do not
+						// reject the payload.
+						for _, key := range []string{"association-type", "version", "port"} {
+							if strings.Contains(string(raw), `"`+key+`"`) {
+								return fmt.Errorf("unexpected key %q in payload: %s", key, string(raw))
+							}
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitNTPServer200FieldsRejectedOnOldDevice verifies that setting
+// any of association_type / version / port on a device below F5OS
+// 2.0.0 produces a clear "Unsupported attribute" error at Create time
+// (before any RESTCONF payload is built or sent).
+func TestUnitNTPServer200FieldsRejectedOnOldDevice(t *testing.T) {
+	testAccPreUnitCheck(t)
+	defer teardown()
+
+	setupMockPlatformVersion(mux, "1.8.3-23453")
+
+	// If the resource incorrectly issues a RESTCONF POST despite the
+	// version gate, record the hit atomically from the handler
+	// goroutine and assert on the main goroutine after resource.Test
+	// returns. t.Errorf from a non-test goroutine is racy and
+	// unreliable across Go versions.
+	var collectionHit atomic.Bool
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers", func(w http.ResponseWriter, r *http.Request) {
+		collectionHit.Store(true)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testUnitNTPServer200FieldsConfig,
+				ExpectError: regexp.MustCompile(`(?s)Unsupported attribute`),
+			},
+		},
+	})
+
+	if collectionHit.Load() {
+		t.Fatalf("resource issued a RESTCONF request to the servers collection despite version gate; expected the error to be raised before any device write")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Unit test: post-write GET failure downgrades to warning + null leaves
+// ---------------------------------------------------------------------------
+//
+// Guards refreshComputedStateLeaves' warning-fallback branch. Create and
+// Update both call this helper after a successful device write to
+// populate the 2.0-only computed state leaves (stratum, authenticated,
+// state_address). If that follow-up GET fails, aborting with an error
+// would leak the just-written resource on the device while Terraform
+// believes nothing was created, forcing subsequent applies to fail
+// with "already exists". Instead the helper must:
+//   - emit a warning diagnostic (not an error), and
+//   - null out the Computed leaves so Terraform accepts state as
+//     consistent; the next Read cycle fills them in.
+//
+// Calling the helper directly (rather than through resource.Test)
+// isolates the warning-fallback contract from Read's separate error
+// path — the same GetNTPServer call is used by Read, so a full TF-level
+// Create-with-failing-GET would immediately fail the subsequent
+// post-apply refresh and mask the Create-side assertion we want to
+// make. The Create/Update call sites (f5os_ntp_server_resource.go:180
+// and :315) are exercised by TestUnitNTPServer200FieldsPayload against
+// a working mock; this test pins the failure-mode contract.
+
+// TestUnitNTPRefreshComputedStateLeavesWarning calls
+// refreshComputedStateLeaves directly with a client pointed at a mock
+// server that fails the GET, and asserts:
+//   - diagnostics contain exactly one warning (no errors),
+//   - the computed leaves on the model are set to null,
+//   - the warning message names the post-write / follow-up-read fallback.
+func TestUnitNTPRefreshComputedStateLeavesWarning(t *testing.T) {
+	testAccPreUnitCheck(t)
+	defer teardown()
+
+	setupMockPlatformVersion(mux, "2.0.0-22925")
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/ntp/openconfig-system:servers/server=10.20.30.40", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ietf-restconf:errors":{"error":[{"error-tag":"operation-failed","error-message":"simulated post-write GET failure"}]}}`))
+		}
+	})
+
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Fatalf("failed to create test client against mock: %s", err)
+	}
+
+	r := &NTPServerResource{client: client}
+	plan := &f5ossdk.NTPServerModel{
+		Server: types.StringValue("10.20.30.40"),
+		// Pre-populate the Computed leaves with sentinel values so we
+		// can assert the helper overwrites them with null on failure.
+		Stratum:       types.Int64Value(999),
+		Authenticated: types.BoolValue(true),
+		StateAddress:  types.StringValue("stale.example.com"),
+		// Pre-populate the Optional+Computed config leaves as Unknown
+		// so we can assert the helper normalizes them to Null when the
+		// post-write GET fails (Computed attributes may not remain
+		// Unknown in final state).
+		AssociationType: types.StringUnknown(),
+		Version:         types.Int64Unknown(),
+		Port:            types.Int64Unknown(),
+	}
+
+	diags := r.refreshComputedStateLeaves(plan)
+
+	if diags.HasError() {
+		t.Fatalf("refreshComputedStateLeaves returned an error diag on GET failure; expected warning only. diags=%v", diags)
+	}
+	if diags.WarningsCount() != 1 {
+		t.Fatalf("expected exactly 1 warning diagnostic, got %d (diags=%v)", diags.WarningsCount(), diags)
+	}
+	warn := diags.Warnings()[0]
+	combined := strings.ToLower(warn.Summary() + " " + warn.Detail())
+	if !strings.Contains(combined, "post-write") && !strings.Contains(combined, "follow-up read") {
+		t.Errorf("warning does not mention the post-write / follow-up read fallback; summary=%q detail=%q", warn.Summary(), warn.Detail())
+	}
+	if !plan.Stratum.IsNull() {
+		t.Errorf("expected Stratum to be null after warning fallback, got %s", plan.Stratum.String())
+	}
+	if !plan.Authenticated.IsNull() {
+		t.Errorf("expected Authenticated to be null after warning fallback, got %s", plan.Authenticated.String())
+	}
+	if !plan.StateAddress.IsNull() {
+		t.Errorf("expected StateAddress to be null after warning fallback, got %s", plan.StateAddress.String())
+	}
+	// Optional+Computed config leaves: Unknown must be normalized to
+	// Null so Terraform accepts the state as consistent.
+	if !plan.AssociationType.IsNull() {
+		t.Errorf("expected AssociationType to be null after warning fallback, got %s", plan.AssociationType.String())
+	}
+	if !plan.Version.IsNull() {
+		t.Errorf("expected Version to be null after warning fallback, got %s", plan.Version.String())
+	}
+	if !plan.Port.IsNull() {
+		t.Errorf("expected Port to be null after warning fallback, got %s", plan.Port.String())
+	}
 }

@@ -55,8 +55,12 @@ type TenantResourceModel struct {
 	MgmtPrefix          types.Int64  `tfsdk:"mgmt_prefix"`
 	CpuCores            types.Int64  `tfsdk:"cpu_cores"`
 	Nodes               types.List   `tfsdk:"nodes"`
+	MaxNodes            types.Int64  `tfsdk:"max_nodes"`
 	Vlans               types.List   `tfsdk:"vlans"`
 	Status              types.String `tfsdk:"status"`
+	MgmtVlan            types.Int64  `tfsdk:"mgmt_vlan"`
+	MgmtVlanAccessible  types.Bool   `tfsdk:"mgmt_vlan_accessible"`
+	ClusteringAsService types.Bool   `tfsdk:"clustering_as_service"`
 	MacBlockSize        types.String `tfsdk:"mac_block_size"`
 	DagIpv6prefixLength types.Int64  `tfsdk:"dag_ipv6_prefix_length"`
 	Timeout             types.Int64  `tfsdk:"timeout"`
@@ -168,6 +172,14 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 					),
 				),
 			},
+			"max_nodes": schema.Int64Attribute{
+				MarkdownDescription: "The maximum number of nodes the tenant may scale to.\nSupported on F5OS 2.0.0 and later; ignored on earlier versions.",
+				Optional:            true,
+				Computed:            true,
+				Validators: []validator.Int64{
+					int64validator.AtLeast(1),
+				},
+			},
 			"vlans": schema.ListAttribute{
 				MarkdownDescription: "The existing VLAN IDs in the chassis partition that should be added to the tenant.\nThe order of these VLANs is ignored.\nThis module orders the VLANs automatically, if you deliberately re-order them in subsequent tasks, this module will not register a change.\nRequired for create operations",
 				Optional:            true,
@@ -186,10 +198,23 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 			"memory": schema.Int64Attribute{
 				MarkdownDescription: "The amount of memory that should be provided to the tenant in MB.\n More information on memory sizing for [Velos](https://clouddocs.f5.com/training/community/velos-training/html/velos_performance_and_sizing.html#memory-sizing)/[rSeries](https://clouddocs.f5.com/training/community/rseries-training/html/rseries_performance_and_sizing.html#memory-sizing)",
 				Optional:            true,
+				Computed:            true,
 			},
 			"status": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Tenant status",
+			},
+			"mgmt_vlan": schema.Int64Attribute{
+				Computed:            true,
+				MarkdownDescription: "The management VLAN ID assigned to the tenant.\nRead-only; reported on F5OS 2.0.0 and later.",
+			},
+			"mgmt_vlan_accessible": schema.BoolAttribute{
+				Computed:            true,
+				MarkdownDescription: "Whether the tenant management VLAN is accessible.\nRead-only; reported on F5OS 2.0.0 and later.",
+			},
+			"clustering_as_service": schema.BoolAttribute{
+				Computed:            true,
+				MarkdownDescription: "Whether the clustering-as-a-service feature flag is enabled for the tenant.\nRead-only; reported on F5OS 2.0.0 and later.",
 			},
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -409,25 +434,36 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	data.MgmtGateway = types.StringValue(respData.F5TenantsTenant[0].State.Gateway)
 	data.Status = types.StringValue(respData.F5TenantsTenant[0].State.Status)
 	data.DagIpv6prefixLength = types.Int64Value(int64(respData.F5TenantsTenant[0].State.DagIpv6PrefixLength))
-	if respData.F5TenantsTenant[0].State.MacData.MacPoolSize == 1 {
-		data.MacBlockSize = types.StringValue("one")
-	}
-	if respData.F5TenantsTenant[0].State.MacData.MacPoolSize == 8 {
+	// Map the device-reported mac-pool-size to the mac_block_size attribute.
+	// Valid device values are 1/8/16/32; the default arm maps any other
+	// (unexpected) size to the documented default "one" so the Computed
+	// attribute is always set to a valid value rather than left unknown or
+	// stale, which would trigger a provider inconsistent-result error.
+	switch respData.F5TenantsTenant[0].State.MacData.MacPoolSize {
+	case 8:
 		data.MacBlockSize = types.StringValue("small")
-	}
-	if respData.F5TenantsTenant[0].State.MacData.MacPoolSize == 16 {
+	case 16:
 		data.MacBlockSize = types.StringValue("medium")
-	}
-	if respData.F5TenantsTenant[0].State.MacData.MacPoolSize == 32 {
+	case 32:
 		data.MacBlockSize = types.StringValue("large")
+	default:
+		data.MacBlockSize = types.StringValue("one")
 	}
 	if respData.F5TenantsTenant[0].State.Storage.Size == respData.F5TenantsTenant[0].Config.Storage.Size {
 		data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].State.Storage.Size))
 	} else {
 		data.VirtualdiskSize = types.Int64Value(int64(respData.F5TenantsTenant[0].Config.Storage.Size))
 	}
-	memoryInt, _ := strconv.Atoi(respData.F5TenantsTenant[0].State.Memory)
-	if !data.Memory.IsNull() {
+	// memory is Optional+Computed. When the user configured a known value it was
+	// already sent to the device via calculateMemory, so we preserve the planned
+	// value to avoid a "provider produced inconsistent result after apply" error
+	// if the device normalizes it. When the plan value is null/unknown (import,
+	// or auto-calculated) we adopt the device-reported value so that import and
+	// subsequent reads populate memory instead of leaving it null.
+	if !data.Memory.IsNull() && !data.Memory.IsUnknown() {
+		// keep the user-configured value as-is
+	} else {
+		memoryInt, _ := strconv.Atoi(respData.F5TenantsTenant[0].State.Memory)
 		data.Memory = types.Int64Value(int64(memoryInt))
 	}
 	data.Cryptos = types.StringValue(respData.F5TenantsTenant[0].State.Cryptos)
@@ -437,6 +473,28 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	} else if data.DeploymentFile.IsUnknown() {
 		data.DeploymentFile = types.StringNull()
 	}
+	// Map the F5OS 2.0.0 tenant state fields. These attributes are Computed,
+	// so they must always be set to a known value to avoid a provider
+	// inconsistent-result error. On devices that predate 2.0.0 the fields are
+	// absent and decode to their zero values, which we surface as-is.
+	//
+	// max_nodes is Optional+Computed. When the user configured a known value it
+	// was already sent to the device via the config builders, so we must
+	// preserve the planned value here — overwriting it with a (potentially
+	// device-normalized) different value would trigger a "provider produced
+	// inconsistent result after apply" error. Only when the plan value is
+	// null/unknown (import, or Computed-only on older devices) do we adopt the
+	// device value, falling back to null when the device did not report one.
+	if !data.MaxNodes.IsNull() && !data.MaxNodes.IsUnknown() {
+		// keep the user-configured value as-is
+	} else if respData.F5TenantsTenant[0].State.MaxNodes != 0 {
+		data.MaxNodes = types.Int64Value(int64(respData.F5TenantsTenant[0].State.MaxNodes))
+	} else {
+		data.MaxNodes = types.Int64Null()
+	}
+	data.MgmtVlan = types.Int64Value(int64(respData.F5TenantsTenant[0].State.MgmtVlan))
+	data.MgmtVlanAccessible = types.BoolValue(respData.F5TenantsTenant[0].State.MgmtVlanAccessible)
+	data.ClusteringAsService = types.BoolValue(respData.F5TenantsTenant[0].State.FeatureFlags.ClusteringAsService)
 }
 
 func (r *TenantResource) getTenantCreateConfig(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) *f5ossdk.F5ReqTenants {
@@ -468,6 +526,12 @@ func (r *TenantResource) getTenantCreateConfig(ctx context.Context, req resource
 	tenantSubbj.Config.Cryptos = data.Cryptos.ValueString()
 	data.Nodes.ElementsAs(ctx, &tenantSubbj.Config.Nodes, false)
 	tenantSubbj.Config.Storage.Size = int(data.VirtualdiskSize.ValueInt64())
+	// max-nodes was introduced in F5OS 2.0.0. Only send it when the device
+	// supports it and the user supplied a value, otherwise older devices
+	// would reject the unknown field.
+	if platformVersionAtLeast(r.client.PlatformVersion, "v2.0") && !data.MaxNodes.IsNull() && !data.MaxNodes.IsUnknown() {
+		tenantSubbj.Config.MaxNodes = int(data.MaxNodes.ValueInt64())
+	}
 
 	tenantConfig := new(f5ossdk.F5ReqTenants)
 	tenantConfig.F5TenantsTenant = append(tenantConfig.F5TenantsTenant, tenantSubbj)
@@ -496,6 +560,12 @@ func (r *TenantResource) getTenantUpdateConfig(ctx context.Context, req resource
 	tenantSubbj.Config.RunningState = data.RunningState.ValueString()
 	tenantSubbj.Config.Cryptos = data.Cryptos.ValueString()
 	tenantSubbj.Config.Storage.Size = int(data.VirtualdiskSize.ValueInt64())
+	// max-nodes was introduced in F5OS 2.0.0. Only send it when the device
+	// supports it and the user supplied a value, otherwise older devices
+	// would reject the unknown field.
+	if platformVersionAtLeast(r.client.PlatformVersion, "v2.0") && !data.MaxNodes.IsNull() && !data.MaxNodes.IsUnknown() {
+		tenantSubbj.Config.MaxNodes = int(data.MaxNodes.ValueInt64())
+	}
 
 	tenantpatchConfig := new(f5ossdk.F5ReqTenantsPatch)
 	tenantpatchConfig.F5TenantsTenants.Tenant = append(tenantpatchConfig.F5TenantsTenants.Tenant, tenantSubbj)

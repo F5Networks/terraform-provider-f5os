@@ -30,4 +30,20 @@ export NO_PROXY=localhost,127.0.0.1,.internal.example.com
 
 When these variables are set, API and telemetry calls are routed through the proxy unless the target matches `NO_PROXY`.
 
+## Custom HTTP Headers
+
+The `custom_headers` attribute lets you inject arbitrary HTTP headers into every F5OS API request. When an HTTPS proxy is in use, the headers are also added to the CONNECT tunnel request (the "outer" frame), which is required for proxy authentication schemes that inspect tunnel headers.
+
+```hcl
+provider "f5os" {
+  host     = "https://192.0.2.1"
+  username = "admin"
+  password = "secret"
+  custom_headers = {
+    "X-Tenant-ID"  = "my-tenant"
+    "X-Request-ID" = "my-request-id"
+  }
+}
+```
+
 {{ .SchemaMarkdown | trimspace }}

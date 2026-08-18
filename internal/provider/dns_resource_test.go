@@ -695,8 +695,6 @@ func TestUnitDNSDeletePreservesDeviceConfig(t *testing.T) {
 // Acceptance test helpers
 // ---------------------------------------------------------------------------
 
-
-
 // testAccCheckDNSServerPresentOnDevice queries the device directly and
 // verifies that the given server address is present in the DNS config.
 // Uses a "contains" check rather than exact match because PatchDNSConfig
@@ -1148,10 +1146,9 @@ func testAccCheckDNSDomainAbsentOnDevice(domain string) resource.TestCheckFunc {
 // which caused the Terraform Plugin Framework to reject the apply with
 // "provider returned invalid result object after apply".
 //
-// Note: The implicit refresh-after-apply may show a non-empty plan because
-// the device has residual DNS entries from prior tests (PATCH is additive,
-// Delete is a no-op). This is a known pre-existing issue unrelated to the
-// null-domain fix. We use ExpectNonEmptyPlan to acknowledge this.
+// The refresh-after-apply is expected to yield a clean (empty) plan once the
+// null-domain fix populates dns_domains as an empty list. If the device
+// legitimately drifts, the step should fail rather than be masked.
 //
 // Safety: Uses 10.255.255.x (non-routable) and .invalid domain (RFC 2606).
 func TestAccDNSCreateWithoutDomains(t *testing.T) {
@@ -1161,8 +1158,7 @@ func TestAccDNSCreateWithoutDomains(t *testing.T) {
 		CheckDestroy:             testAccCheckDNSDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config:             testAccDNSNoDomains,
-				ExpectNonEmptyPlan: true, // residual device state from additive PATCH
+				Config: testAccDNSNoDomains,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_dns.acc_test", "dns_servers.#", "1"),
 					resource.TestCheckResourceAttr("f5os_dns.acc_test", "dns_servers.0", "10.255.255.80"),
@@ -1187,9 +1183,6 @@ func TestAccDNSCreateWithoutDomains(t *testing.T) {
 // Before the fix, Update could return null for dns_domains, causing the
 // same "invalid result" error as Create.
 //
-// Note: ExpectNonEmptyPlan is set because the device may have residual
-// entries from prior tests (PATCH is additive, Delete is a no-op).
-//
 // Safety: Uses 10.255.255.x (non-routable) and .invalid domains (RFC 2606).
 func TestAccDNSUpdateRemovesAllDomains(t *testing.T) {
 	resource.Test(t, resource.TestCase{
@@ -1199,8 +1192,7 @@ func TestAccDNSUpdateRemovesAllDomains(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Step 1: Create with a server and a domain.
 			{
-				Config:             testAccDNSWithOneDomain,
-				ExpectNonEmptyPlan: true,
+				Config: testAccDNSWithOneDomain,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_dns.acc_test", "dns_servers.#", "1"),
 					resource.TestCheckResourceAttr("f5os_dns.acc_test", "dns_servers.0", "10.255.255.81"),
@@ -1231,9 +1223,6 @@ func TestAccDNSUpdateRemovesAllDomains(t *testing.T) {
 // dns_domains and then updating to add one. This exercises the Update code
 // path that was also fixed to avoid returning null for the Computed attribute.
 //
-// Note: ExpectNonEmptyPlan is set because the device may have residual
-// entries from prior tests (PATCH is additive, Delete is a no-op).
-//
 // Safety: Uses 10.255.255.x (non-routable) and .invalid domains (RFC 2606).
 func TestAccDNSUpdateAddsDomains(t *testing.T) {
 	resource.Test(t, resource.TestCase{
@@ -1244,8 +1233,7 @@ func TestAccDNSUpdateAddsDomains(t *testing.T) {
 			// Step 1: Create without domains — verify state shows empty
 			// list and server is present on device.
 			{
-				Config:             testAccDNSNoDomains2,
-				ExpectNonEmptyPlan: true,
+				Config: testAccDNSNoDomains2,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_dns.acc_test", "dns_servers.0", "10.255.255.82"),
 					resource.TestCheckResourceAttr("f5os_dns.acc_test", "dns_domains.#", "0"),

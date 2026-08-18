@@ -2,10 +2,13 @@ package provider
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -16,7 +19,7 @@ import (
 
 func TestAccTenantDeployResource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -48,7 +51,7 @@ func TestAccTenantDeployResource(t *testing.T) {
 
 func TestAccTenantDeployResourceTC4(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -99,12 +102,12 @@ func TestUnitTenantDeployResourceUnitTC1(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 		_, _ = fmt.Fprintf(w, ``)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `{
 	   "f5-tenant-images:image": [
 	       {
-	           "name": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+	           "name": %q,
 	           "in-use": false,
 	           "type": "vm-image",
 	           "status": "replicated",
@@ -112,7 +115,7 @@ func TestUnitTenantDeployResourceUnitTC1(t *testing.T) {
 	           "size": "2.27 GB"
 	       }
 	   ]
-	}`)
+	}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -149,11 +152,11 @@ func TestUnitTenantDeployResourceUnitTC1(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Step 1: Create and verify type is populated from device
 			{
-				Config: testAccTenantDeployResourceConfig,
+				Config: testAccTenantDeployResourceConfig(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "id", "testtenant-ecosys2"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
-					resource.TestCheckResourceAttr("f5os_tenant.test2", "image_name", "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "image_name", tenantUnitTestImage),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_ip", "10.10.10.26"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_gateway", "10.10.10.1"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "type", "BIG-IP"),
@@ -175,11 +178,11 @@ func TestUnitTenantDeployResourceUnitTC1(t *testing.T) {
 			},
 			// Step 3: Update and verify type is still correct
 			{
-				Config: testAccTenantDeployResourceConfigModify,
+				Config: testAccTenantDeployResourceConfigModify(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "id", "testtenant-ecosys2"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
-					resource.TestCheckResourceAttr("f5os_tenant.test2", "image_name", "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "image_name", tenantUnitTestImage),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_ip", "10.10.10.27"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_gateway", "10.10.10.1"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "type", "BIG-IP"),
@@ -212,9 +215,9 @@ func TestUnitTenantTypePopulatedOnImport(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -249,7 +252,7 @@ func TestUnitTenantTypePopulatedOnImport(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Step 1: Create
 			{
-				Config: testAccTenantDeployResourceConfig,
+				Config: testAccTenantDeployResourceConfig(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "type", "BIG-IP"),
 				),
@@ -301,9 +304,9 @@ func TestUnitTenantVlansPopulatedFromDevice(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -338,7 +341,7 @@ func TestUnitTenantVlansPopulatedFromDevice(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccTenantVlansMultiConfig,
+				Config: testAccTenantVlansMultiConfig(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "vlans.#", "3"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "vlans.0", "10"),
@@ -368,9 +371,9 @@ func TestUnitTenantVlansNullWhenDeviceReturnsNone(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -405,7 +408,7 @@ func TestUnitTenantVlansNullWhenDeviceReturnsNone(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccTenantNoVlansConfig,
+				Config: testAccTenantNoVlansConfig(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
 					resource.TestCheckNoResourceAttr("f5os_tenant.test2", "vlans.#"),
@@ -427,12 +430,12 @@ func TestUnitTenantDeployResourceUnitTC2(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_r4k_state.json"))
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `{
 	   "f5-tenant-images:image": [
 	       {
-	           "name": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+	           "name": %q,
 	           "in-use": false,
 	           "type": "vm-image",
 	           "status": "replicated",
@@ -440,7 +443,7 @@ func TestUnitTenantDeployResourceUnitTC2(t *testing.T) {
 	           "size": "2.27 GB"
 	       }
 	   ]
-	}`)
+	}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -474,11 +477,11 @@ func TestUnitTenantDeployResourceUnitTC2(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Read testing
 			{
-				Config: testAccTenantDeployTC2ResourceConfig,
+				Config: testAccTenantDeployTC2ResourceConfig(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "id", "testtenant-ecosys2"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
-					resource.TestCheckResourceAttr("f5os_tenant.test2", "image_name", "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "image_name", tenantUnitTestImage),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_ip", "10.14.10.10"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_gateway", "10.14.10.1"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "type", "BIG-IP"),
@@ -506,12 +509,12 @@ func TestUnitTenantDeployResourceUnitTC3(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 		_, _ = fmt.Fprintf(w, ``)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `{
 	   "f5-tenant-images:image": [
 	       {
-	           "name": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+	           "name": %q,
 	           "in-use": false,
 	           "type": "vm-image",
 	           "status": "replicated",
@@ -519,7 +522,7 @@ func TestUnitTenantDeployResourceUnitTC3(t *testing.T) {
 	           "size": "2.27 GB"
 	       }
 	   ]
-	}`)
+	}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -538,8 +541,69 @@ func TestUnitTenantDeployResourceUnitTC3(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Read testing
 			{
-				Config:      testAccTenantDeployResourceTC3Config,
+				Config:      testAccTenantDeployResourceTC3Config(),
 				ExpectError: regexp.MustCompile("Tenant Deployment Pending"),
+			},
+		},
+	})
+}
+
+// TestUnitTenantDeployResourcePendingNoInstances2_0_0 exercises the F5OS
+// 2.0.0 state response shape where status is "Pending" but the response no
+// longer includes state.instances. tenantWait must not panic on the absent
+// (nil) instances field and instead treats the deployment as still in
+// progress. With a zero timeout the Create loop surfaces the generic timeout
+// error immediately, without dereferencing the missing instances map.
+func TestUnitTenantDeployResourcePendingNoInstances2_0_0(t *testing.T) {
+	testAccPreUnitCheck(t)
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "GET", r.Method, "Expected method 'GET', got %s", r.Method)
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "eyJhbGciOiJIXzI2NiIsInR6cCI6IkcXVCJ9.eyJhdXRoaW5mbyI6ImFkbWluIDEwMDAgOTAwMCBcL3ZhclwvRjVcL3BhcnRpdGlvbiIsImV4cCI6MTY4MDcyMDc4MiwiaWF0IjoxNjgwNzE5ODgyLCJyZW5ld2xpbWl0IjoiNSIsInVzZXJpbmZvIjoiYWRtaW4gMTcyLjE4LjIzMy4yMiJ9.c6Fw4AVm9dN4F-rRJZ1655Ks3xEWCzdAvum-Q3K7cwU")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/restconf/data/openconfig-vlan:vlans", r.URL.String(), "Expected method 'GET', got %s", r.URL.String())
+		w.WriteHeader(http.StatusNoContent)
+		_, _ = fmt.Fprintf(w, ``)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{
+	   "f5-tenant-images:image": [
+	       {
+	           "name": %q,
+	           "in-use": false,
+	           "type": "vm-image",
+	           "status": "replicated",
+	           "date": "2023-8-17",
+	           "size": "2.27 GB"
+	       }
+	   ]
+	}`, tenantUnitTestImage)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprintf(w, ``)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=test-tenant22/state", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_get_status_pending_2_0_0.json"))
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccTenantDeployResourcePendingNoInstancesConfig(),
+				ExpectError: regexp.MustCompile("tenant deployment status is still in"),
 			},
 		},
 	})
@@ -574,8 +638,6 @@ func testAccCheckTenantTypeOnDevice(tenantName, expectedType string) resource.Te
 	}
 }
 
-
-
 // testAccCheckTenantDestroy verifies the test tenant no longer exists.
 func testAccCheckTenantDestroy(s *terraform.State) error {
 	if os.Getenv("F5OS_HOST") == "" {
@@ -597,6 +659,167 @@ func testAccCheckTenantDestroy(s *terraform.State) error {
 	return nil
 }
 
+// testAccCheckTenantMaxNodesOnDevice queries the device directly and verifies
+// the tenant config max-nodes matches the expected value. Only meaningful on
+// F5OS 2.0.0+ devices.
+func testAccCheckTenantMaxNodesOnDevice(tenantName string, expected int) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTestClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+		resp, err := client.GetTenant(tenantName)
+		if err != nil {
+			return fmt.Errorf("GetTenant failed: %w", err)
+		}
+		if len(resp.F5TenantsTenant) == 0 {
+			return fmt.Errorf("tenant %q not found on device", tenantName)
+		}
+		actual := resp.F5TenantsTenant[0].State.MaxNodes
+		if actual != expected {
+			return fmt.Errorf("tenant %q max-nodes: expected %d, got %d", tenantName, expected, actual)
+		}
+		return nil
+	}
+}
+
+// testAccCheckTenantMacBlockHandledOnDevice fetches the raw tenant state from
+// the device and verifies the provider's mac-block contract holds on a real
+// 2.0.0 device: mac-pool-size (which the provider reads to derive
+// mac_block_size) is present, and the tenant Create/Read succeeded regardless
+// of whether the legacy state.mac-data.f5-tenant-l2-inline:mac-block leaf-list
+// is present.
+//
+// NOTE: the codebase previously assumed F5OS 2.0.0 removed the mac-block
+// leaf-list entirely (see fixture tenant_get_status_2_0_0_shape.json and unit
+// test TestUnitTenantMacBlockAbsent2_0_0). On the real 2.0.0-22925 device this
+// leaf-list is in fact STILL PRESENT. That is fine functionally — the provider
+// never consumes it (only mac-pool-size is read) — so this check verifies the
+// provider tolerates whichever shape the device returns rather than asserting
+// absence. The presence is logged so the discrepancy is visible in test output.
+// The check reads the raw JSON (not the decoded struct) so the observed shape
+// is not masked by the struct's omitempty tags.
+func testAccCheckTenantMacBlockHandledOnDevice(tenantName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTestClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+		raw, err := client.GetTenantRequest(fmt.Sprintf("/f5-tenants:tenants/tenant=%s/state", tenantName))
+		if err != nil {
+			return fmt.Errorf("failed to read raw tenant state: %w", err)
+		}
+		body := string(raw)
+		// mac-pool-size is the leaf the provider actually reads; it must be
+		// present on 2.0.0.
+		if !strings.Contains(body, "mac-pool-size") {
+			return fmt.Errorf("expected mac-pool-size to be present in tenant %q state on 2.0.0, but it is absent: %s", tenantName, body)
+		}
+		if strings.Contains(body, "f5-tenant-l2-inline:mac-block\"") {
+			// Present on this build — provider ignores it, so this is not an
+			// error, but surface it so the fixture/unit-test assumption
+			// (mac-block removed on 2.0.0) can be reconciled with reality.
+			fmt.Printf("[acc] NOTE: tenant %q state on this 2.0.0 build still includes the f5-tenant-l2-inline:mac-block leaf-list; provider ignores it (reads mac-pool-size only)\n", tenantName)
+		}
+		return nil
+	}
+}
+
+// testAccPreCheckTenant2_0_0 runs the standard acceptance pre-check and then
+// skips the test unless the device is running F5OS 2.0.0 or later, since
+// max_nodes and the associated read-only state fields only exist on 2.0.0+.
+func testAccPreCheckTenant2_0_0(t *testing.T) {
+	t.Helper()
+	testAccPreCheck(t)
+
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Fatalf("testAccPreCheckTenant2_0_0: failed to create session: %s", err)
+	}
+	if !platformVersionAtLeast(client.PlatformVersion, "v2.0") {
+		t.Skipf("skipping: test requires F5OS 2.0.0+ but device reports %q", client.PlatformVersion)
+	}
+	// Ensure the tenant image is present (the test creates a tenant that
+	// references it). Done after the version gate so we don't import on
+	// devices where the test would skip.
+	testAccEnsureImageNamed(t, tenantTestImage())
+}
+
+func testAccTenantMaxNodesConfigFunc() string {
+	return testAccTenantMaxNodesConfigForNodes(8)
+}
+
+// testAccTenantMaxNodesConfigForNodes returns the max_nodes tenant config with
+// a parameterized max_nodes value so the Update path can be exercised.
+func testAccTenantMaxNodesConfigForNodes(maxNodes int) string {
+	return fmt.Sprintf(`
+resource "f5os_tenant" "max_nodes_test" {
+  name              = "test-max-nodes"
+  image_name        = %q
+  mgmt_ip           = "10.10.10.52"
+  mgmt_gateway      = "10.10.10.1"
+  mgmt_prefix       = 24
+  type              = "BIG-IP"
+  cpu_cores         = 2
+  running_state     = "configured"
+  virtual_disk_size = %d
+  max_nodes         = %d
+}
+`, tenantTestImage(), tenantTestDiskSize(), maxNodes)
+}
+
+// TestAccTenantMaxNodes2_0_0 verifies, against a real F5OS 2.0.0+ device, that
+// config.max-nodes is applied and that the read-only 2.0.0 state fields
+// (max_nodes, mgmt_vlan, mgmt_vlan_accessible, clustering_as_service) are
+// populated into state. Skips on devices below 2.0.0.
+func TestAccTenantMaxNodes2_0_0(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheckTenant2_0_0(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantDestroy,
+		Steps: []resource.TestStep{
+			// Step 1: Create and verify max_nodes in state and on the device.
+			{
+				Config: testAccTenantMaxNodesConfigFunc(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant.max_nodes_test", "name", "test-max-nodes"),
+					resource.TestCheckResourceAttr("f5os_tenant.max_nodes_test", "max_nodes", "8"),
+					resource.TestCheckResourceAttr("f5os_tenant.max_nodes_test", "status", "Configured"),
+					// These are read-only computed attributes; assert they are
+					// set (present in state). Exact values are device-specific.
+					resource.TestCheckResourceAttrSet("f5os_tenant.max_nodes_test", "mgmt_vlan"),
+					resource.TestCheckResourceAttrSet("f5os_tenant.max_nodes_test", "mgmt_vlan_accessible"),
+					resource.TestCheckResourceAttrSet("f5os_tenant.max_nodes_test", "clustering_as_service"),
+					// Direct device API verification.
+					testAccCheckTenantMaxNodesOnDevice("test-max-nodes", 8),
+					// Verify the provider's mac-block contract on a real 2.0.0
+					// device (mac-pool-size present and consumed; mac-block
+					// leaf-list tolerated whether present or absent).
+					testAccCheckTenantMacBlockHandledOnDevice("test-max-nodes"),
+				),
+			},
+			// NOTE: an in-place max_nodes update step is intentionally omitted.
+			// On the 2.0.0-22925 device the platform rejects changing max-nodes
+			// on an existing tenant ("<n> is out of range" for values other than
+			// the create-time value), so the write-path Update for max-nodes is
+			// exercised by the unit tests (mock) instead. Create + device verify
+			// + import below cover the read/create paths on a real device.
+			//
+			// Step 2: Import — max_nodes can only be populated if
+			// tenantResourceModeltoState reads State.MaxNodes from the device.
+			{
+				ResourceName:      "f5os_tenant.max_nodes_test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"timeout",
+					"virtual_disk_size",
+				},
+			},
+		},
+	})
+}
+
 func testAccTenantTypeFieldConfigFunc() string {
 	return fmt.Sprintf(`
 resource "f5os_tenant" "type_test" {
@@ -608,14 +831,14 @@ resource "f5os_tenant" "type_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }
 
 func TestAccTenantDeployResourceTypeField(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -713,7 +936,7 @@ func testAccCheckTenantNoVlansOnDevice(tenantName string) resource.TestCheckFunc
 // is reserved for testing per the skill safety rules).
 func TestAccTenantVlansPopulatedInState(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenantVlans(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -759,7 +982,7 @@ func TestAccTenantVlansPopulatedInState(t *testing.T) {
 
 func TestAccTenantNoVlansInState(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -815,7 +1038,7 @@ func testAccCheckTenantNoDeploymentFileOnDevice(tenantName string) resource.Test
 // BIG-IP tenant, deployment_file is absent in state and empty on device.
 func TestAccTenantDeploymentFileAbsentForBigIP(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -856,9 +1079,9 @@ resource "f5os_tenant" "df_bigip_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }
 
 // ---------------------------------------------------------------------------
@@ -866,14 +1089,68 @@ resource "f5os_tenant" "df_bigip_test" {
 // ---------------------------------------------------------------------------
 
 // tenantTestImage returns the BIG-IP tenant image name to use in acceptance
-// tests. Set F5OS_TENANT_IMAGE to override the default. Unit tests using the
-// mock server keep the original hardcoded name in their fixtures/constants.
+// tests. Set F5OS_TENANT_IMAGE to override the default. Unit tests use the
+// mock server and instead reference tenantUnitTestImage.
+//
+// The default returns the same image name that the acc:tenant_image CI job
+// imports (testAccImageName in tenant_image_resource_test.go), because the
+// tenant CI job runs after acc:tenant_image and relies on that image
+// already being present on the DUT. Keep this in sync with testAccImageName.
 func tenantTestImage() string {
 	if v := os.Getenv("F5OS_TENANT_IMAGE"); v != "" {
 		return v
 	}
-	return "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+	return testAccImageName
 }
+
+// tenantTestDiskSize returns the virtual_disk_size (GB) to use in tenant
+// acceptance configs. Different BIG-IP images enforce different minimum disk
+// sizes: the default 17.1.0.1 image accepts 83, but newer builds (e.g. a
+// 21.1.0 image on a 2.0.0 DUT) reject it with "Storage size(83) must be
+// greater than or equal to 86". Override with F5OS_TENANT_DISK_SIZE on the
+// pipeline schedule to match the image selected via F5OS_TENANT_IMAGE. The
+// default 83 preserves existing behavior on the 17.1.0.1 image.
+func tenantTestDiskSize() int {
+	if v := os.Getenv("F5OS_TENANT_DISK_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 83
+}
+
+// testAccPreCheckTenant is the PreCheck for tenant acceptance tests. In
+// addition to the standard env-var check it ensures the tenant image
+// (tenantTestImage()) is present on the DUT, importing it if necessary.
+//
+// The tenant resource's Create fails fast with a 404 ("Tenant Image ... not
+// found") if the image is absent. On shared devices the image can be
+// deleted/re-imported by concurrent jobs (e.g. acc:tenant_image), so relying
+// on another job to have left it in place is racy. Ensuring it here makes the
+// tenant tests self-sufficient and mirrors the tenant_image tests'
+// testAccPreCheckWithSetup pattern.
+func testAccPreCheckTenant(t *testing.T) {
+	testAccPreCheck(t)
+	testAccEnsureImageNamed(t, tenantTestImage())
+}
+
+// testAccPreCheckTenantVlans is the PreCheck for the tenant VLAN test. In
+// addition to ensuring the tenant image, it ensures VLANs 3910/3920/3930 exist
+// on the DUT. A tenant that references a VLAN which does not exist fails Create
+// with a 400 "illegal reference .../config/vlans". These VLANs are not
+// guaranteed to persist on shared devices between runs, so the test ensures
+// them itself (3900-3999 is the reserved test range).
+func testAccPreCheckTenantVlans(t *testing.T) {
+	testAccPreCheckTenant(t)
+	testAccEnsureVlans(t, 3910, 3920, 3930)
+}
+
+// tenantUnitTestImage is the placeholder tenant image name used by unit tests
+// that run against the mock server. The value is arbitrary — it only has to
+// match consistently across the mock handler URL, the mock JSON response, the
+// HCL config, and any state assertions — so an obviously-fake name is used to
+// avoid implying a real BIG-IP build is required.
+const tenantUnitTestImage = "dumm_image_unit_test.qcow2.zip.bundle"
 
 // --- Acceptance test configs (use tenantTestImage()) ---
 
@@ -888,9 +1165,9 @@ resource "f5os_tenant" "test2" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }
 
 func testAccTenantWithVlansConfigFunc(vlans []int) string {
@@ -911,10 +1188,10 @@ resource "f5os_tenant" "vlans_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
   vlans             = [%s]
 }
-`, tenantTestImage(), vlanStr)
+`, tenantTestImage(), tenantTestDiskSize(), vlanStr)
 }
 
 func testAccTenantWithoutVlansConfigFunc() string {
@@ -928,9 +1205,9 @@ resource "f5os_tenant" "vlans_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }
 
 func testAccTenantDeployTC4ResourceConfigFunc() string {
@@ -944,17 +1221,18 @@ resource "f5os_tenant" "test2" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }
 
 // --- Unit test configs (keep hardcoded image for mock server) ---
 
-const testAccTenantDeployResourceConfig = `
+func testAccTenantDeployResourceConfig() string {
+	return fmt.Sprintf(`
 resource "f5os_tenant" "test2" {
   name              = "testtenant-ecosys2"
-  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  image_name        = %q
   mgmt_ip           = "10.10.10.26"
   mgmt_gateway      = "10.10.10.1"
   mgmt_prefix       = 24
@@ -964,12 +1242,14 @@ resource "f5os_tenant" "test2" {
   virtual_disk_size = 82
   vlans             = [ 1 ]
 }
-`
+`, tenantUnitTestImage)
+}
 
-const testAccTenantDeployResourceConfigModify = `
+func testAccTenantDeployResourceConfigModify() string {
+	return fmt.Sprintf(`
 resource "f5os_tenant" "test2" {
   name              = "testtenant-ecosys2"
-  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  image_name        = %q
   mgmt_ip           = "10.10.10.27"
   mgmt_gateway      = "10.10.10.1"
   mgmt_prefix       = 24
@@ -979,12 +1259,14 @@ resource "f5os_tenant" "test2" {
   virtual_disk_size = 82
   vlans             = [ 1 ]
 }
-`
+`, tenantUnitTestImage)
+}
 
-const testAccTenantDeployTC2ResourceConfig = `
+func testAccTenantDeployTC2ResourceConfig() string {
+	return fmt.Sprintf(`
 resource "f5os_tenant" "test2" {
   name              = "testtenant-ecosys2"
-  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  image_name        = %q
   mgmt_ip           = "10.14.10.10"
   mgmt_gateway      = "10.14.10.1"
   mgmt_prefix       = 24
@@ -996,11 +1278,13 @@ resource "f5os_tenant" "test2" {
   cryptos           = "enabled"
   vlans             = [1,2,3]
 }
-`
-const testAccTenantDeployResourceTC3Config = `
+`, tenantUnitTestImage)
+}
+func testAccTenantDeployResourceTC3Config() string {
+	return fmt.Sprintf(`
 resource "f5os_tenant" "test-tenant22" {
   name              = "test-tenant22"
-  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  image_name        = %q
   mgmt_ip           = "10.10.30.30"
   mgmt_gateway      = "10.10.30.1"
   mgmt_prefix       = 24
@@ -1010,7 +1294,30 @@ resource "f5os_tenant" "test-tenant22" {
   running_state     = "configured"
   virtual_disk_size = 82
 }
-`
+`, tenantUnitTestImage)
+}
+
+// testAccTenantDeployResourcePendingNoInstancesConfig uses a zero timeout so
+// the CreateTenant poll loop hits the timeout branch on the first iteration
+// (before any long production sleep), letting the 2.0.0 pending-without-
+// instances path be verified without waiting on real timers.
+func testAccTenantDeployResourcePendingNoInstancesConfig() string {
+	return fmt.Sprintf(`
+resource "f5os_tenant" "test-tenant22" {
+  name              = "test-tenant22"
+  image_name        = %q
+  mgmt_ip           = "10.10.30.30"
+  mgmt_gateway      = "10.10.30.1"
+  mgmt_prefix       = 24
+  type              = "BIG-IP"
+  nodes 			= [2]
+  cpu_cores         = 8
+  running_state     = "configured"
+  virtual_disk_size = 82
+  timeout           = 0
+}
+`, tenantUnitTestImage)
+}
 
 //
 //const testAccTenantDeployTC4ResourceConfig = `
@@ -1030,10 +1337,11 @@ resource "f5os_tenant" "test-tenant22" {
 //}
 //`
 
-const testAccTenantVlansMultiConfig = `
+func testAccTenantVlansMultiConfig() string {
+	return fmt.Sprintf(`
 resource "f5os_tenant" "test2" {
   name              = "testtenant-ecosys2"
-  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  image_name        = %q
   mgmt_ip           = "10.10.10.26"
   mgmt_gateway      = "10.10.10.1"
   mgmt_prefix       = 24
@@ -1043,12 +1351,14 @@ resource "f5os_tenant" "test2" {
   virtual_disk_size = 82
   vlans             = [10, 20, 30]
 }
-`
+`, tenantUnitTestImage)
+}
 
-const testAccTenantNoVlansConfig = `
+func testAccTenantNoVlansConfig() string {
+	return fmt.Sprintf(`
 resource "f5os_tenant" "test2" {
   name              = "testtenant-ecosys2"
-  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  image_name        = %q
   mgmt_ip           = "10.10.10.26"
   mgmt_gateway      = "10.10.10.1"
   mgmt_prefix       = 24
@@ -1057,7 +1367,8 @@ resource "f5os_tenant" "test2" {
   running_state     = "configured"
   virtual_disk_size = 82
 }
-`
+`, tenantUnitTestImage)
+}
 
 // TestUnitTenantDeploymentFileNullForBigIP verifies that for a standard BIG-IP
 // tenant (no deployment_file in HCL or API response), the deployment_file
@@ -1077,9 +1388,9 @@ func TestUnitTenantDeploymentFileNullForBigIP(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -1114,7 +1425,7 @@ func TestUnitTenantDeploymentFileNullForBigIP(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccTenantDeployResourceConfig,
+				Config: testAccTenantDeployResourceConfig(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "type", "BIG-IP"),
@@ -1162,7 +1473,7 @@ func TestUnitTenantCreateVelosControllerError(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config:      testAccTenantDeployResourceConfig,
+				Config:      testAccTenantDeployResourceConfig(),
 				ExpectError: regexp.MustCompile("Unsupported platform for resource"),
 			},
 		},
@@ -1240,9 +1551,9 @@ func TestUnitTenantCreateImageNotPresent(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	// Return image with status "not-present"
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"not-present","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"not-present","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 
 	defer teardown()
@@ -1252,7 +1563,7 @@ func TestUnitTenantCreateImageNotPresent(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config:      testAccTenantDeployResourceConfig,
+				Config:      testAccTenantDeployResourceConfig(),
 				ExpectError: regexp.MustCompile(`not-present.*on the device`),
 			},
 		},
@@ -1275,9 +1586,9 @@ func TestUnitTenantCreateBadRequestError(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -1291,7 +1602,7 @@ func TestUnitTenantCreateBadRequestError(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config:      testAccTenantDeployResourceConfig,
+				Config:      testAccTenantDeployResourceConfig(),
 				ExpectError: regexp.MustCompile("400 Bad Request"),
 			},
 		},
@@ -1314,9 +1625,9 @@ func TestUnitTenantCreateObjectExistsError(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
@@ -1330,7 +1641,7 @@ func TestUnitTenantCreateObjectExistsError(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config:      testAccTenantDeployResourceConfig,
+				Config:      testAccTenantDeployResourceConfig(),
 				ExpectError: regexp.MustCompile("object already exists"),
 			},
 		},
@@ -1355,9 +1666,9 @@ func TestUnitTenantCreateGetTenantError(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -1386,7 +1697,7 @@ func TestUnitTenantCreateGetTenantError(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config:      testAccTenantDeployResourceConfig,
+				Config:      testAccTenantDeployResourceConfig(),
 				ExpectError: regexp.MustCompile("not found"),
 			},
 		},
@@ -1410,9 +1721,9 @@ func TestUnitTenantReadError(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -1453,7 +1764,7 @@ func TestUnitTenantReadError(t *testing.T) {
 			// Step 1: Create succeeds, but post-apply Read fails with "not found"
 			// This exercises the Read error path.
 			{
-				Config:      testAccTenantDeployResourceConfig,
+				Config:      testAccTenantDeployResourceConfig(),
 				ExpectError: regexp.MustCompile("not found"),
 			},
 		},
@@ -1477,9 +1788,9 @@ func TestUnitTenantDeleteError(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -1524,7 +1835,7 @@ func TestUnitTenantDeleteError(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Step 1: Create succeeds
 			{
-				Config: testAccTenantDeployResourceConfig,
+				Config: testAccTenantDeployResourceConfig(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
 				),
@@ -1532,12 +1843,319 @@ func TestUnitTenantDeleteError(t *testing.T) {
 			// Step 2: Destroy fails with a delete error, exercising the error
 			// path in Delete.
 			{
-				Config:      testAccTenantDeployResourceConfig,
+				Config:      testAccTenantDeployResourceConfig(),
 				Destroy:     true,
 				ExpectError: regexp.MustCompile("delete failed"),
 			},
 		},
 	})
+}
+
+// TestUnitTenantMacBlockAbsent2_0_0 verifies that a tenant Read succeeds when
+// the F5OS 2.0.0 state response omits state.mac-data.f5-tenant-l2-inline:mac-block.
+// The provider only consumes mac-data.mac-pool-size (still present in 2.0.0) to
+// derive mac_block_size, and the absent mac-block slice decodes to nil, so the
+// missing field is a functional no-op — no error and no panic.
+func TestUnitTenantMacBlockAbsent2_0_0(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	// The poll/state endpoint (used by tenantWait) returns the 2.0.0 state
+	// shape with mac-data but no mac-block.
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2/state", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_get_status_2_0_0.json"))
+	})
+	deleted := false
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "DELETE" {
+			deleted = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == "GET" && !deleted {
+			w.WriteHeader(http.StatusOK)
+			// The Read path (GetTenant) returns the 2.0.0 full object whose
+			// state.mac-data omits f5-tenant-l2-inline:mac-block.
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_config_2_0_0.json"))
+		} else if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"invalid-value","error-message":"uri keypath not found"}]}}`)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantMacBlockAbsent2_0_0(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// mac-pool-size 1 -> "one"; absence of mac-block is a no-op.
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "mac_block_size", "one"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "status", "Configured"),
+				),
+			},
+		},
+	})
+}
+
+func testAccTenantMacBlockAbsent2_0_0() string {
+	return fmt.Sprintf(`
+resource "f5os_tenant" "test2" {
+  name              = "testtenant-ecosys2"
+  image_name        = %q
+  mgmt_ip           = "10.10.10.26"
+  mgmt_gateway      = "10.10.10.1"
+  mgmt_prefix       = 24
+  type              = "BIG-IP"
+  cpu_cores         = 8
+  running_state     = "configured"
+  virtual_disk_size = 82
+  mac_block_size    = "one"
+  vlans             = [ 1 ]
+}
+`, tenantUnitTestImage)
+}
+
+// setupTenant2_0_0MaxNodesMocks registers the shared mock handlers used by the
+// max_nodes / 2.0.0-state tests. The device version reported to the provider is
+// controlled by the caller via setupMockPlatformVersion so both the
+// version-gated (>= v2.0) and pre-2.0 code paths can be exercised. The create
+// PATCH/POST body is captured into capturedBody so the test can assert whether
+// the max-nodes field was sent.
+func setupTenant2_0_0MaxNodesMocks(t *testing.T, capturedBody *string, mu *sync.Mutex, statusFixture, configFixture string) {
+	t.Helper()
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
+	})
+	// Capture the tenant create request body so the test can assert whether
+	// max-nodes was included in the payload.
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		*capturedBody = string(body)
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2/state", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString(statusFixture))
+	})
+	deleted := false
+	mux.HandleFunc("/restconf/data/f5-tenants:tenants/tenant=testtenant-ecosys2", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "DELETE" {
+			deleted = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == "GET" && !deleted {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "%s", loadFixtureString(configFixture))
+		} else if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"invalid-value","error-message":"uri keypath not found"}]}}`)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+}
+
+// TestUnitTenant2_0_0MaxNodesAndState verifies that on an F5OS 2.0.0 device the
+// provider (1) sends config.max-nodes in the create payload and (2) reads back
+// the new 2.0.0 state fields — max_nodes, mgmt_vlan, mgmt_vlan_accessible, and
+// clustering_as_service — into Terraform state.
+func TestUnitTenant2_0_0MaxNodesAndState(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	var mu sync.Mutex
+	var capturedBody string
+
+	// Report a 2.0.0 device so the version gate (>= v2.0) is satisfied.
+	setupMockPlatformVersion(mux, "2.0.0-1")
+	setupTenant2_0_0MaxNodesMocks(t, &capturedBody, &mu,
+		"./fixtures/tenant_get_status_2_0_0_max_nodes.json",
+		"./fixtures/tenant_config_2_0_0_max_nodes.json")
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenant2_0_0MaxNodes(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "max_nodes", "8"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_vlan", "4094"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "mgmt_vlan_accessible", "true"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "clustering_as_service", "true"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "status", "Configured"),
+					func(s *terraform.State) error {
+						mu.Lock()
+						defer mu.Unlock()
+						if !strings.Contains(capturedBody, "\"max-nodes\":8") {
+							return fmt.Errorf("expected create payload to contain \"max-nodes\":8 on a 2.0.0 device, got: %s", capturedBody)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitTenantMaxNodesOmittedPre2_0_0 verifies that on a pre-2.0.0 device the
+// provider does NOT send config.max-nodes in the create payload even when the
+// user supplies a max_nodes value, since the field is unknown to older devices.
+func TestUnitTenantMaxNodesOmittedPre2_0_0(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	var mu sync.Mutex
+	var capturedBody string
+
+	// Report a pre-2.0 device so the version gate (>= v2.0) is NOT satisfied.
+	setupMockPlatformVersion(mux, "1.8.0-1")
+	setupTenant2_0_0MaxNodesMocks(t, &capturedBody, &mu,
+		"./fixtures/tenant_get_status_2_0_0_max_nodes.json",
+		"./fixtures/tenant_config_2_0_0_max_nodes.json")
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenant2_0_0MaxNodes(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					func(s *terraform.State) error {
+						mu.Lock()
+						defer mu.Unlock()
+						if strings.Contains(capturedBody, "max-nodes") {
+							return fmt.Errorf("expected create payload to omit max-nodes on a pre-2.0.0 device, got: %s", capturedBody)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+func testAccTenant2_0_0MaxNodes() string {
+	return fmt.Sprintf(`
+resource "f5os_tenant" "test2" {
+  name              = "testtenant-ecosys2"
+  image_name        = %q
+  mgmt_ip           = "10.10.10.26"
+  mgmt_gateway      = "10.10.10.1"
+  mgmt_prefix       = 24
+  type              = "BIG-IP"
+  cpu_cores         = 8
+  running_state     = "configured"
+  virtual_disk_size = 82
+  mac_block_size    = "one"
+  max_nodes         = 8
+  vlans             = [ 1 ]
+}
+`, tenantUnitTestImage)
+}
+
+// TestUnitTenantMaxNodesPlanPreserved verifies that when the user configures a
+// max_nodes value that differs from what the device reports back (e.g. the
+// device normalizes/clamps max-nodes), the provider preserves the user's
+// configured value in state rather than overwriting it with the device value.
+// Overwriting would trigger a "provider produced inconsistent result after
+// apply" error. The config requests max_nodes=4 while both fixtures report
+// max-nodes=8.
+func TestUnitTenantMaxNodesPlanPreserved(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	var mu sync.Mutex
+	var capturedBody string
+
+	setupMockPlatformVersion(mux, "2.0.0-1")
+	setupTenant2_0_0MaxNodesMocks(t, &capturedBody, &mu,
+		"./fixtures/tenant_get_status_2_0_0_max_nodes_normalized.json",
+		"./fixtures/tenant_config_2_0_0_max_nodes_normalized.json")
+
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenant2_0_0MaxNodesFour(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// The device reports 8, but the user configured 4; state
+					// must equal the plan (4) or apply fails.
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "max_nodes", "4"),
+					resource.TestCheckResourceAttr("f5os_tenant.test2", "status", "Configured"),
+					// The configured value (4) is what gets sent to the device.
+					func(s *terraform.State) error {
+						mu.Lock()
+						defer mu.Unlock()
+						if !strings.Contains(capturedBody, "\"max-nodes\":4") {
+							return fmt.Errorf("expected create payload to contain \"max-nodes\":4, got: %s", capturedBody)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+func testAccTenant2_0_0MaxNodesFour() string {
+	return fmt.Sprintf(`
+resource "f5os_tenant" "test2" {
+  name              = "testtenant-ecosys2"
+  image_name        = %q
+  mgmt_ip           = "10.10.10.26"
+  mgmt_gateway      = "10.10.10.1"
+  mgmt_prefix       = 24
+  type              = "BIG-IP"
+  cpu_cores         = 8
+  running_state     = "configured"
+  virtual_disk_size = 82
+  mac_block_size    = "one"
+  max_nodes         = 4
+  vlans             = [ 1 ]
+}
+`, tenantUnitTestImage)
 }
 
 // TestUnitTenantMacBlockSizeSmall verifies mac_block_size="small" (pool_size=8).
@@ -1555,9 +2173,9 @@ func TestUnitTenantMacBlockSizeSmall(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -1591,7 +2209,7 @@ func TestUnitTenantMacBlockSizeSmall(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccTenantMacBlockSizeSmall,
+				Config: testAccTenantMacBlockSizeSmall(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "mac_block_size", "small"),
 				),
@@ -1600,10 +2218,11 @@ func TestUnitTenantMacBlockSizeSmall(t *testing.T) {
 	})
 }
 
-const testAccTenantMacBlockSizeSmall = `
+func testAccTenantMacBlockSizeSmall() string {
+	return fmt.Sprintf(`
 resource "f5os_tenant" "test2" {
   name              = "testtenant-ecosys2"
-  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  image_name        = %q
   mgmt_ip           = "10.10.10.26"
   mgmt_gateway      = "10.10.10.1"
   mgmt_prefix       = 24
@@ -1614,7 +2233,8 @@ resource "f5os_tenant" "test2" {
   mac_block_size    = "small"
   vlans             = [ 1 ]
 }
-`
+`, tenantUnitTestImage)
+}
 
 // TestUnitTenantMacBlockSizeMedium verifies mac_block_size="medium" (pool_size=16).
 func TestUnitTenantMacBlockSizeMedium(t *testing.T) {
@@ -1631,9 +2251,9 @@ func TestUnitTenantMacBlockSizeMedium(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -1667,7 +2287,7 @@ func TestUnitTenantMacBlockSizeMedium(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccTenantMacBlockSizeMedium,
+				Config: testAccTenantMacBlockSizeMedium(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "mac_block_size", "medium"),
 				),
@@ -1676,10 +2296,11 @@ func TestUnitTenantMacBlockSizeMedium(t *testing.T) {
 	})
 }
 
-const testAccTenantMacBlockSizeMedium = `
+func testAccTenantMacBlockSizeMedium() string {
+	return fmt.Sprintf(`
 resource "f5os_tenant" "test2" {
   name              = "testtenant-ecosys2"
-  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  image_name        = %q
   mgmt_ip           = "10.10.10.26"
   mgmt_gateway      = "10.10.10.1"
   mgmt_prefix       = 24
@@ -1690,7 +2311,8 @@ resource "f5os_tenant" "test2" {
   mac_block_size    = "medium"
   vlans             = [ 1 ]
 }
-`
+`, tenantUnitTestImage)
+}
 
 // TestUnitTenantMacBlockSizeLarge verifies mac_block_size="large" (pool_size=32).
 func TestUnitTenantMacBlockSizeLarge(t *testing.T) {
@@ -1707,9 +2329,9 @@ func TestUnitTenantMacBlockSizeLarge(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -1743,7 +2365,7 @@ func TestUnitTenantMacBlockSizeLarge(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccTenantMacBlockSizeLarge,
+				Config: testAccTenantMacBlockSizeLarge(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "mac_block_size", "large"),
 				),
@@ -1752,10 +2374,11 @@ func TestUnitTenantMacBlockSizeLarge(t *testing.T) {
 	})
 }
 
-const testAccTenantMacBlockSizeLarge = `
+func testAccTenantMacBlockSizeLarge() string {
+	return fmt.Sprintf(`
 resource "f5os_tenant" "test2" {
   name              = "testtenant-ecosys2"
-  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  image_name        = %q
   mgmt_ip           = "10.10.10.26"
   mgmt_gateway      = "10.10.10.1"
   mgmt_prefix       = 24
@@ -1766,7 +2389,8 @@ resource "f5os_tenant" "test2" {
   mac_block_size    = "large"
   vlans             = [ 1 ]
 }
-`
+`, tenantUnitTestImage)
+}
 
 // TestUnitTenantStorageSizeMismatch verifies the else branch in
 // tenantResourceModeltoState where State.Storage.Size != Config.Storage.Size.
@@ -1784,9 +2408,9 @@ func TestUnitTenantStorageSizeMismatch(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -1821,7 +2445,7 @@ func TestUnitTenantStorageSizeMismatch(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccTenantDeployResourceConfig,
+				Config: testAccTenantDeployResourceConfig(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
 					// When state != config, should use config size (82)
@@ -2025,9 +2649,9 @@ func TestUnitTenantUpdateError(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -2068,14 +2692,14 @@ func TestUnitTenantUpdateError(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create succeeds
 			{
-				Config: testAccTenantDeployResourceConfig,
+				Config: testAccTenantDeployResourceConfig(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
 				),
 			},
 			// Update fails
 			{
-				Config:      testAccTenantDeployResourceConfigModify,
+				Config:      testAccTenantDeployResourceConfigModify(),
 				ExpectError: regexp.MustCompile("Tenant Deploy failed"),
 			},
 		},
@@ -2098,9 +2722,9 @@ func TestUnitTenantWithExplicitMemory(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -2134,7 +2758,7 @@ func TestUnitTenantWithExplicitMemory(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccTenantWithExplicitMemory,
+				Config: testAccTenantWithExplicitMemory(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "memory", "29184"),
@@ -2144,10 +2768,11 @@ func TestUnitTenantWithExplicitMemory(t *testing.T) {
 	})
 }
 
-const testAccTenantWithExplicitMemory = `
+func testAccTenantWithExplicitMemory() string {
+	return fmt.Sprintf(`
 resource "f5os_tenant" "test2" {
   name              = "testtenant-ecosys2"
-  image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+  image_name        = %q
   mgmt_ip           = "10.10.10.26"
   mgmt_gateway      = "10.10.10.1"
   mgmt_prefix       = 24
@@ -2158,7 +2783,8 @@ resource "f5os_tenant" "test2" {
   memory            = 29184
   vlans             = [ 1 ]
 }
-`
+`, tenantUnitTestImage)
+}
 
 // TestUnitTenantRSeriesMemoryCalculation verifies the calculateMemory function
 // uses the rSeries formula (3 * 1024 * cpuCores) for rSeries platforms.
@@ -2173,9 +2799,9 @@ func TestUnitTenantRSeriesMemoryCalculation(t *testing.T) {
 		w.Header().Set("X-Auth-Token", "test-token")
 		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":"BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle","in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`)
+		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image":[{"name":%q,"in-use":false,"type":"vm-image","status":"replicated","date":"2023-8-17","size":"2.27 GB"}]}`, tenantUnitTestImage)
 	})
 	mux.HandleFunc("/restconf/data/f5-tenants:tenants", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -2209,7 +2835,7 @@ func TestUnitTenantRSeriesMemoryCalculation(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccTenantDeployTC2ResourceConfig,
+				Config: testAccTenantDeployTC2ResourceConfig(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "name", "testtenant-ecosys2"),
 					resource.TestCheckResourceAttr("f5os_tenant.test2", "status", "Running"),
@@ -2330,7 +2956,7 @@ func TestUnitTenantGetImageError(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	// GetImage fails with 500 error
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+tenantUnitTestImage, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = fmt.Fprintf(w, `{"error":"internal server error"}`)
 	})
@@ -2342,7 +2968,7 @@ func TestUnitTenantGetImageError(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config:      testAccTenantDeployResourceConfig,
+				Config:      testAccTenantDeployResourceConfig(),
 				ExpectError: regexp.MustCompile(`500|Internal Server Error|not found`),
 			},
 		},
@@ -2422,7 +3048,7 @@ func testAccCheckTenantMemoryOnDevice(tenantName string, expectedMemory int) res
 // This test exercises the mac_block_size logic in tenantResourceModeltoState.
 func TestAccTenantMacBlockSize(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -2460,10 +3086,10 @@ resource "f5os_tenant" "mac_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
   mac_block_size    = "small"
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }
 
 // TestAccTenantExplicitMemory verifies the memory attribute is correctly set
@@ -2471,7 +3097,7 @@ resource "f5os_tenant" "mac_test" {
 // This test exercises the explicit memory branch in calculateMemory.
 func TestAccTenantExplicitMemory(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck:                 func() { testAccPreCheckTenant(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckTenantDestroy,
 		Steps: []resource.TestStep{
@@ -2509,10 +3135,8 @@ resource "f5os_tenant" "mem_test" {
   type              = "BIG-IP"
   cpu_cores         = 2
   running_state     = "configured"
-  virtual_disk_size = 83
+  virtual_disk_size = %d
   memory            = 8192
 }
-`, tenantTestImage())
+`, tenantTestImage(), tenantTestDiskSize())
 }
-
-

@@ -3,10 +3,12 @@ package provider
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 // ---------------------------------------------------------------------------
@@ -764,33 +766,69 @@ resource "f5os_license" "test" {
 // ---------------------------------------------------------------------------
 
 func TestAccLicenseResource(t *testing.T) {
+	// The device's f5-sys-lic-install:get-eula endpoint validates the
+	// registration key against F5's activation service, so the
+	// placeholder key used in unit tests will always be rejected with
+	// "invalid value for: registration-key". Require a real create
+	// key via env var and skip the test if it is missing. Store the
+	// key as a masked CI variable.
+	//
+	// The update key (F5OS_TEST_LICENSE_KEY_UPDATE) is optional: when
+	// provided the test exercises the Update code path with a second
+	// distinct registration key; when omitted the update step is
+	// skipped and a note is logged so a local dev with a single key
+	// can still run the create/import portion of the test.
+	createKey := os.Getenv("F5OS_TEST_LICENSE_KEY")
+	updateKey := os.Getenv("F5OS_TEST_LICENSE_KEY_UPDATE")
+	if createKey == "" {
+		t.Skip("F5OS_TEST_LICENSE_KEY must be set to run TestAccLicenseResource")
+	}
+
+	steps := []resource.TestStep{
+		// Create and Read testing.
+		//
+		// Do NOT assert the registration key against Terraform
+		// state via TestCheckResourceAttr: on failure the framework
+		// prints both expected and actual values, which would leak
+		// the sensitive key into the test log / CI output. Instead
+		// verify that the id attribute was populated (proves the
+		// resource reached the created state) and confirm the
+		// device really holds the expected key via a side-channel
+		// device check that does not echo the secret on mismatch.
+		{
+			Config: testAccLicenseResourceConfig(createKey),
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttrSet("f5os_license.test", "id"),
+				testAccCheckLicenseOnDevice(createKey),
+			),
+		},
+		// ImportState testing
+		{
+			ResourceName:      "f5os_license.test",
+			ImportState:       true,
+			ImportStateVerify: true,
+			// The license registration key is sensitive and won't be returned in read operations
+			ImportStateVerifyIgnore: []string{"registration_key", "addon_keys"},
+		},
+	}
+	if updateKey != "" {
+		// Update and Read testing (same non-echoing assertions as
+		// the create step).
+		steps = append(steps, resource.TestStep{
+			Config: testAccLicenseResourceConfig(updateKey),
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttrSet("f5os_license.test", "id"),
+				testAccCheckLicenseOnDevice(updateKey),
+			),
+		})
+	} else {
+		t.Log("F5OS_TEST_LICENSE_KEY_UPDATE not set; skipping Update step of TestAccLicenseResource")
+	}
+
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			// Create and Read testing
-			{
-				Config: testAccLicenseResourceConfig("W9XXX-8YYYZ-8KKK7-7PPP2-ZZZZZZZ"),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_license.test", "registration_key", "W9XXX-8YYYZ-8KKK7-7PPP2-ZZZZZZZ"),
-				),
-			},
-			// ImportState testing
-			{
-				ResourceName:      "f5os_license.test",
-				ImportState:       true,
-				ImportStateVerify: true,
-				// The license registration key is sensitive and won't be returned in read operations
-				ImportStateVerifyIgnore: []string{"registration_key", "addon_keys"},
-			},
-			// Update and Read testing
-			{
-				Config: testAccLicenseResourceConfig("W9XXX-8YYYZ-8KKK7-7PPP2-WWWWWWW"),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_license.test", "registration_key", "W9XXX-8YYYZ-8KKK7-7PPP2-WWWWWWW"),
-				),
-			},
-		},
+		Steps:                    steps,
 	})
 }
 
@@ -800,4 +838,28 @@ resource "f5os_license" "test" {
   registration_key = %[1]q
 }
 `, regKey)
+}
+
+// testAccCheckLicenseOnDevice queries the device directly and
+// verifies the currently-installed license base registration key
+// matches the expected value. On mismatch the error message
+// deliberately does NOT include the expected or actual key so the
+// sensitive registration key does not end up in test logs or CI
+// output. Callers that need to debug a real failure can rerun with
+// verbose logging enabled and add a temporary log statement locally.
+func testAccCheckLicenseOnDevice(expected string) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		client, err := newTestClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create F5OS client: %w", err)
+		}
+		lic, err := client.GetLicense()
+		if err != nil {
+			return fmt.Errorf("failed to read license from device: %w", err)
+		}
+		if lic == nil || lic.Licensing.State.RegKey.Base != expected {
+			return fmt.Errorf("license on device does not match the expected registration key")
+		}
+		return nil
+	}
 }

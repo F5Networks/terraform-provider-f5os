@@ -1,0 +1,36 @@
+{
+    "f5-tenants:state": {
+        "name": "testtenant-ecosys2",
+        "unit-key-hash": "REDACTED-FAKE-UNIT-KEY-HASH-FOR-TESTING-ONLY==",
+        "type": "BIG-IP",
+        "image": "dumm_image_unit_test.qcow2.zip.bundle",
+        "mgmt-ip": "10.14.10.10",
+        "prefix-length": 24,
+        "dag-ipv6-prefix-length": 128,
+        "gateway": "10.14.10.1",
+        "vlans": [
+            1,
+            2,
+            3
+        ],
+        "cryptos": "enabled",
+        "vcpu-cores-per-node": 8,
+        "memory": "24576",
+        "storage": {
+            "size": 82
+        },
+        "running-state": "configured",
+        "trust-mode": true,
+        "mac-data": {
+            "base-mac": "14:a9:d0:08:17:92",
+            "mac-pool-size": 1
+        },
+        "appliance-mode": {
+            "enabled": false
+        },
+        "feature-flags": {
+            "stats-stream-capable": false
+        },
+        "status": "Configured"
+    }
+}

@@ -1,9 +1,9 @@
 {
     "f5-tenants:state": {
         "name": "test-tenant22",
-        "unit-key-hash": "FXTrjhCs+nkfPn30/E0A/EBcye/I511NFZELSGOuUDH82AMt65Iz5E36TbAamMzYT4Q9ACSe23yNo2ejtlu7yQ==",
+        "unit-key-hash": "REDACTED-FAKE-UNIT-KEY-HASH-FOR-TESTING-ONLY==",
         "type": "BIG-IP",
-        "image": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+        "image": "dumm_image_unit_test.qcow2.zip.bundle",
         "nodes": [
             2
         ],

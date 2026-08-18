@@ -337,7 +337,7 @@ func (r *SystemResource) Read(ctx context.Context, req resource.ReadRequest, res
 	}
 
 	tflog.Debug(ctx, fmt.Sprint("[READ]", "Read System Config"))
-	system, err := r.client.GetRequest("/openconfig-system:system/config")
+	system, err := r.getRequestWithRetry("/openconfig-system:system/config")
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("failure while fetching System Config, got error: %s", err))
 		return
@@ -352,7 +352,7 @@ func (r *SystemResource) Read(ctx context.Context, req resource.ReadRequest, res
 
 	// Clock Settings
 	tflog.Debug(ctx, fmt.Sprint("[READ]", "Clock Settings"))
-	clock, err := r.client.GetRequest("/openconfig-system:system/clock")
+	clock, err := r.getRequestWithRetry("/openconfig-system:system/clock")
 
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("failure while fetching Clock Config, got error: %s", err))
@@ -367,7 +367,7 @@ func (r *SystemResource) Read(ctx context.Context, req resource.ReadRequest, res
 		return
 	}
 	// security ciphers settings
-	ciphers, err := r.client.GetRequest("/openconfig-system:system/f5-security-ciphers:security/services/service")
+	ciphers, err := r.getRequestWithRetry("/openconfig-system:system/f5-security-ciphers:security/services/service")
 
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("failure while fetching Ciphers Config, got error: %s", err))
@@ -405,7 +405,7 @@ func (r *SystemResource) Read(ctx context.Context, req resource.ReadRequest, res
 		}
 	}
 	// system settings
-	settings, err := r.client.GetRequest("/openconfig-system:system/f5-system-settings:settings")
+	settings, err := r.getRequestWithRetry("/openconfig-system:system/f5-system-settings:settings")
 
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("failure while fetching Settings Config, got error: %s", err))
@@ -420,7 +420,7 @@ func (r *SystemResource) Read(ctx context.Context, req resource.ReadRequest, res
 	}
 
 	// token lifetime
-	lifetime, err := r.client.GetRequest("/openconfig-system:system/aaa/f5-aaa-confd-restconf-token:restconf-token/state/lifetime")
+	lifetime, err := r.getRequestWithRetry("/openconfig-system:system/aaa/f5-aaa-confd-restconf-token:restconf-token/state/lifetime")
 	if err != nil {
 		resp.Diagnostics.AddError("F5OS Error:", fmt.Sprintf("failure while fetching Token Lifetime, got error: %s", err))
 		return
@@ -775,6 +775,60 @@ func (r *SystemResource) waitForDeviceReady(ctx context.Context, timeout time.Du
 	}
 	tflog.Info(ctx, "[waitForDeviceReady] Device stabilized after SSHD changes")
 	return nil
+}
+
+// getRequestWithRetry wraps client.GetRequest with a short retry loop for
+// transient failures observed during post-apply Read on real devices:
+//
+//   - Empty-string errors returned by very old SDK builds when the device
+//     replied with an ietf-restconf error whose error-message was blank
+//     (older F5osError.Error() collapsed these to errors.New("")).
+//
+// The vendored SDK's doRequest now retries transient transport errors
+// (connection refused / reset / EOF / deadline exceeded / no such host)
+// internally with a 6-attempt / 10s-delay policy, and returns wrapped
+// non-empty errors on 4xx/5xx bodies. This outer helper is therefore a
+// belt-and-braces guard against empty-string errors only; it
+// deliberately does NOT retry on connection-refused/timeout strings,
+// because doing so would stack on top of the SDK's internal retries and
+// blow past Terraform's operation timeout. It also does NOT retry on
+// (err==nil, len(data)==0): now that the SDK returns explicit errors on
+// 4xx/5xx, an empty body with a nil error is a legitimate 204/empty
+// container response that the caller should handle directly.
+//
+// Honors F5OS_POLL_INTERVAL (unit-test mode) to keep tests fast.
+func (r *SystemResource) getRequestWithRetry(path string) ([]byte, error) {
+	backoff := 5 * time.Second
+	if v := os.Getenv("F5OS_POLL_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			backoff = d
+		}
+	}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		data, err := r.client.GetRequest(path)
+		if err == nil {
+			// Success (including a legitimate empty-body 204).
+			return data, nil
+		}
+		// Belt-and-braces: only retry the empty-message error case.
+		// Any concrete error (including connection-refused, which the
+		// SDK already retried 6× internally) surfaces immediately.
+		if err.Error() != "" {
+			return data, err
+		}
+		lastErr = err
+		if attempt < 2 {
+			time.Sleep(backoff)
+		}
+	}
+	if lastErr == nil {
+		// Unreachable in the current retry policy (the loop only sets
+		// lastErr from a concrete err whose message was empty), but
+		// keep a safe fallback message in case the policy changes.
+		lastErr = fmt.Errorf("device returned empty error after retries")
+	}
+	return nil, lastErr
 }
 
 // pollUntilStable is the shared polling/cooldown loop used by both the

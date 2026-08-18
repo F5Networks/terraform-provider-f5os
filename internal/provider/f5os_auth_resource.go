@@ -76,6 +76,25 @@ type passwordPolicyModel struct {
 	MaxLetterRepeat   types.Int64 `tfsdk:"max_letter_repeat"`
 	MaxSequenceRepeat types.Int64 `tfsdk:"max_sequence_repeat"`
 	MaxClassRepeat    types.Int64 `tfsdk:"max_class_repeat"`
+	// v2.0.0+ only fields
+	MinDays  types.Int64 `tfsdk:"min_days"`
+	Remember types.Int64 `tfsdk:"remember"`
+	WarnAge  types.Int64 `tfsdk:"warn_age"`
+}
+
+// loginPolicyModel represents the AAA login-policy settings in Terraform state.
+// Introduced in F5OS 2.0.0 (f5-openconfig-aaa-login-policy module).
+type loginPolicyModel struct {
+	AdminRoleLimit          types.Bool  `tfsdk:"admin_role_limit"`
+	RestconfMaxSessionLimit types.Int64 `tfsdk:"restconf_max_session_limit"`
+	SSHMaxSessionLimit      types.Int64 `tfsdk:"ssh_max_session_limit"`
+}
+
+// ldapConfigModel represents the LDAP server-config object classes in
+// Terraform state. Introduced in F5OS 2.0.0 (f5-openconfig-aaa-ldap module).
+type ldapConfigModel struct {
+	UserObjectClass  types.List `tfsdk:"user_object_class"`
+	GroupObjectClass types.List `tfsdk:"group_object_class"`
 }
 
 type AuthResourceModel struct {
@@ -83,6 +102,8 @@ type AuthResourceModel struct {
 	AuthOrder      types.List   `tfsdk:"auth_order"`
 	RemoteRoles    types.Set    `tfsdk:"remote_roles"`
 	PasswordPolicy types.Object `tfsdk:"password_policy"`
+	LoginPolicy    types.Object `tfsdk:"login_policy"`
+	Ldap           types.Object `tfsdk:"ldap"`
 }
 
 func (r *AuthResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -178,6 +199,60 @@ func (r *AuthResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 					"max_class_repeat": schema.Int64Attribute{
 						MarkdownDescription: "Max repeating chars of any class allowed. Only supported on F5OS >= v1.7.",
 						Optional:            true,
+					},
+					// v2.0.0+ only fields
+					"min_days": schema.Int64Attribute{
+						MarkdownDescription: "Minimum number of days between password changes. Only supported on F5OS >= 2.0.0.",
+						Optional:            true,
+					},
+					"remember": schema.Int64Attribute{
+						MarkdownDescription: "Number of previous passwords remembered to prevent reuse. Only supported on F5OS >= 2.0.0.",
+						Optional:            true,
+					},
+					"warn_age": schema.Int64Attribute{
+						MarkdownDescription: "Number of days before expiration to warn the user. Only supported on F5OS >= 2.0.0.",
+						Optional:            true,
+					},
+				},
+			},
+			"login_policy": schema.SingleNestedAttribute{
+				MarkdownDescription: "AAA login-policy settings. Only supported on F5OS >= 2.0.0. Only fields you specify are managed; unspecified fields are left at device defaults.",
+				Optional:            true,
+				Attributes: map[string]schema.Attribute{
+					"admin_role_limit": schema.BoolAttribute{
+						MarkdownDescription: "Whether to limit concurrent sessions for the admin role.",
+						Optional:            true,
+					},
+					"restconf_max_session_limit": schema.Int64Attribute{
+						MarkdownDescription: "Maximum number of concurrent RESTCONF sessions.",
+						Optional:            true,
+						Validators: []validator.Int64{
+							int64validator.AtLeast(1),
+						},
+					},
+					"ssh_max_session_limit": schema.Int64Attribute{
+						MarkdownDescription: "Maximum number of concurrent SSH sessions.",
+						Optional:            true,
+						Validators: []validator.Int64{
+							int64validator.AtLeast(1),
+						},
+					},
+				},
+			},
+			"ldap": schema.SingleNestedAttribute{
+				MarkdownDescription: "LDAP server configuration. Only supported on F5OS >= 2.0.0. " +
+					"Only fields you specify are managed; unspecified fields are left at device defaults.",
+				Optional: true,
+				Attributes: map[string]schema.Attribute{
+					"user_object_class": schema.ListAttribute{
+						MarkdownDescription: "Object classes used when searching for LDAP user objects (e.g. [\"posixAccount\"]).",
+						Optional:            true,
+						ElementType:         types.StringType,
+					},
+					"group_object_class": schema.ListAttribute{
+						MarkdownDescription: "Object classes used when searching for LDAP group objects (e.g. [\"posixGroup\"]).",
+						Optional:            true,
+						ElementType:         types.StringType,
 					},
 				},
 			},
@@ -296,8 +371,40 @@ func (r *AuthResource) Create(ctx context.Context, req resource.CreateRequest, r
 			return
 		}
 
+		// Version guard for v2.0.0+ fields
+		resp.Diagnostics.Append(r.validateV20Fields(ctx, &ppModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
 		// Write the password policy to the device
 		resp.Diagnostics.Append(r.writePasswordPolicy(ctx, &ppModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
+	// Handle login policy if provided (F5OS 2.0.0+ only)
+	if !plan.LoginPolicy.IsNull() && !plan.LoginPolicy.IsUnknown() {
+		var lpModel loginPolicyModel
+		resp.Diagnostics.Append(plan.LoginPolicy.As(ctx, &lpModel, basetypes.ObjectAsOptions{})...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		resp.Diagnostics.Append(r.writeLoginPolicy(ctx, &lpModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
+	// Handle LDAP config if provided (F5OS 2.0.0+ only)
+	if !plan.Ldap.IsNull() && !plan.Ldap.IsUnknown() {
+		var ldapModel ldapConfigModel
+		resp.Diagnostics.Append(plan.Ldap.As(ctx, &ldapModel, basetypes.ObjectAsOptions{})...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		resp.Diagnostics.Append(r.writeLdapConfig(ctx, &ldapModel)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
@@ -319,6 +426,18 @@ func (r *AuthResource) Create(ctx context.Context, req resource.CreateRequest, r
 			return
 		}
 	}
+	if !plan.LoginPolicy.IsNull() {
+		resp.Diagnostics.Append(r.readLoginPolicy(ctx, &plan, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+	if !plan.Ldap.IsNull() {
+		resp.Diagnostics.Append(r.readLdapConfig(ctx, &plan, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -333,7 +452,7 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 	// Detect import: all user-configurable fields are null because
 	// ImportStatePassthroughID only sets the ID.
-	isImport := state.AuthOrder.IsNull() && state.RemoteRoles.IsNull() && state.PasswordPolicy.IsNull()
+	isImport := state.AuthOrder.IsNull() && state.RemoteRoles.IsNull() && state.PasswordPolicy.IsNull() && state.LoginPolicy.IsNull() && state.Ldap.IsNull()
 
 	// During import, snapshot the device's current auth_order into private
 	// state so Delete can restore it. Create handles this for the normal
@@ -376,6 +495,28 @@ func (r *AuthResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	// Read password_policy from device when managed or during import.
 	if !state.PasswordPolicy.IsNull() || isImport {
 		resp.Diagnostics.Append(r.readPasswordPolicy(ctx, &state, isImport)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
+	// Read login_policy from device when managed or during import. Login
+	// policy is only available on F5OS 2.0.0+; on older devices the read is
+	// skipped during import (nothing to import) and, when managed, the write
+	// would already have failed at Create/Update time.
+	if !state.LoginPolicy.IsNull() || (isImport && platformVersionAtLeast(r.client.PlatformVersion, "v2.0")) {
+		resp.Diagnostics.Append(r.readLoginPolicy(ctx, &state, isImport)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
+	// Read ldap config from device when managed or during import. Like
+	// login_policy, the LDAP object classes are only available on F5OS
+	// 2.0.0+; on older devices the import read is skipped and a managed
+	// write would already have failed at Create/Update time.
+	if !state.Ldap.IsNull() || (isImport && platformVersionAtLeast(r.client.PlatformVersion, "v2.0")) {
+		resp.Diagnostics.Append(r.readLdapConfig(ctx, &state, isImport)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
@@ -451,8 +592,40 @@ func (r *AuthResource) Update(ctx context.Context, req resource.UpdateRequest, r
 			return
 		}
 
+		// Version guard for v2.0.0+ fields
+		resp.Diagnostics.Append(r.validateV20Fields(ctx, &ppModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
 		// Write the password policy to the device
 		resp.Diagnostics.Append(r.writePasswordPolicy(ctx, &ppModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
+	// Update login policy if specified (F5OS 2.0.0+ only)
+	if !plan.LoginPolicy.IsNull() && !plan.LoginPolicy.IsUnknown() {
+		var lpModel loginPolicyModel
+		resp.Diagnostics.Append(plan.LoginPolicy.As(ctx, &lpModel, basetypes.ObjectAsOptions{})...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		resp.Diagnostics.Append(r.writeLoginPolicy(ctx, &lpModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
+	// Update LDAP config if specified (F5OS 2.0.0+ only)
+	if !plan.Ldap.IsNull() && !plan.Ldap.IsUnknown() {
+		var ldapModel ldapConfigModel
+		resp.Diagnostics.Append(plan.Ldap.As(ctx, &ldapModel, basetypes.ObjectAsOptions{})...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		resp.Diagnostics.Append(r.writeLdapConfig(ctx, &ldapModel)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
@@ -474,6 +647,18 @@ func (r *AuthResource) Update(ctx context.Context, req resource.UpdateRequest, r
 			return
 		}
 	}
+	if !plan.LoginPolicy.IsNull() {
+		resp.Diagnostics.Append(r.readLoginPolicy(ctx, &plan, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+	if !plan.Ldap.IsNull() {
+		resp.Diagnostics.Append(r.readLdapConfig(ctx, &plan, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -488,30 +673,55 @@ func (r *AuthResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
+	// cleanupErr captures the final error from the auth_order cleanup so it
+	// can be surfaced as a diagnostic. Unlike role-GID restoration (which is
+	// best-effort), failing to clear/restore auth_order must fail the destroy:
+	// otherwise Terraform removes the resource from state while the device is
+	// left with the Terraform-managed auth_order still applied (a dirty
+	// device with no error surfaced). Keeping the resource in state lets the
+	// user retry the destroy once connectivity/permissions are restored.
+	var cleanupErr error
+
 	if origData != nil {
 		var origMethods []string
 		if err := json.Unmarshal(origData, &origMethods); err != nil {
+			// Corrupt private state: we cannot restore the original order, so
+			// fall back to clearing the leaf entirely.
 			tflog.Warn(ctx, "failed to deserialize original auth order from private state, falling back to delete",
 				map[string]any{"error": err.Error()})
 			if err := r.deleteAuthOrder(ctx); err != nil {
-				tflog.Warn(ctx, "failed deleting auth order", map[string]any{"error": err.Error()})
+				cleanupErr = fmt.Errorf("failed deleting auth order: %w", err)
 			}
 		} else {
-			if err := r.restoreAuthOrder(ctx, origMethods); err != nil {
+			if restoreErr := r.restoreAuthOrder(ctx, origMethods); restoreErr != nil {
+				// Restore failed; fall back to clearing the leaf. Surface the
+				// clear error if that also fails.
 				tflog.Warn(ctx, "failed restoring original auth order, falling back to delete",
-					map[string]any{"error": err.Error(), "methods": origMethods})
+					map[string]any{"error": restoreErr.Error(), "methods": origMethods})
 				if err := r.deleteAuthOrder(ctx); err != nil {
-					tflog.Warn(ctx, "failed deleting auth order", map[string]any{"error": err.Error()})
+					cleanupErr = fmt.Errorf("failed restoring original auth order (%v) and fallback delete also failed: %w", restoreErr, err)
 				}
 			}
 		}
 	} else {
-		// No original auth order saved (e.g., resource created before this fix).
-		// Fall back to the old behavior of deleting the auth order.
+		// No original auth order saved (device had no auth_order configured
+		// at Create time, or the resource predates snapshotting). Clear the
+		// Terraform-managed auth_order to restore the unset baseline.
 		tflog.Warn(ctx, "No original auth order in private state, falling back to delete")
 		if err := r.deleteAuthOrder(ctx); err != nil {
-			tflog.Warn(ctx, "failed deleting auth order", map[string]any{"error": err.Error()})
+			cleanupErr = fmt.Errorf("failed deleting auth order: %w", err)
 		}
+	}
+
+	// If auth_order cleanup failed, surface it and abort the destroy so the
+	// resource remains in state for a retry. Do not remove the resource.
+	if cleanupErr != nil {
+		resp.Diagnostics.AddError(
+			"Failed to clean up auth_order during destroy",
+			fmt.Sprintf("The device may still have the Terraform-managed authentication order applied. "+
+				"The resource has been kept in state; re-run destroy once the device is reachable. Error: %v", cleanupErr),
+		)
+		return
 	}
 
 	// Restore the original role GIDs that were saved during Create/Import,
@@ -883,6 +1093,9 @@ func passwordPolicyAttrTypes() map[string]attr.Type {
 		"max_letter_repeat":    types.Int64Type,
 		"max_sequence_repeat":  types.Int64Type,
 		"max_class_repeat":     types.Int64Type,
+		"min_days":             types.Int64Type,
+		"remember":             types.Int64Type,
+		"warn_age":             types.Int64Type,
 	}
 }
 
@@ -904,6 +1117,28 @@ func (r *AuthResource) validateV17Fields(ctx context.Context, pp *passwordPolicy
 	if !pp.MaxClassRepeat.IsNull() && !pp.MaxClassRepeat.IsUnknown() {
 		diags.AddError("Unsupported attribute",
 			"max_class_repeat is not supported on F5OS versions below v1.7")
+	}
+	return diags
+}
+
+// validateV20Fields checks whether the user configured v2.0.0+ fields on a
+// device that doesn't support them. Returns diagnostics with errors if so.
+func (r *AuthResource) validateV20Fields(ctx context.Context, pp *passwordPolicyModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if platformVersionAtLeast(r.client.PlatformVersion, "v2.0") {
+		return diags
+	}
+	if !pp.MinDays.IsNull() && !pp.MinDays.IsUnknown() {
+		diags.AddError("Unsupported attribute",
+			"min_days is not supported on F5OS versions below 2.0.0")
+	}
+	if !pp.Remember.IsNull() && !pp.Remember.IsUnknown() {
+		diags.AddError("Unsupported attribute",
+			"remember is not supported on F5OS versions below 2.0.0")
+	}
+	if !pp.WarnAge.IsNull() && !pp.WarnAge.IsUnknown() {
+		diags.AddError("Unsupported attribute",
+			"warn_age is not supported on F5OS versions below 2.0.0")
 	}
 	return diags
 }
@@ -990,6 +1225,15 @@ func (r *AuthResource) readPasswordPolicy(ctx context.Context, state *AuthResour
 	}
 	if !current.MaxClassRepeat.IsNull() && policy.MaxClassRepeat != nil {
 		current.MaxClassRepeat = types.Int64Value(*policy.MaxClassRepeat)
+	}
+	if !current.MinDays.IsNull() && policy.MinDays != nil {
+		current.MinDays = types.Int64Value(*policy.MinDays)
+	}
+	if !current.Remember.IsNull() && policy.Remember != nil {
+		current.Remember = types.Int64Value(*policy.Remember)
+	}
+	if !current.WarnAge.IsNull() && policy.WarnAge != nil {
+		current.WarnAge = types.Int64Value(*policy.WarnAge)
 	}
 
 	obj, d := types.ObjectValueFrom(ctx, passwordPolicyAttrTypes(), current)
@@ -1088,6 +1332,22 @@ func passwordPolicyModelToConfig(pp *passwordPolicyModel, deviceVersion string) 
 		if !pp.MaxClassRepeat.IsNull() && !pp.MaxClassRepeat.IsUnknown() {
 			v := pp.MaxClassRepeat.ValueInt64()
 			config.MaxClassRepeat = &v
+		}
+	}
+
+	// v2.0.0+ fields — only include if device supports them
+	if platformVersionAtLeast(deviceVersion, "v2.0") {
+		if !pp.MinDays.IsNull() && !pp.MinDays.IsUnknown() {
+			v := pp.MinDays.ValueInt64()
+			config.MinDays = &v
+		}
+		if !pp.Remember.IsNull() && !pp.Remember.IsUnknown() {
+			v := pp.Remember.ValueInt64()
+			config.Remember = &v
+		}
+		if !pp.WarnAge.IsNull() && !pp.WarnAge.IsUnknown() {
+			v := pp.WarnAge.ValueInt64()
+			config.WarnAge = &v
 		}
 	}
 
@@ -1195,5 +1455,306 @@ func passwordPolicyConfigToModel(config *f5os.PasswordPolicyConfig, deviceVersio
 		model.MaxClassRepeat = types.Int64Null()
 	}
 
+	// v2.0.0+ fields — only populate if device supports them
+	if platformVersionAtLeast(deviceVersion, "v2.0") {
+		if config.MinDays != nil {
+			model.MinDays = types.Int64Value(*config.MinDays)
+		} else {
+			model.MinDays = types.Int64Null()
+		}
+		if config.Remember != nil {
+			model.Remember = types.Int64Value(*config.Remember)
+		} else {
+			model.Remember = types.Int64Null()
+		}
+		if config.WarnAge != nil {
+			model.WarnAge = types.Int64Value(*config.WarnAge)
+		} else {
+			model.WarnAge = types.Int64Null()
+		}
+	} else {
+		// Pre-2.0.0: these fields don't exist on the device
+		model.MinDays = types.Int64Null()
+		model.Remember = types.Int64Null()
+		model.WarnAge = types.Int64Null()
+	}
+
 	return model
+}
+
+// ---------------------------------------------------------------------------
+// Login Policy helpers (F5OS 2.0.0+)
+// ---------------------------------------------------------------------------
+
+// loginPolicyAttrTypes returns the attr.Type map for the login_policy
+// SingleNestedAttribute. Used when constructing types.ObjectValue.
+func loginPolicyAttrTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"admin_role_limit":           types.BoolType,
+		"restconf_max_session_limit": types.Int64Type,
+		"ssh_max_session_limit":      types.Int64Type,
+	}
+}
+
+// writeLoginPolicy converts the Terraform model to an API config struct and
+// sends it to the device via PATCH. Login policy is only available on F5OS
+// 2.0.0+, so writing to an older device is rejected with a clear error.
+func (r *AuthResource) writeLoginPolicy(ctx context.Context, lp *loginPolicyModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if !platformVersionAtLeast(r.client.PlatformVersion, "v2.0") {
+		diags.AddError("Unsupported attribute",
+			"login_policy is not supported on F5OS versions below 2.0.0")
+		return diags
+	}
+	config := loginPolicyModelToConfig(lp)
+	tflog.Debug(ctx, "Writing login policy to device")
+	if err := r.client.SetLoginPolicy(config); err != nil {
+		diags.AddError("Failed to set login policy", err.Error())
+	}
+	return diags
+}
+
+// readLoginPolicy reads login policy from the device and refreshes the
+// LoginPolicy field in the model.
+//
+// When isImport is true, all fields are populated from the device (since there
+// is no prior state). Otherwise, only fields already present in state are
+// refreshed — this avoids adding fields the user didn't declare.
+func (r *AuthResource) readLoginPolicy(ctx context.Context, state *AuthResourceModel, isImport bool) diag.Diagnostics {
+	var diags diag.Diagnostics
+	policy, err := r.client.GetLoginPolicy()
+	if err != nil {
+		diags.AddError("Failed to read login policy from device", err.Error())
+		return diags
+	}
+
+	if isImport {
+		model := loginPolicyConfigToModel(policy)
+		obj, d := types.ObjectValueFrom(ctx, loginPolicyAttrTypes(), model)
+		diags.Append(d...)
+		if !diags.HasError() {
+			state.LoginPolicy = obj
+		}
+		return diags
+	}
+
+	// Normal read: only refresh fields already in state.
+	var current loginPolicyModel
+	diags.Append(state.LoginPolicy.As(ctx, &current, basetypes.ObjectAsOptions{})...)
+	if diags.HasError() {
+		return diags
+	}
+
+	if !current.AdminRoleLimit.IsNull() && policy.AdminRoleLimit != nil {
+		current.AdminRoleLimit = types.BoolValue(*policy.AdminRoleLimit)
+	}
+	if !current.RestconfMaxSessionLimit.IsNull() && policy.RestconfMaxSessionLimit != nil {
+		current.RestconfMaxSessionLimit = types.Int64Value(*policy.RestconfMaxSessionLimit)
+	}
+	if !current.SSHMaxSessionLimit.IsNull() && policy.SSHMaxSessionLimit != nil {
+		current.SSHMaxSessionLimit = types.Int64Value(*policy.SSHMaxSessionLimit)
+	}
+
+	obj, d := types.ObjectValueFrom(ctx, loginPolicyAttrTypes(), current)
+	diags.Append(d...)
+	if !diags.HasError() {
+		state.LoginPolicy = obj
+	}
+	return diags
+}
+
+// loginPolicyModelToConfig converts a Terraform loginPolicyModel to an
+// f5osclient LoginPolicyConfig struct. Only non-null fields are set.
+func loginPolicyModelToConfig(lp *loginPolicyModel) *f5os.LoginPolicyConfig {
+	config := &f5os.LoginPolicyConfig{}
+	if !lp.AdminRoleLimit.IsNull() && !lp.AdminRoleLimit.IsUnknown() {
+		v := lp.AdminRoleLimit.ValueBool()
+		config.AdminRoleLimit = &v
+	}
+	if !lp.RestconfMaxSessionLimit.IsNull() && !lp.RestconfMaxSessionLimit.IsUnknown() {
+		v := lp.RestconfMaxSessionLimit.ValueInt64()
+		config.RestconfMaxSessionLimit = &v
+	}
+	if !lp.SSHMaxSessionLimit.IsNull() && !lp.SSHMaxSessionLimit.IsUnknown() {
+		v := lp.SSHMaxSessionLimit.ValueInt64()
+		config.SSHMaxSessionLimit = &v
+	}
+	return config
+}
+
+// loginPolicyConfigToModel converts an f5osclient LoginPolicyConfig to a
+// Terraform loginPolicyModel for populating state.
+func loginPolicyConfigToModel(config *f5os.LoginPolicyConfig) loginPolicyModel {
+	model := loginPolicyModel{}
+	if config.AdminRoleLimit != nil {
+		model.AdminRoleLimit = types.BoolValue(*config.AdminRoleLimit)
+	} else {
+		model.AdminRoleLimit = types.BoolNull()
+	}
+	if config.RestconfMaxSessionLimit != nil {
+		model.RestconfMaxSessionLimit = types.Int64Value(*config.RestconfMaxSessionLimit)
+	} else {
+		model.RestconfMaxSessionLimit = types.Int64Null()
+	}
+	if config.SSHMaxSessionLimit != nil {
+		model.SSHMaxSessionLimit = types.Int64Value(*config.SSHMaxSessionLimit)
+	} else {
+		model.SSHMaxSessionLimit = types.Int64Null()
+	}
+	return model
+}
+
+// ---------------------------------------------------------------------------
+// LDAP config helpers (F5OS 2.0.0+)
+// ---------------------------------------------------------------------------
+
+// ldapAttrTypes returns the attr.Type map for the ldap SingleNestedAttribute.
+// Used when constructing types.ObjectValue.
+func ldapAttrTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"user_object_class":  types.ListType{ElemType: types.StringType},
+		"group_object_class": types.ListType{ElemType: types.StringType},
+	}
+}
+
+// writeLdapConfig converts the Terraform model to an API config struct and
+// sends it to the device via PATCH. The LDAP object-class leaf-lists are only
+// available on F5OS 2.0.0+, so writing to an older device is rejected with a
+// clear error.
+func (r *AuthResource) writeLdapConfig(ctx context.Context, lc *ldapConfigModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if !platformVersionAtLeast(r.client.PlatformVersion, "v2.0") {
+		diags.AddError("Unsupported attribute",
+			"ldap configuration (user_object_class/group_object_class) is not supported on F5OS versions below 2.0.0")
+		return diags
+	}
+	config, d := ldapModelToConfig(ctx, lc)
+	diags.Append(d...)
+	if diags.HasError() {
+		return diags
+	}
+	tflog.Debug(ctx, "Writing ldap config to device")
+	if err := r.client.SetLdapConfig(config); err != nil {
+		diags.AddError("Failed to set ldap config", err.Error())
+	}
+	return diags
+}
+
+// readLdapConfig reads the LDAP container config from the device and refreshes
+// the Ldap field in the model.
+//
+// When isImport is true, all fields are populated from the device (since there
+// is no prior state). Otherwise, only fields already present in state are
+// refreshed — this avoids adding fields the user didn't declare.
+func (r *AuthResource) readLdapConfig(ctx context.Context, state *AuthResourceModel, isImport bool) diag.Diagnostics {
+	var diags diag.Diagnostics
+	config, err := r.client.GetLdapConfig()
+	if err != nil {
+		diags.AddError("Failed to read ldap config from device", err.Error())
+		return diags
+	}
+
+	if isImport {
+		model, d := ldapConfigToModel(ctx, config)
+		diags.Append(d...)
+		if diags.HasError() {
+			return diags
+		}
+		obj, d := types.ObjectValueFrom(ctx, ldapAttrTypes(), model)
+		diags.Append(d...)
+		if !diags.HasError() {
+			state.Ldap = obj
+		}
+		return diags
+	}
+
+	// Normal read: only refresh fields already in state.
+	var current ldapConfigModel
+	diags.Append(state.Ldap.As(ctx, &current, basetypes.ObjectAsOptions{})...)
+	if diags.HasError() {
+		return diags
+	}
+
+	// Refresh managed fields unconditionally from the device so out-of-band
+	// drift is surfaced. Dropping the previous "config.X != nil" guard is
+	// deliberate: if the device evicts the value (nil) while state still holds
+	// a non-null list, we must write the device's value back so Terraform sees
+	// the diff and re-applies. ListValueFrom preserves the nil/empty
+	// distinction from GetLdapConfig: a nil slice becomes a null list
+	// (leaf-list absent on device), a non-nil empty slice becomes an empty list
+	// (leaf-list present but cleared).
+	if !current.UserObjectClass.IsNull() {
+		lv, d := types.ListValueFrom(ctx, types.StringType, config.UserObjectClass)
+		diags.Append(d...)
+		if diags.HasError() {
+			return diags
+		}
+		current.UserObjectClass = lv
+	}
+	if !current.GroupObjectClass.IsNull() {
+		lv, d := types.ListValueFrom(ctx, types.StringType, config.GroupObjectClass)
+		diags.Append(d...)
+		if diags.HasError() {
+			return diags
+		}
+		current.GroupObjectClass = lv
+	}
+
+	obj, d := types.ObjectValueFrom(ctx, ldapAttrTypes(), current)
+	diags.Append(d...)
+	if !diags.HasError() {
+		state.Ldap = obj
+	}
+	return diags
+}
+
+// ldapModelToConfig converts a Terraform ldapConfigModel to an f5osclient
+// LdapConfig struct. Only non-null leaf-lists are set.
+func ldapModelToConfig(ctx context.Context, lc *ldapConfigModel) (*f5os.LdapConfig, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	config := &f5os.LdapConfig{}
+	if !lc.UserObjectClass.IsNull() && !lc.UserObjectClass.IsUnknown() {
+		var classes []string
+		diags.Append(lc.UserObjectClass.ElementsAs(ctx, &classes, false)...)
+		if diags.HasError() {
+			return config, diags
+		}
+		config.UserObjectClass = classes
+	}
+	if !lc.GroupObjectClass.IsNull() && !lc.GroupObjectClass.IsUnknown() {
+		var classes []string
+		diags.Append(lc.GroupObjectClass.ElementsAs(ctx, &classes, false)...)
+		if diags.HasError() {
+			return config, diags
+		}
+		config.GroupObjectClass = classes
+	}
+	return config, diags
+}
+
+// ldapConfigToModel converts an f5osclient LdapConfig to a Terraform
+// ldapConfigModel for populating state.
+func ldapConfigToModel(ctx context.Context, config *f5os.LdapConfig) (ldapConfigModel, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	model := ldapConfigModel{
+		UserObjectClass:  types.ListNull(types.StringType),
+		GroupObjectClass: types.ListNull(types.StringType),
+	}
+	if config.UserObjectClass != nil {
+		lv, d := types.ListValueFrom(ctx, types.StringType, config.UserObjectClass)
+		diags.Append(d...)
+		if diags.HasError() {
+			return model, diags
+		}
+		model.UserObjectClass = lv
+	}
+	if config.GroupObjectClass != nil {
+		lv, d := types.ListValueFrom(ctx, types.StringType, config.GroupObjectClass)
+		diags.Append(d...)
+		if diags.HasError() {
+			return model, diags
+		}
+		model.GroupObjectClass = lv
+	}
+	return model, diags
 }
