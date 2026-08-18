@@ -485,11 +485,12 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	// inconsistent result after apply" error. Only when the plan value is
 	// null/unknown (import, or Computed-only on older devices) do we adopt the
 	// device value, falling back to null when the device did not report one.
-	if !data.MaxNodes.IsNull() && !data.MaxNodes.IsUnknown() {
+	switch {
+	case !data.MaxNodes.IsNull() && !data.MaxNodes.IsUnknown():
 		// keep the user-configured value as-is
-	} else if respData.F5TenantsTenant[0].State.MaxNodes != 0 {
+	case respData.F5TenantsTenant[0].State.MaxNodes != 0:
 		data.MaxNodes = types.Int64Value(int64(respData.F5TenantsTenant[0].State.MaxNodes))
-	} else {
+	default:
 		data.MaxNodes = types.Int64Null()
 	}
 	data.MgmtVlan = types.Int64Value(int64(respData.F5TenantsTenant[0].State.MgmtVlan))
