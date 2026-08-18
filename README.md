@@ -16,7 +16,7 @@
 ## Requirements
 
 * [Terraform](https://www.terraform.io/downloads) > 1.x
-* [Go](https://go.dev/doc/install) >= 1.19
+* [Go](https://go.dev/doc/install) >= 1.25.0
 * [GNU Make](https://www.gnu.org/software/make/)
 * [golangci-lint](https://golangci-lint.run/usage/install/#local-installation) (optional)
 
@@ -55,7 +55,10 @@ version it implements, and Terraform:
 
 | F5OS Provider |     Terraform Plugin Protocol      | Terraform | F5OS Velos/rSeries Version |
 |:-------------:|:----------------------------------:|:---------:|:--------------------------:|
-|  `>= 1.0.0`   |                `6`                 | `>= 1.x`  |      `>= 1.5.1/1.4.0`      |
+|`1.0.0-1.10.2` |                `6`                 | `>= 1.x`  |      `>= 1.5.x/1.4.0`      |
+|`>= 1.11.1`    |                `6`                 | `>= 1.x`  |      `>= 1.8.x`            |
+
+**Please note*: Releases >= 1.11.1 are for F5OS-A 1.8.x on rSeries only. Please continue to use previous releases for other version support.
 
 Details can be found querying the [Registry API](https://www.terraform.io/internals/provider-registry-protocol#list-available-versions)
 that return all the details about which version are currently available for a particular provider.
