@@ -7,7 +7,7 @@ Terraform Plugin Framework (not SDKv2). The F5OS API client lives in a vendored
 module at `vendor/gitswarm.f5net.com/terraform-providers/f5osclient/`.
 
 - Module path: `gitswarm.f5net.com/terraform-providers/terraform-provider-f5os`
-- Go 1.23, Plugin Protocol 6
+- Go 1.25.0, Plugin Protocol 6
 - Provider registry address: `registry.terraform.io/f5networks/f5os`
 
 ## Layout
