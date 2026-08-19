@@ -46,6 +46,10 @@ import (
 func testAccProxyPreCheck(t *testing.T) {
 	t.Helper()
 
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
+
 	// Check standard F5OS env vars
 	for _, envVar := range []string{"F5OS_HOST", "F5OS_USERNAME", "F5OS_PASSWORD"} {
 		if os.Getenv(envVar) == "" {
@@ -82,8 +86,6 @@ func testAccProxyPreCheck(t *testing.T) {
 		t.Logf("no_proxy is set: %s", noProxyLower)
 	}
 }
-
-
 
 // testAccCheckProxyClientConnects verifies that an F5OS client can successfully
 // connect to the device through the proxy by creating a session and verifying

@@ -5,7 +5,7 @@
       "config": {
         "name": "testtenant-ecosys2",
         "type": "BIG-IP",
-        "image": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+        "image": "dumm_image_unit_test.qcow2.zip.bundle",
         "nodes": [
           1
         ],
@@ -28,9 +28,9 @@
       },
       "state": {
         "name": "testtenant-ecosys2",
-        "unit-key-hash": "pbsgB3yQXv/RJb69mwMs8OPfLR3zNJATzdFq/07JsBnjQElAl+DKKJQMZ/Nur0myc1KG4tK4THaS54y4SQAIyQ==",
+        "unit-key-hash": "REDACTED-FAKE-UNIT-KEY-HASH-FOR-TESTING-ONLY==",
         "type": "BIG-IP",
-        "image": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+        "image": "dumm_image_unit_test.qcow2.zip.bundle",
         "nodes": [
           1
         ],

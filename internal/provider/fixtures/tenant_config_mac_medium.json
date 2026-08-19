@@ -5,7 +5,7 @@
       "config": {
         "name": "testtenant-ecosys2",
         "type": "BIG-IP",
-        "image": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+        "image": "dumm_image_unit_test.qcow2.zip.bundle",
         "nodes": [1],
         "mgmt-ip": "10.10.10.26",
         "prefix-length": 24,
@@ -24,7 +24,7 @@
       "state": {
         "name": "testtenant-ecosys2",
         "type": "BIG-IP",
-        "image": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+        "image": "dumm_image_unit_test.qcow2.zip.bundle",
         "nodes": [1],
         "mgmt-ip": "10.10.10.26",
         "prefix-length": 24,

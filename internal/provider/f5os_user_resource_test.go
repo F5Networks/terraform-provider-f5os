@@ -24,7 +24,8 @@ func TestAccUserResource(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create and Read testing
 			{
-				Config: testAccUserResourceConfig("testuser", "operator"),
+				PreConfig: func() { testAccDeleteUserIfExists(t, "testuser") },
+				Config:    testAccUserResourceConfig("testuser", "operator"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_user.test", "username", "testuser"),
 					resource.TestCheckResourceAttr("f5os_user.test", "role", "operator"),
@@ -70,7 +71,8 @@ func TestAccUserResourceIdempotency(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create user
 			{
-				Config: testAccUserResourceConfig("idempotency_test", "operator"),
+				PreConfig: func() { testAccDeleteUserIfExists(t, "idempotency_test") },
+				Config:    testAccUserResourceConfig("idempotency_test", "operator"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_user.test", "username", "idempotency_test"),
 					resource.TestCheckResourceAttr("f5os_user.test", "role", "operator"),
@@ -97,7 +99,8 @@ func TestAccUserResourceWithExpiryStatus(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create and Read testing with expiry status
 			{
-				Config: testAccUserResourceConfigWithExpiry("testuser2", "operator", "enabled"),
+				PreConfig: func() { testAccDeleteUserIfExists(t, "testuser2") },
+				Config:    testAccUserResourceConfigWithExpiry("testuser2", "operator", "enabled"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_user.test", "username", "testuser2"),
 					resource.TestCheckResourceAttr("f5os_user.test", "role", "operator"),
@@ -127,7 +130,8 @@ func TestAccUserResourceWithSecondaryRole(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create and Read testing with secondary role
 			{
-				Config: testAccUserResourceConfigWithSecondaryRole("testuser3", "admin", "operator"),
+				PreConfig: func() { testAccDeleteUserIfExists(t, "testuser3") },
+				Config:    testAccUserResourceConfigWithSecondaryRole("testuser3", "admin", "operator"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_user.test", "username", "testuser3"),
 					resource.TestCheckResourceAttr("f5os_user.test", "role", "admin"),
@@ -199,7 +203,8 @@ func TestAccUserResourceWithValidDate(t *testing.T) {
 		CheckDestroy:             testAccCheckUserDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccUserResourceConfigWithExpiry("testuser7", "operator", "2027-12-31"),
+				PreConfig: func() { testAccDeleteUserIfExists(t, "testuser7") },
+				Config:    testAccUserResourceConfigWithExpiry("testuser7", "operator", "2027-12-31"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_user.test", "username", "testuser7"),
 					resource.TestCheckResourceAttr("f5os_user.test", "role", "operator"),
@@ -218,7 +223,8 @@ func TestAccUserResourceWithLockedStatus(t *testing.T) {
 		CheckDestroy:             testAccCheckUserDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccUserResourceConfigWithExpiry("testuser8", "operator", "locked"),
+				PreConfig: func() { testAccDeleteUserIfExists(t, "testuser8") },
+				Config:    testAccUserResourceConfigWithExpiry("testuser8", "operator", "locked"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_user.test", "username", "testuser8"),
 					resource.TestCheckResourceAttr("f5os_user.test", "role", "operator"),
@@ -284,7 +290,8 @@ func TestAccUserResourceBasicOnly(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create and Read testing only
 			{
-				Config: testAccUserResourceConfig("uniqueuser2025", "operator"),
+				PreConfig: func() { testAccDeleteUserIfExists(t, "uniqueuser2025") },
+				Config:    testAccUserResourceConfig("uniqueuser2025", "operator"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_user.test", "username", "uniqueuser2025"),
 					resource.TestCheckResourceAttr("f5os_user.test", "role", "operator"),
@@ -305,7 +312,8 @@ func TestAccUserResourceSecondaryRoleOnly(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create and Read testing with secondary role
 			{
-				Config: testAccUserResourceConfigWithSecondaryRole("secuser2025", "admin", "operator"),
+				PreConfig: func() { testAccDeleteUserIfExists(t, "secuser2025") },
+				Config:    testAccUserResourceConfigWithSecondaryRole("secuser2025", "admin", "operator"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_user.test", "username", "secuser2025"),
 					resource.TestCheckResourceAttr("f5os_user.test", "role", "admin"),
@@ -320,8 +328,6 @@ func TestAccUserResourceSecondaryRoleOnly(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Acceptance test helpers for direct device verification
 // ---------------------------------------------------------------------------
-
-
 
 // testAccCheckUserRolesOnDevice queries the device's roles endpoint directly
 // and verifies that the given user has exactly the expected roles — no more,
@@ -384,6 +390,32 @@ func testAccCheckUserRolesOnDevice(username string, expectedRoles []string) reso
 	}
 }
 
+// testAccDeleteUserIfExists removes a user (and any stale role associations)
+// from the device if it is present. It is used as a PreConfig hook so that a
+// leftover user from a prior interrupted run — whose CheckDestroy never ran —
+// cannot fail the next run's Create with "object already exists". All errors
+// are ignored: a missing user is the desired end state, and the subsequent
+// Create step will surface any genuine connectivity problem.
+func testAccDeleteUserIfExists(t *testing.T, username string) {
+	t.Helper()
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Logf("testAccDeleteUserIfExists: cannot create client: %v", err)
+		return
+	}
+	// Remove role associations first, then the user itself, mirroring the
+	// device's referential requirements.
+	for _, role := range []string{"operator", "resource-admin", "admin"} {
+		_ = client.DeleteRequest(fmt.Sprintf(
+			"/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config/f5-system-aaa:users=%s",
+			role, username,
+		))
+	}
+	_ = client.DeleteRequest(fmt.Sprintf(
+		"/openconfig-system:system/aaa/authentication/f5-system-aaa:users/user=%s", username,
+	))
+}
+
 // testAccCheckUserDestroy verifies all f5os_user resources in the state have
 // been deleted from the device.
 func testAccCheckUserDestroy(s *terraform.State) error {
@@ -428,7 +460,8 @@ func TestAccUserRoleChangeRemovesStaleRole(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Step 1: Create user with role=operator
 			{
-				Config: testAccUserResourceConfig("acc_stale_role", "operator"),
+				PreConfig: func() { testAccDeleteUserIfExists(t, "acc_stale_role") },
+				Config:    testAccUserResourceConfig("acc_stale_role", "operator"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_user.test", "username", "acc_stale_role"),
 					resource.TestCheckResourceAttr("f5os_user.test", "role", "operator"),
@@ -459,7 +492,8 @@ func TestAccUserRoleChangeTwice(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Step 1: Create with role=operator
 			{
-				Config: testAccUserResourceConfig("acc_twice", "operator"),
+				PreConfig: func() { testAccDeleteUserIfExists(t, "acc_twice") },
+				Config:    testAccUserResourceConfig("acc_twice", "operator"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_user.test", "role", "operator"),
 					testAccCheckUserRolesOnDevice("acc_twice", []string{"operator"}),
@@ -500,7 +534,8 @@ func TestAccUserResourceWithAuthorizedKeys(t *testing.T) {
 		CheckDestroy:             testAccCheckUserDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccUserResourceConfigWithAuthorizedKeys("sshkeyuser2025", "operator", testSSHKey),
+				PreConfig: func() { testAccDeleteUserIfExists(t, "sshkeyuser2025") },
+				Config:    testAccUserResourceConfigWithAuthorizedKeys("sshkeyuser2025", "operator", testSSHKey),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_user.test", "username", "sshkeyuser2025"),
 					resource.TestCheckResourceAttr("f5os_user.test", "role", "operator"),
@@ -1041,7 +1076,7 @@ func TestUnitUserGetRolesFailureDuringUpdate(t *testing.T) {
 			{
 				PreConfig: func() {
 					st.mu.Lock()
-					// The SDK retries each request 3 times with 10s delay.
+					// The SDK retries each request up to 6 times with 10s delay.
 					// Before the Update apply, the framework calls Read which
 					// also invokes getUserRoles (consuming retries from the
 					// counter). We set the counter high enough to fail ALL
@@ -1049,7 +1084,7 @@ func TestUnitUserGetRolesFailureDuringUpdate(t *testing.T) {
 					// refresh and the Update's own call. The post-apply Read
 					// may also fail, producing a non-empty plan, which we
 					// tolerate with ExpectNonEmptyPlan.
-					st.failGetRolesCount = 9
+					st.failGetRolesCount = 18
 					st.mu.Unlock()
 				},
 				Config:             testAccUserResourceConfig("unittest_getfail", "admin"),
@@ -1112,7 +1147,8 @@ func TestAccUserResourcePasswordUpdate(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create user with initial password
 			{
-				Config: testAccUserResourceConfigPassword("pwchangeuser", "operator", "Init!alP@ss123"),
+				PreConfig: func() { testAccDeleteUserIfExists(t, "pwchangeuser") },
+				Config:    testAccUserResourceConfigPassword("pwchangeuser", "operator", "Init!alP@ss123"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_user.test", "username", "pwchangeuser"),
 					resource.TestCheckResourceAttr("f5os_user.test", "role", "operator"),
@@ -1257,7 +1293,7 @@ func TestUnitUserDeleteWithGetUserRolesFailure(t *testing.T) {
 				PreConfig: func() {
 					st.mu.Lock()
 					// Set counter high to fail all getUserRoles calls during destroy
-					st.failGetRolesCount = 10
+					st.failGetRolesCount = 20
 					st.mu.Unlock()
 				},
 				Config:  testAccUserResourceConfig("deleterolesfailmock", "operator"),

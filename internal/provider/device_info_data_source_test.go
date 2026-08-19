@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -238,9 +239,10 @@ func TestUnitConvertInterfacesInfo(t *testing.T) {
 				{
 					Name: "1.0",
 					Config: struct {
-						Name    string `json:"name,omitempty"`
-						Type    string `json:"type,omitempty"`
-						Enabled bool   `json:"enabled,omitempty"`
+						Name        string  `json:"name,omitempty"`
+						Type        string  `json:"type,omitempty"`
+						Enabled     bool    `json:"enabled,omitempty"`
+						Description *string `json:"description,omitempty"`
 					}{
 						Name:    "1.0",
 						Type:    "iana-if-type:ethernetCsmacd",
@@ -287,9 +289,9 @@ func TestUnitConvertInterfacesInfo(t *testing.T) {
 							OutDiscards      string `json:"out-discards,omitempty"`
 							OutErrors        string `json:"out-errors,omitempty"`
 						}{
-							InOctets:      "11067281",
+							InOctets:        "11067281",
 							InMulticastPkts: "50398",
-							InDiscards:    "10075",
+							InDiscards:      "10075",
 						},
 					},
 					OpenconfigIfEthernetEthernet: struct {
@@ -304,6 +306,9 @@ func TestUnitConvertInterfacesInfo(t *testing.T) {
 							DuplexMode    string `json:"duplex-mode,omitempty"`
 							PortSpeed     string `json:"port-speed,omitempty"`
 						} `json:"config,omitempty"`
+						State struct {
+							Phyport *json.Number `json:"f5-if-ethernet:phyport,omitempty"`
+						} `json:"state,omitempty"`
 					}{
 						Config: struct {
 							AutoNegotiate bool   `json:"auto-negotiate,omitempty"`
@@ -408,11 +413,11 @@ func TestUnitFilterGatherSubsets(t *testing.T) {
 			name:  "all expands to five subsets",
 			input: []string{"all"},
 			expected: map[string]bool{
-				"interfaces":       true,
-				"vlans":            true,
+				"interfaces":        true,
+				"vlans":             true,
 				"controller_images": true,
-				"partition_images": true,
-				"tenant_images":    true,
+				"partition_images":  true,
+				"tenant_images":     true,
 			},
 		},
 		{
@@ -424,10 +429,10 @@ func TestUnitFilterGatherSubsets(t *testing.T) {
 			name:  "all minus interfaces",
 			input: []string{"all", "!interfaces"},
 			expected: map[string]bool{
-				"vlans":            true,
+				"vlans":             true,
 				"controller_images": true,
-				"partition_images": true,
-				"tenant_images":    true,
+				"partition_images":  true,
+				"tenant_images":     true,
 			},
 		},
 		{

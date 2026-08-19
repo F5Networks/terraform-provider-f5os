@@ -1384,6 +1384,7 @@ func TestAccSnmpResourceMixedTargets(t *testing.T) {
 		},
 	})
 }
+
 // --- Mocks & helpers ---
 
 type mockSnmp struct {

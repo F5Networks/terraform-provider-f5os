@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -216,6 +217,14 @@ func TestAuthResourceUnit_DeleteWithNilRequest(t *testing.T) {
 func setupMockServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/restconf/data/openconfig-system:system/aaa":
+			// Login endpoint (uriLogin). NewSession requires an
+			// X-Auth-Token on the response to consider the login
+			// successful; without it the session is rejected.
+			w.Header().Set("X-Auth-Token", "test-token")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{}`)
 		case "/restconf/data/openconfig-system:system/aaa/authentication/config":
 			switch r.Method {
 			case "GET":
@@ -313,7 +322,11 @@ func TestAuthResourceMocked_ClientMethods(t *testing.T) {
 }
 
 func TestAuthResourceMocked_ErrorHandling(t *testing.T) {
-	// Test with server that returns errors
+	// Server that returns errors (and no X-Auth-Token) for every request,
+	// including the login. NewSession must reject a login response that
+	// carries no auth token, so session creation itself fails here.
+	// Keep the retry backoff short so the 6-attempt loop doesn't take 60s.
+	t.Setenv("F5OS_POLL_INTERVAL", "1ms")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = fmt.Fprint(w, "Internal Server Error")
@@ -327,14 +340,11 @@ func TestAuthResourceMocked_ErrorHandling(t *testing.T) {
 		DisableSSLVerify: true,
 	}
 
+	// A login that returns no auth token must fail session creation and
+	// return a nil client rather than a session with an empty token.
 	client, err := f5os.NewSession(config)
-	assert.NoError(t, err, "Client initialization should not fail")
-	// Use a short poll/retry interval so the 3-retry loop doesn't take 30s.
-	client.PollInterval = time.Millisecond
-
-	// Test that errors are properly handled
-	_, err = client.GetAuthOrder()
-	assert.Error(t, err, "Expected error for server error")
+	assert.Error(t, err, "NewSession should fail when login returns no auth token")
+	assert.Nil(t, client, "Client should be nil when session creation fails")
 }
 
 func TestAuthResourceMocked_ComplexConfig(t *testing.T) {
@@ -613,6 +623,80 @@ func TestAuthResourceMocked_DeleteFallbackWhenNoSnapshot(t *testing.T) {
 	})
 }
 
+// TestAuthResourceMocked_DeleteSurfacesClearError verifies that when the
+// auth_order cleanup during destroy fails (e.g., the device is briefly
+// unreachable or returns an error on DELETE), the Delete method surfaces a
+// diagnostic error instead of silently swallowing it. This prevents Terraform
+// from removing the resource from state while the device is left with the
+// Terraform-managed auth_order still applied.
+func TestAuthResourceMocked_DeleteSurfacesClearError(t *testing.T) {
+	// The client retries a failed request up to 6 times before surfacing the
+	// error. We fail exactly one ClearAuthOrder cycle (6 attempts) so the
+	// resource's Delete surfaces an error, then allow subsequent DELETEs to
+	// succeed so the test framework's own post-test cleanup can complete.
+	deleteAttempts := 0
+	failDeleteAttempts := 6
+
+	testAccPreUnitCheck(t)
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	// GET /config returns NO authentication-method — simulates a device with
+	// no pre-existing auth_order, so Delete falls back to ClearAuthOrder.
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"openconfig-system:config":{}}`)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config/authentication-method", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PUT":
+			w.WriteHeader(http.StatusNoContent)
+		case "DELETE":
+			deleteAttempts++
+			if deleteAttempts <= failDeleteAttempts {
+				w.WriteHeader(http.StatusInternalServerError)
+				// Structured RESTCONF error so the client surfaces it.
+				_, _ = fmt.Fprint(w, `{"ietf-restconf:errors":{"error":[{"error-message":"simulated delete failure"}]}}`)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			{
+				Config: `resource "f5os_auth" "test" { auth_order = ["local", "radius"] }`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+				),
+			},
+			{
+				// Destroy this config. The first ClearAuthOrder cycle fails
+				// (mock returns 500), so Delete must surface an error rather
+				// than silently leaving the device dirty.
+				Config:      `resource "f5os_auth" "test" { auth_order = ["local", "radius"] }`,
+				Destroy:     true,
+				ExpectError: regexp.MustCompile(`Failed to clean up auth_order during destroy`),
+			},
+		},
+	})
+}
+
 // TestAccAuthResourceDeleteRestoresOriginal verifies that when Terraform
 // destroys the f5os_auth resource, the auth_order is restored to whatever
 // was configured on the device before Terraform managed it, rather than
@@ -630,6 +714,9 @@ func TestAuthResourceMocked_DeleteFallbackWhenNoSnapshot(t *testing.T) {
 //
 // Safety: always keeps "local" first; restores original baseline in Cleanup.
 func TestAccAuthResourceDeleteRestoresOriginal(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	preExisting := []string{"local", "ldap"}
 
 	client, err := newTestClientFromEnv()
@@ -1019,6 +1106,9 @@ func TestAuthResourceMocked_RoleGIDUpdateAddsNewRole(t *testing.T) {
 //  5. CheckDestroy verifies the device has operator GID 9050
 //  6. t.Cleanup restores the true baseline captured in step 1.
 func TestAccAuthResourceDeleteRestoresRoleGIDs(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	preExistingGID := int64(9050)
 
 	client, err := newTestClientFromEnv()
@@ -1389,6 +1479,10 @@ func TestAuthResourceIntegration_HTTPMethods(t *testing.T) {
 
 		switch req.Method {
 		case "GET":
+			// The login (uriLogin) is a GET; NewSession requires an
+			// X-Auth-Token on the response to accept the session. The
+			// same header is harmless on the GetAuthOrder data GET.
+			w.Header().Set("X-Auth-Token", "test-token")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprint(w, `{"openconfig-system:config": {"authentication-method": ["openconfig-aaa-types:LOCAL"]}}`)
@@ -1432,8 +1526,6 @@ func TestAuthResourceIntegration_HTTPMethods(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Acceptance Tests (require live F5OS device with TF_ACC=1)
 // ---------------------------------------------------------------------------
-
-
 
 // mapOpenConfigMethodsToFriendly converts OpenConfig auth method identifiers
 // to user-friendly names (same mapping as in the resource's getAuthOrder).
@@ -1482,38 +1574,94 @@ func testAccCheckAuthOrderApplied(expectedMethods []string) tfresource.TestCheck
 	}
 }
 
-// testAccCheckAuthDestroy verifies that the auth order was cleared after
-// terraform destroy. Note: Delete intentionally does NOT remove role GID
-// configurations, so we only check that auth_order was removed.
-func testAccCheckAuthDestroy(s *terraform.State) error {
+// captureAuthOrderBaseline reads the device's current auth_order (in friendly
+// form, e.g. ["local", "tacacs"]) so a test can assert that destroy restored
+// the device to exactly this state. Returns nil when the device has no
+// auth_order configured (the unset baseline). Call this from a test's setup
+// (before the resource is created) and pass the result to
+// testAccCheckAuthDestroyRestoresBaseline.
+func captureAuthOrderBaseline(t *testing.T) []string {
+	t.Helper()
 	client, err := newTestClientFromEnv()
 	if err != nil {
-		// Cannot connect — treat as destroyed
-		return nil
+		t.Skipf("Cannot create f5os client to capture auth_order baseline: %v", err)
 	}
-	rawMethods, err := client.GetAuthOrder()
+	raw, err := client.GetAuthOrder()
 	if err != nil {
-		// If the GET fails (e.g., 404 because the path was deleted), that's fine
 		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
 			return nil
 		}
-		return fmt.Errorf("unexpected error checking auth order after destroy: %w", err)
+		t.Skipf("Cannot read auth_order baseline from device: %v", err)
 	}
-	// After ClearAuthOrder (DELETE), the response may return nil/empty or
-	// the device may fall back to a default. Accept nil/empty as "destroyed".
-	if len(rawMethods) == 0 {
+	if len(raw) == 0 {
 		return nil
 	}
-	// Some F5OS versions may return a default auth order after clearing.
-	// Only fail if the test-specific methods (radius, tacacs) are still present,
-	// since those would indicate our config was not cleaned up.
-	friendly := mapOpenConfigMethodsToFriendly(rawMethods)
-	for _, m := range friendly {
-		if m == "radius" || m == "tacacs" {
-			return fmt.Errorf("auth order still contains test method %q after destroy: %v", m, friendly)
+	return mapOpenConfigMethodsToFriendly(raw)
+}
+
+// testAccCheckAuthDestroyRestoresBaseline returns a CheckDestroy function that
+// verifies terraform destroy returned the device's auth_order to the captured
+// baseline. This is baseline-aware: unlike the old hard-coded check, it does
+// not assume the device had no tacacs/radius before the test. On a device
+// whose legitimate baseline is e.g. ["local", "tacacs"], the resource
+// correctly restores that baseline on destroy, and this check passes.
+//
+// Pass the value returned by captureAuthOrderBaseline (nil means the device
+// had no auth_order configured before the test, i.e. the unset baseline).
+//
+// Note: Delete intentionally does NOT remove role GID configurations, so this
+// only checks auth_order.
+func testAccCheckAuthDestroyRestoresBaseline(baseline []string) tfresource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTestClientFromEnv()
+		if err != nil {
+			// Cannot connect — treat as destroyed
+			return nil
+		}
+		rawMethods, err := client.GetAuthOrder()
+		if err != nil {
+			// A 404 / "not found" means the leaf is unset. That's the correct
+			// end state only if the baseline was also unset.
+			if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
+				if len(baseline) == 0 {
+					return nil
+				}
+				return fmt.Errorf("auth order is unset after destroy but baseline was %v; expected it to be restored", baseline)
+			}
+			return fmt.Errorf("unexpected error checking auth order after destroy: %w", err)
+		}
+
+		actual := mapOpenConfigMethodsToFriendly(rawMethods)
+
+		// Baseline was unset: the device should have no auth_order (or a
+		// device-supplied default). Only fail if a test-specific method leaked.
+		if len(baseline) == 0 {
+			if len(actual) == 0 {
+				return nil
+			}
+			return fmt.Errorf("auth order should be unset after destroy (baseline was unset) but device has %v", actual)
+		}
+
+		// Baseline was set: the device must have been restored to exactly it.
+		if !stringSlicesEqual(actual, baseline) {
+			return fmt.Errorf("auth order not restored to baseline after destroy: got %v, want %v", actual, baseline)
+		}
+		return nil
+	}
+}
+
+// stringSlicesEqual reports whether two string slices are equal in length,
+// order, and contents.
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
 		}
 	}
-	return nil
+	return true
 }
 
 // TestAccAuthResource is a real-device acceptance test for the f5os_auth resource.
@@ -1523,10 +1671,15 @@ func testAccCheckAuthDestroy(s *terraform.State) error {
 //   - auth_order always keeps "local" first
 //   - Each step is verified via direct API calls, not just Terraform state
 func TestAccAuthResource(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
+	}
+	testAccPreCheck(t)
+	baseline := captureAuthOrderBaseline(t)
 	tfresource.Test(t, tfresource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		CheckDestroy:             testAccCheckAuthDestroy,
+		CheckDestroy:             testAccCheckAuthDestroyRestoresBaseline(baseline),
 		Steps: []tfresource.TestStep{
 			// Step 1: Create — set auth_order to local + radius
 			{
@@ -1549,7 +1702,11 @@ func TestAccAuthResource(t *testing.T) {
 				// remote_roles: import reads all device roles, not just
 				// user-declared ones, so imported state won't match config.
 				// password_policy: not implemented.
-				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy"},
+				// ldap / login_policy: these 2.0.0-only containers always
+				// exist on the device and import reads them back, but this
+				// test's config doesn't declare them, so they appear only in
+				// the imported state.
+				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy", "ldap", "login_policy"},
 			},
 			// Step 3: Update — change auth_order to local + tacacs
 			{
@@ -1585,10 +1742,15 @@ func TestAccAuthResource(t *testing.T) {
 //
 // Safety: always keeps "local" first; restores baseline on destroy.
 func TestAccAuthResourceDriftDetection(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
+	}
+	testAccPreCheck(t)
+	baseline := captureAuthOrderBaseline(t)
 	tfresource.Test(t, tfresource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		CheckDestroy:             testAccCheckAuthDestroy,
+		CheckDestroy:             testAccCheckAuthDestroyRestoresBaseline(baseline),
 		Steps: []tfresource.TestStep{
 			// Step 1: Create — set auth_order to ["local", "radius"]
 			{
@@ -1669,11 +1831,18 @@ func testAccCheckRoleGIDApplied(rolename string, expectedGID int) tfresource.Tes
 //   - Restores the original operator GID after the test via t.Cleanup
 //   - Pre-flight check skips gracefully if the device blocks role writes
 func TestAccAuthResourceWithRoles(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	// Pre-flight: check if we can modify role config on this device
 	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
 	}
+
+	// Capture the device's auth_order baseline so CheckDestroy can verify the
+	// resource restored it, rather than assuming the device had no auth_order.
+	authBaseline := captureAuthOrderBaseline(t)
 
 	// Save the operator role's current GID so we can restore it after the test
 	originalRoles, err := client.GetRoles()
@@ -1720,7 +1889,7 @@ func TestAccAuthResourceWithRoles(t *testing.T) {
 	tfresource.Test(t, tfresource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		CheckDestroy:             testAccCheckAuthDestroy,
+		CheckDestroy:             testAccCheckAuthDestroyRestoresBaseline(authBaseline),
 		Steps: []tfresource.TestStep{
 			// Step 1: Create — auth_order + operator role GID
 			{
@@ -1745,6 +1914,8 @@ func TestAccAuthResourceWithRoles(t *testing.T) {
 				ImportStateVerifyIgnore: []string{
 					"remote_roles",    // import reads all device roles, not just user-declared
 					"password_policy", // not implemented
+					"ldap",            // 2.0.0-only container present on device, not declared here
+					"login_policy",    // 2.0.0-only container present on device, not declared here
 				},
 			},
 			// Step 3: Update — change auth_order and operator GID
@@ -1975,8 +2146,8 @@ func TestPasswordPolicyConfigToModel(t *testing.T) {
 
 func TestPasswordPolicyAttrTypes(t *testing.T) {
 	attrTypes := passwordPolicyAttrTypes()
-	// Should have exactly 17 fields
-	assert.Equal(t, 17, len(attrTypes), "passwordPolicyAttrTypes should return 17 attribute types")
+	// Should have exactly 20 fields (14 base + 3 v1.7 + 3 v2.0.0)
+	assert.Equal(t, 20, len(attrTypes), "passwordPolicyAttrTypes should return 20 attribute types")
 
 	// Check all expected keys exist
 	expectedKeys := []string{
@@ -1984,7 +2155,7 @@ func TestPasswordPolicyAttrTypes(t *testing.T) {
 		"required_special", "required_differences", "reject_username", "apply_to_root",
 		"retries", "max_login_failures", "unlock_time", "root_lockout",
 		"root_unlock_time", "max_age", "max_letter_repeat", "max_sequence_repeat",
-		"max_class_repeat",
+		"max_class_repeat", "min_days", "remember", "warn_age",
 	}
 	for _, key := range expectedKeys {
 		_, exists := attrTypes[key]
@@ -2018,6 +2189,13 @@ func setupMockServerWithPasswordPolicy() *httptest.Server {
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/openconfig-system:system/aaa"):
+			// Login endpoint (uriLogin). NewSession requires an
+			// X-Auth-Token on the response to accept the session.
+			w.Header().Set("X-Auth-Token", "test-token")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{}`)
 		case strings.HasSuffix(r.URL.Path, "/aaa/f5-openconfig-aaa-password-policy:password-policy/config"):
 			switch r.Method {
 			case "GET":
@@ -2272,8 +2450,6 @@ resource "f5os_auth" "test" {
 // Password Policy Acceptance Tests
 // ---------------------------------------------------------------------------
 
-
-
 // testAccCheckPasswordPolicyApplied queries the device directly to verify
 // password policy fields match expected values.
 func testAccCheckPasswordPolicyApplied(expected *f5os.PasswordPolicyConfig) tfresource.TestCheckFunc {
@@ -2324,6 +2500,34 @@ func testAccCheckPasswordPolicyApplied(expected *f5os.PasswordPolicyConfig) tfre
 				return fmt.Errorf("max-class-repeat mismatch: expected %d, got %s", *expected.MaxClassRepeat, actual)
 			}
 		}
+		// Check 2.0.0+ fields when expected
+		if expected.MinDays != nil {
+			if policy.MinDays == nil || *policy.MinDays != *expected.MinDays {
+				actual := "<nil>"
+				if policy.MinDays != nil {
+					actual = fmt.Sprintf("%d", *policy.MinDays)
+				}
+				return fmt.Errorf("min-days mismatch: expected %d, got %s", *expected.MinDays, actual)
+			}
+		}
+		if expected.Remember != nil {
+			if policy.Remember == nil || *policy.Remember != *expected.Remember {
+				actual := "<nil>"
+				if policy.Remember != nil {
+					actual = fmt.Sprintf("%d", *policy.Remember)
+				}
+				return fmt.Errorf("remember mismatch: expected %d, got %s", *expected.Remember, actual)
+			}
+		}
+		if expected.WarnAge != nil {
+			if policy.WarnAge == nil || *policy.WarnAge != *expected.WarnAge {
+				actual := "<nil>"
+				if policy.WarnAge != nil {
+					actual = fmt.Sprintf("%d", *policy.WarnAge)
+				}
+				return fmt.Errorf("warn-age mismatch: expected %d, got %s", *expected.WarnAge, actual)
+			}
+		}
 		return nil
 	}
 }
@@ -2340,6 +2544,9 @@ func testAccCheckPasswordPolicyApplied(expected *f5os.PasswordPolicyConfig) tfre
 //   - Restores original password policy on destroy
 //   - Uses t.Cleanup to restore baseline even if test fails
 func TestAccAuthResourcePasswordPolicy(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
@@ -2392,6 +2599,8 @@ func TestAccAuthResourcePasswordPolicy(t *testing.T) {
 				ImportStateVerifyIgnore: []string{
 					"remote_roles",    // import reads all device roles, not just user-declared
 					"password_policy", // import reads all device fields, not just user-declared
+					"ldap",            // 2.0.0-only container present on device, not declared here
+					"login_policy",    // 2.0.0-only container present on device, not declared here
 				},
 			},
 			// Step 3: Update password_policy
@@ -2452,6 +2661,26 @@ resource "f5os_auth" "test" {
 		expected.MaxClassRepeat = &classRep
 	}
 
+	// v2.0.0+ added min_days, remember, warn_age. These are non-disruptive
+	// (they govern password age/history warnings, not lockout), so they are
+	// safe to exercise on a shared DUT.
+	if platformVersionAtLeast(deviceVersion, "v2.0") {
+		config += `
+    min_days = 0
+    remember = 3
+    warn_age = 7`
+
+		checks = append(checks,
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.min_days", "0"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.remember", "3"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.warn_age", "7"),
+		)
+		minDays, remember, warnAge := int64(0), int64(3), int64(7)
+		expected.MinDays = &minDays
+		expected.Remember = &remember
+		expected.WarnAge = &warnAge
+	}
+
 	config += `
   }
 }
@@ -2501,6 +2730,25 @@ resource "f5os_auth" "test" {
 		expected.MaxLetterRepeat = &letterRep
 		expected.MaxSequenceRepeat = &seqRep
 		expected.MaxClassRepeat = &classRep
+	}
+
+	// v2.0.0+ min_days, remember, warn_age — use different values from the
+	// Create step to exercise the Update path for these leaves.
+	if platformVersionAtLeast(deviceVersion, "v2.0") {
+		config += `
+    min_days = 1
+    remember = 5
+    warn_age = 14`
+
+		checks = append(checks,
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.min_days", "1"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.remember", "5"),
+			tfresource.TestCheckResourceAttr("f5os_auth.test", "password_policy.warn_age", "14"),
+		)
+		minDays, remember, warnAge := int64(1), int64(5), int64(14)
+		expected.MinDays = &minDays
+		expected.Remember = &remember
+		expected.WarnAge = &warnAge
 	}
 
 	config += `
@@ -3400,6 +3648,9 @@ resource "f5os_auth" "test" {
 //   - Uses safe password policy values (won't lock users out)
 //   - Restores the original password policy in t.Cleanup
 func TestAccAuthResourcePasswordPolicyAllFields(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
@@ -3534,10 +3785,17 @@ resource "f5os_auth" "test" {
 //   - Restores original GIDs in t.Cleanup
 //   - Pre-flight check skips if role writes are denied
 func TestAccAuthResourceWithRolesUpdateAddsRole(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
 	}
+
+	// Capture the device's auth_order baseline so CheckDestroy can verify the
+	// resource restored it, rather than assuming the device had no auth_order.
+	authBaseline := captureAuthOrderBaseline(t)
 
 	// Capture baseline for roles we'll touch
 	originalRoles, err := client.GetRoles()
@@ -3597,7 +3855,7 @@ func TestAccAuthResourceWithRolesUpdateAddsRole(t *testing.T) {
 	tfresource.Test(t, tfresource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		CheckDestroy:             testAccCheckAuthDestroy,
+		CheckDestroy:             testAccCheckAuthDestroyRestoresBaseline(authBaseline),
 		Steps: []tfresource.TestStep{
 			// Step 1: Create with only operator
 			{
@@ -3664,13 +3922,16 @@ resource "f5os_auth" "test" {
 //     (simulating an out-of-band change / drift).
 //  3. Re-apply the same min_length=10 config.
 //     - If Read queries the device: Terraform sees drift, detects a diff,
-//       re-applies min_length=10. The device ends up correct.
+//     re-applies min_length=10. The device ends up correct.
 //     - If Read is broken: Terraform thinks nothing changed, skips the apply,
-//       and the device stays at min_length=15.
+//     and the device stays at min_length=15.
 //  4. Verify via direct API that the device has min_length=10.
 //
 // Safety: uses safe password policy values; restores baseline on cleanup.
 func TestAccAuthResourcePasswordPolicyDriftDetection(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
 	client, err := newTestClientFromEnv()
 	if err != nil {
 		t.Skipf("Cannot create f5os client: %v", err)
@@ -3799,3 +4060,693 @@ resource "f5os_auth" "test" {
 		},
 	})
 }
+
+// setupLoginPolicyMock registers a stateful login-policy handler plus the
+// baseline auth/platform handlers used by the login_policy unit tests. The
+// device version reported to the provider is controlled by the caller via
+// setupMockPlatformVersion.
+func setupLoginPolicyMock(t *testing.T, currentPolicy map[string]interface{}) {
+	t.Helper()
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"openconfig-system:config":{"authentication-method":["openconfig-aaa-types:LOCAL"]}}`)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config/authentication-method", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/f5-openconfig-aaa-login-policy:login-policy/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/yang-data+json")
+			w.WriteHeader(http.StatusOK)
+			resp := map[string]interface{}{
+				"f5-openconfig-aaa-login-policy:config": currentPolicy,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case "PATCH":
+			var payload map[string]map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if config, ok := payload["f5-openconfig-aaa-login-policy:config"]; ok {
+				for k, v := range config {
+					currentPolicy[k] = v
+				}
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+}
+
+// TestUnitAuthResourceLoginPolicy2_0_0 exercises the login_policy nested block
+// on an F5OS 2.0.0 device: Create sends the config, Read refreshes it, and
+// Update changes it. Verifies all three login-policy fields round-trip.
+func TestUnitAuthResourceLoginPolicy2_0_0(t *testing.T) {
+	currentPolicy := map[string]interface{}{
+		"admin-role-limit":           false,
+		"restconf-max-session-limit": float64(10),
+		"ssh-max-session-limit":      float64(10),
+	}
+
+	testAccPreUnitCheck(t)
+	setupMockPlatformVersion(mux, "2.0.0")
+	setupLoginPolicyMock(t, currentPolicy)
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  login_policy = {
+    admin_role_limit           = true
+    restconf_max_session_limit = 5
+    ssh_max_session_limit      = 8
+  }
+}
+`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.admin_role_limit", "true"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.restconf_max_session_limit", "5"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.ssh_max_session_limit", "8"),
+				),
+			},
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  login_policy = {
+    admin_role_limit           = false
+    restconf_max_session_limit = 3
+    ssh_max_session_limit      = 4
+  }
+}
+`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.admin_role_limit", "false"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.restconf_max_session_limit", "3"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.ssh_max_session_limit", "4"),
+				),
+			},
+		},
+	})
+}
+
+// TestUnitAuthResourceLoginPolicyRejectedPre2_0_0 verifies that configuring
+// login_policy on a device below 2.0.0 produces a clear error rather than
+// sending an unknown field to the device.
+func TestUnitAuthResourceLoginPolicyRejectedPre2_0_0(t *testing.T) {
+	currentPolicy := map[string]interface{}{}
+
+	testAccPreUnitCheck(t)
+	setupMockPlatformVersion(mux, "1.8.0")
+	setupLoginPolicyMock(t, currentPolicy)
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  login_policy = {
+    admin_role_limit = true
+  }
+}
+`,
+				ExpectError: regexp.MustCompile(`login_policy is not supported on F5OS versions below 2.0.0`),
+			},
+		},
+	})
+}
+
+// testAccCheckLoginPolicyApplied queries the device directly (bypassing the
+// resource Read method) and verifies the login-policy fields match the
+// expected values.
+func testAccCheckLoginPolicyApplied(adminRoleLimit bool, restconfLimit, sshLimit int64) tfresource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTestClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+		policy, err := client.GetLoginPolicy()
+		if err != nil {
+			return fmt.Errorf("GetLoginPolicy failed: %w", err)
+		}
+		if policy.AdminRoleLimit == nil || *policy.AdminRoleLimit != adminRoleLimit {
+			return fmt.Errorf("admin-role-limit: expected %v, got %v", adminRoleLimit, policy.AdminRoleLimit)
+		}
+		if policy.RestconfMaxSessionLimit == nil || *policy.RestconfMaxSessionLimit != restconfLimit {
+			return fmt.Errorf("restconf-max-session-limit: expected %d, got %v", restconfLimit, policy.RestconfMaxSessionLimit)
+		}
+		if policy.SSHMaxSessionLimit == nil || *policy.SSHMaxSessionLimit != sshLimit {
+			return fmt.Errorf("ssh-max-session-limit: expected %d, got %v", sshLimit, policy.SSHMaxSessionLimit)
+		}
+		return nil
+	}
+}
+
+// TestAccAuthResourceLoginPolicy verifies, against a real F5OS 2.0.0+ device,
+// that the login_policy nested block is applied on Create and Update and that
+// the values are reflected on the device via a direct API check. Skips on
+// devices below 2.0.0.
+//
+// Safety:
+//   - auth_order always keeps "local" first
+//   - login_policy Delete is a no-op, so the true device baseline is captured
+//     up front and restored in t.Cleanup
+func TestAccAuthResourceLoginPolicy(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Skipf("Cannot create f5os client: %v", err)
+	}
+	if !platformVersionAtLeast(client.PlatformVersion, "v2.0") {
+		t.Skipf("skipping: login_policy requires F5OS 2.0.0+ but device reports %q", client.PlatformVersion)
+	}
+
+	// Capture the true device baseline so it can be restored after the test,
+	// since login_policy has no Delete restoration.
+	trueBaseline, err := client.GetLoginPolicy()
+	if err != nil {
+		t.Fatalf("Failed to read true device baseline login policy: %v", err)
+	}
+
+	t.Cleanup(func() {
+		cleanupClient, err := newTestClientFromEnv()
+		if err != nil {
+			t.Logf("WARNING: cleanup failed to create client: %v", err)
+			return
+		}
+		if err := cleanupClient.SetLoginPolicy(trueBaseline); err != nil {
+			t.Logf("WARNING: cleanup failed to restore login policy: %v", err)
+		} else {
+			t.Logf("Cleanup: restored login policy to baseline")
+		}
+	})
+
+	tfresource.Test(t, tfresource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			// Step 1: Create
+			{
+				Config: testAccAuthResourceLoginPolicyConfig,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.admin_role_limit", "true"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.restconf_max_session_limit", "5"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.ssh_max_session_limit", "8"),
+					testAccCheckLoginPolicyApplied(true, 5, 8),
+				),
+			},
+			// Step 2: Update every field
+			{
+				Config: testAccAuthResourceLoginPolicyConfigUpdated,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.admin_role_limit", "false"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.restconf_max_session_limit", "3"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "login_policy.ssh_max_session_limit", "4"),
+					testAccCheckLoginPolicyApplied(false, 3, 4),
+				),
+			},
+			// Step 3: Import
+			{
+				ResourceName:      "f5os_auth.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				// ldap: 2.0.0-only container present on device, read back on
+				// import but not declared by this login_policy-focused config.
+				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy", "ldap"},
+			},
+		},
+	})
+}
+
+const testAccAuthResourceLoginPolicyConfig = `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+
+  login_policy = {
+    admin_role_limit           = true
+    restconf_max_session_limit = 5
+    ssh_max_session_limit      = 8
+  }
+}
+`
+
+const testAccAuthResourceLoginPolicyConfigUpdated = `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+
+  login_policy = {
+    admin_role_limit           = false
+    restconf_max_session_limit = 3
+    ssh_max_session_limit      = 4
+  }
+}
+`
+
+// setupLdapMock registers a stateful LDAP-container handler plus the baseline
+// auth/platform handlers used by the ldap unit tests. The device version
+// reported to the provider is controlled by the caller via
+// setupMockPlatformVersion.
+func setupLdapMock(t *testing.T, currentLdap map[string]interface{}) {
+	t.Helper()
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"openconfig-system:config":{"authentication-method":["openconfig-aaa-types:LOCAL"]}}`)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config/authentication-method", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/yang-data+json")
+			w.WriteHeader(http.StatusOK)
+			resp := map[string]interface{}{
+				"f5-openconfig-aaa-ldap:ldap": currentLdap,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	// The client writes each object-class leaf-list to its own resource path
+	// with PUT (replace semantics), or DELETE to clear it. Mirror that here so
+	// the mock state reflects the same replace behavior the device exhibits.
+	for _, leaf := range []string{"user-object-class", "group-object-class"} {
+		leaf := leaf
+		mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap/"+leaf, func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case "PUT":
+				var payload map[string]interface{}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if v, ok := payload["f5-openconfig-aaa-ldap:"+leaf]; ok {
+					currentLdap[leaf] = v
+				}
+				w.WriteHeader(http.StatusNoContent)
+			case "DELETE":
+				delete(currentLdap, leaf)
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+		})
+	}
+}
+
+// TestUnitAuthResourceLdap2_0_0 exercises the ldap nested block on an F5OS
+// 2.0.0 device: Create sends the object classes, Read refreshes them, and
+// Update changes them. Verifies both leaf-lists round-trip.
+func TestUnitAuthResourceLdap2_0_0(t *testing.T) {
+	currentLdap := map[string]interface{}{
+		"user-object-class":  []interface{}{"person"},
+		"group-object-class": []interface{}{"groupOfNames"},
+	}
+
+	testAccPreUnitCheck(t)
+	setupMockPlatformVersion(mux, "2.0.0")
+	setupLdapMock(t, currentLdap)
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  ldap = {
+    user_object_class  = ["posixAccount"]
+    group_object_class = ["posixGroup"]
+  }
+}
+`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "posixAccount"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.group_object_class.0", "posixGroup"),
+				),
+			},
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  ldap = {
+    user_object_class  = ["posixAccount", "inetOrgPerson"]
+    group_object_class = ["posixGroup"]
+  }
+}
+`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "posixAccount"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.1", "inetOrgPerson"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.group_object_class.0", "posixGroup"),
+				),
+			},
+		},
+	})
+}
+
+// setupLdapDriftMock registers a stateful LDAP-container handler whose GET
+// response is controlled by a caller-owned pointer. Tests can create with one
+// device state, then flip *drift to simulate an out-of-band eviction of a
+// managed leaf-list before the next refresh. PATCH does NOT mutate the GET
+// value, so the flipped state persists through the refresh cycle.
+func setupLdapDriftMock(t *testing.T, drift *map[string]interface{}) {
+	t.Helper()
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component=platform/state/description", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/platform_state.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"openconfig-system:config":{"authentication-method":["openconfig-aaa-types:LOCAL"]}}`)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/config/authentication-method", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.Header().Set("Content-Type", "application/yang-data+json")
+			w.WriteHeader(http.StatusOK)
+			resp := map[string]interface{}{
+				"f5-openconfig-aaa-ldap:ldap": *drift,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+	// Accept the client's per-leaf PUT/DELETE writes but do not persist: the
+	// caller drives GET state via *drift to simulate out-of-band eviction.
+	for _, leaf := range []string{"user-object-class", "group-object-class"} {
+		mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap/"+leaf, func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case "PUT", "DELETE":
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+		})
+	}
+}
+
+// TestUnitAuthResourceLdapDriftSurfaced verifies the non-import drift branch of
+// readLdapConfig: after a successful Create, if the device evicts a managed
+// leaf-list out-of-band (GET now returns it empty), the next refresh must write
+// the device state back so Terraform reports a non-empty plan instead of
+// silently ignoring the drift.
+//
+// This is a regression guard for the previous "config.UserObjectClass != nil"
+// guard, which left stale state in place and hid the drift entirely. The drift
+// is asserted on refresh (not inside Create), because the framework requires
+// Create's returned value to match the plan.
+func TestUnitAuthResourceLdapDriftSurfaced(t *testing.T) {
+	// Step 1 (create) sees the configured values on GET.
+	drift := map[string]interface{}{
+		"user-object-class":  []interface{}{"posixAccount"},
+		"group-object-class": []interface{}{"posixGroup"},
+	}
+
+	testAccPreUnitCheck(t)
+	setupMockPlatformVersion(mux, "2.0.0")
+	setupLdapDriftMock(t, &drift)
+
+	defer teardown()
+
+	const cfg = `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  ldap = {
+    user_object_class  = ["posixAccount"]
+    group_object_class = ["posixGroup"]
+  }
+}
+`
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			{
+				// Create: device reflects the config, apply is clean.
+				Config: cfg,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "posixAccount"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.group_object_class.0", "posixGroup"),
+				),
+			},
+			{
+				// Simulate out-of-band eviction before the refresh: the device
+				// now returns empty leaf-lists. The refresh Read must surface
+				// this as a diff, so the plan is non-empty. With the old guard
+				// the stale value stayed in state and the plan was empty.
+				PreConfig: func() {
+					drift = map[string]interface{}{}
+				},
+				Config:             cfg,
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+		},
+	})
+}
+
+// TestUnitAuthResourceLdapRejectedPre2_0_0 verifies that configuring the ldap
+// block on a device below 2.0.0 produces a clear error rather than sending an
+// unknown field to the device.
+func TestUnitAuthResourceLdapRejectedPre2_0_0(t *testing.T) {
+	currentLdap := map[string]interface{}{}
+
+	testAccPreUnitCheck(t)
+	setupMockPlatformVersion(mux, "1.8.0")
+	setupLdapMock(t, currentLdap)
+
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  ldap = {
+    user_object_class = ["posixAccount"]
+  }
+}
+`,
+				ExpectError: regexp.MustCompile(`ldap configuration \(user_object_class/group_object_class\) is not supported`),
+			},
+		},
+	})
+}
+
+// TestUnitLdapConfigToModel exercises the ldapConfigToModel converter directly
+// (the code path used during import) for both populated and nil leaf-lists.
+func TestUnitLdapConfigToModel(t *testing.T) {
+	ctx := context.Background()
+
+	// Populated leaf-lists round-trip into non-null lists.
+	cfg := &f5os.LdapConfig{
+		UserObjectClass:  []string{"posixAccount"},
+		GroupObjectClass: []string{"posixGroup"},
+	}
+	model, diags := ldapConfigToModel(ctx, cfg)
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if model.UserObjectClass.IsNull() {
+		t.Errorf("expected user_object_class to be non-null")
+	}
+	if model.GroupObjectClass.IsNull() {
+		t.Errorf("expected group_object_class to be non-null")
+	}
+	var users []string
+	model.UserObjectClass.ElementsAs(ctx, &users, false)
+	if len(users) != 1 || users[0] != "posixAccount" {
+		t.Errorf("user_object_class: got %v", users)
+	}
+
+	// Nil leaf-lists map to null lists.
+	empty, diags := ldapConfigToModel(ctx, &f5os.LdapConfig{})
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if !empty.UserObjectClass.IsNull() {
+		t.Errorf("expected null user_object_class for empty config")
+	}
+	if !empty.GroupObjectClass.IsNull() {
+		t.Errorf("expected null group_object_class for empty config")
+	}
+}
+
+// testAccCheckLdapApplied queries the device directly (bypassing the resource
+// Read method) and verifies the LDAP object-class leaf-lists match the
+// expected values.
+func testAccCheckLdapApplied(userClasses, groupClasses []string) tfresource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		client, err := newTestClientFromEnv()
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+		config, err := client.GetLdapConfig()
+		if err != nil {
+			return fmt.Errorf("GetLdapConfig failed: %w", err)
+		}
+		if !slices.Equal(config.UserObjectClass, userClasses) {
+			return fmt.Errorf("user-object-class: expected %v, got %v", userClasses, config.UserObjectClass)
+		}
+		if !slices.Equal(config.GroupObjectClass, groupClasses) {
+			return fmt.Errorf("group-object-class: expected %v, got %v", groupClasses, config.GroupObjectClass)
+		}
+		return nil
+	}
+}
+
+// TestAccAuthResourceLdap verifies, against a real F5OS 2.0.0+ device, that the
+// ldap nested block is applied on Create and Update and that the values are
+// reflected on the device via a direct API check. Skips on devices below
+// 2.0.0.
+//
+// Safety:
+//   - auth_order always keeps "local" first
+//   - ldap Delete is a no-op, so the true device baseline is captured up front
+//     and restored in t.Cleanup
+func TestAccAuthResourceLdap(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance test")
+	}
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Skipf("Cannot create f5os client: %v", err)
+	}
+	if !platformVersionAtLeast(client.PlatformVersion, "v2.0") {
+		t.Skipf("skipping: ldap object classes require F5OS 2.0.0+ but device reports %q", client.PlatformVersion)
+	}
+
+	// Capture the true device baseline so it can be restored after the test,
+	// since the ldap block has no Delete restoration.
+	trueBaseline, err := client.GetLdapConfig()
+	if err != nil {
+		t.Fatalf("Failed to read true device baseline ldap config: %v", err)
+	}
+
+	t.Cleanup(func() {
+		cleanupClient, err := newTestClientFromEnv()
+		if err != nil {
+			t.Logf("WARNING: cleanup failed to create client: %v", err)
+			return
+		}
+		if err := cleanupClient.SetLdapConfig(trueBaseline); err != nil {
+			t.Logf("WARNING: cleanup failed to restore ldap config: %v", err)
+		} else {
+			t.Logf("Cleanup: restored ldap config to baseline")
+		}
+	})
+
+	tfresource.Test(t, tfresource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			// Step 1: Create
+			{
+				Config: testAccAuthResourceLdapConfig,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "auth_order.0", "local"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "posixAccount"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.group_object_class.0", "posixGroup"),
+					testAccCheckLdapApplied([]string{"posixAccount"}, []string{"posixGroup"}),
+				),
+			},
+			// Step 2: Update the user object classes
+			{
+				Config: testAccAuthResourceLdapConfigUpdated,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "posixAccount"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.1", "inetOrgPerson"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.group_object_class.0", "posixGroup"),
+					testAccCheckLdapApplied([]string{"posixAccount", "inetOrgPerson"}, []string{"posixGroup"}),
+				),
+			},
+			// Step 3: Import
+			{
+				ResourceName:            "f5os_auth.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy", "login_policy"},
+			},
+		},
+	})
+}
+
+const testAccAuthResourceLdapConfig = `
+resource "f5os_auth" "test" {
+  auth_order = ["local", "ldap"]
+
+  ldap = {
+    user_object_class  = ["posixAccount"]
+    group_object_class = ["posixGroup"]
+  }
+}
+`
+
+const testAccAuthResourceLdapConfigUpdated = `
+resource "f5os_auth" "test" {
+  auth_order = ["local", "ldap"]
+
+  ldap = {
+    user_object_class  = ["posixAccount", "inetOrgPerson"]
+    group_object_class = ["posixGroup"]
+  }
+}
+`

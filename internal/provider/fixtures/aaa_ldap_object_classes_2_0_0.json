@@ -1,0 +1,12 @@
+{
+  "f5-openconfig-aaa-ldap:ldap": {
+    "user-object-class": [
+      "posixAccount",
+      "person"
+    ],
+    "group-object-class": [
+      "posixGroup",
+      "groupOfNames"
+    ]
+  }
+}

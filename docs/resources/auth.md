@@ -35,6 +35,24 @@ resource "f5os_auth" "aaa" {
     max_login_failures = 5
     unlock_time        = 300
     max_age            = 90
+
+    # min_days, remember, and warn_age are only supported on F5OS 2.0.0 and later.
+    min_days = 1
+    remember = 5
+    warn_age = 14
+  }
+
+  # login_policy is only supported on F5OS 2.0.0 and later.
+  login_policy = {
+    admin_role_limit           = true
+    restconf_max_session_limit = 10
+    ssh_max_session_limit      = 10
+  }
+
+  # ldap object classes are only supported on F5OS 2.0.0 and later.
+  ldap = {
+    user_object_class  = ["posixAccount"]
+    group_object_class = ["posixGroup"]
   }
 }
 ```
@@ -45,12 +63,33 @@ resource "f5os_auth" "aaa" {
 ### Optional
 
 - `auth_order` (List of String) Ordered list of authentication methods. Allowed values: local, radius, tacacs, ldap.
+- `ldap` (Attributes) LDAP server configuration. Only supported on F5OS >= 2.0.0. Only fields you specify are managed; unspecified fields are left at device defaults. (see [below for nested schema](#nestedatt--ldap))
+- `login_policy` (Attributes) AAA login-policy settings. Only supported on F5OS >= 2.0.0. Only fields you specify are managed; unspecified fields are left at device defaults. (see [below for nested schema](#nestedatt--login_policy))
 - `password_policy` (Attributes) Password policy settings. Only fields you specify are managed; unspecified fields are left at device defaults. (see [below for nested schema](#nestedatt--password_policy))
 - `remote_roles` (Attributes Set) Remote role mappings. Configure role GID (and optionally LDAP group association). (see [below for nested schema](#nestedatt--remote_roles))
 
 ### Read-Only
 
 - `id` (String) Synthetic ID for the auth resource.
+
+<a id="nestedatt--ldap"></a>
+### Nested Schema for `ldap`
+
+Optional:
+
+- `group_object_class` (List of String) Object classes used when searching for LDAP group objects (e.g. ["posixGroup"]).
+- `user_object_class` (List of String) Object classes used when searching for LDAP user objects (e.g. ["posixAccount"]).
+
+
+<a id="nestedatt--login_policy"></a>
+### Nested Schema for `login_policy`
+
+Optional:
+
+- `admin_role_limit` (Boolean) Whether to limit concurrent sessions for the admin role.
+- `restconf_max_session_limit` (Number) Maximum number of concurrent RESTCONF sessions.
+- `ssh_max_session_limit` (Number) Maximum number of concurrent SSH sessions.
+
 
 <a id="nestedatt--password_policy"></a>
 ### Nested Schema for `password_policy`
@@ -63,8 +102,10 @@ Optional:
 - `max_letter_repeat` (Number) Max repeating lowercase letters allowed. Only supported on F5OS >= v1.7.
 - `max_login_failures` (Number) Failed login attempts before lockout.
 - `max_sequence_repeat` (Number) Max repeating letters/digits allowed. Only supported on F5OS >= v1.7.
+- `min_days` (Number) Minimum number of days between password changes. Only supported on F5OS >= 2.0.0.
 - `min_length` (Number) Minimum password length.
 - `reject_username` (Boolean) Reject passwords containing the username.
+- `remember` (Number) Number of previous passwords remembered to prevent reuse. Only supported on F5OS >= 2.0.0.
 - `required_differences` (Number) Characters that must differ from previous password.
 - `required_lowercase` (Number) Required lowercase character count.
 - `required_numeric` (Number) Required numeric digit count.
@@ -74,6 +115,7 @@ Optional:
 - `root_lockout` (Boolean) Enable lockout of root accounts.
 - `root_unlock_time` (Number) Root account unlock time in seconds.
 - `unlock_time` (Number) Account unlock time in seconds (0 = manual).
+- `warn_age` (Number) Number of days before expiration to warn the user. Only supported on F5OS >= 2.0.0.
 
 
 <a id="nestedatt--remote_roles"></a>

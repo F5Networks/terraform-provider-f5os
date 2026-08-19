@@ -6,7 +6,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
@@ -76,10 +78,37 @@ func testAccPreUnitCheck(t *testing.T) {
 	_ = os.Setenv("F5OS_POLL_INTERVAL", "1ms")
 }
 
+// unitTestLoginURI is the RESTCONF path NewSession uses to authenticate.
+// Kept in sync with the client's uriLogin constant.
+const unitTestLoginURI = "/restconf/data/openconfig-system:system/aaa"
+
 func setup() {
 	// test server
 	mux = http.NewServeMux()
-	server = httptest.NewServer(mux)
+	// Wrap the mux so the login endpoint always yields an X-Auth-Token.
+	// NewSession rejects a login response without a token, but many unit
+	// tests only register their resource-specific data endpoints (or a
+	// handler on the login path itself, for a different purpose such as a
+	// token-lifetime PATCH) and rely on a successful session handshake.
+	//
+	// For the login path we pre-set a default X-Auth-Token before invoking
+	// the mux. A registered handler can still overwrite the header, but if
+	// it does not (the common case), the token is present so the session is
+	// created. If no handler is registered for the login path at all, we
+	// answer it directly.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == unitTestLoginURI {
+			w.Header().Set("X-Auth-Token", "test-token")
+			if _, pattern := mux.Handler(r); pattern == "" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
+		}
+		mux.ServeHTTP(w, r)
+	})
+	server = httptest.NewServer(handler)
 }
 
 func teardown() {
@@ -112,9 +141,28 @@ func loadFixtureString(path string) string {
 	return string(loadFixtureBytes(path))
 }
 
-// newTestClientFromEnv creates a fresh f5osclient session from the standard
+// testClientCache caches f5osclient sessions keyed by the connection
+// parameters (host|user|port) so that repeated calls to newTestClientFromEnv
+// during a test run reuse a single authenticated session instead of logging in
+// again for every check function.
+//
+// Each acceptance test spins up many custom check functions, and each one used
+// to call f5ossdk.NewSession — a full login + setPlatformType handshake. On
+// devices with a strict AAA login policy (e.g. F5OS 2.0.0) that burst of logins
+// trips the auth rate-limiter and check functions start getting 401
+// access-denied. Reusing one session per connection eliminates the churn.
+var (
+	testClientCacheMu sync.Mutex
+	testClientCache   = map[string]*f5ossdk.F5os{}
+)
+
+// newTestClientFromEnv returns an f5osclient session built from the standard
 // F5OS_HOST / F5OS_USERNAME (or F5OS_USER) / F5OS_PASSWORD / F5OS_PORT
 // environment variables. Port defaults to 8888 to match the provider.
+//
+// The session is cached and reused across calls with the same connection
+// parameters to avoid re-authenticating on every acceptance-test check
+// function, which can trip the device's auth rate-limiter.
 //
 // Use this in acceptance-test check functions that need an independent client
 // to verify device state outside of the Terraform resource lifecycle.
@@ -131,6 +179,16 @@ func newTestClientFromEnv() (*f5ossdk.F5os, error) {
 			port = v
 		}
 	}
+
+	key := fmt.Sprintf("%s|%s|%d", host, user, port)
+
+	testClientCacheMu.Lock()
+	defer testClientCacheMu.Unlock()
+
+	if client, ok := testClientCache[key]; ok && client != nil {
+		return client, nil
+	}
+
 	cfg := &f5ossdk.F5osConfig{
 		Host:             host,
 		User:             user,
@@ -138,7 +196,12 @@ func newTestClientFromEnv() (*f5ossdk.F5os, error) {
 		Port:             port,
 		DisableSSLVerify: true,
 	}
-	return f5ossdk.NewSession(cfg)
+	client, err := f5ossdk.NewSession(cfg)
+	if err != nil {
+		return nil, err
+	}
+	testClientCache[key] = client
+	return client, nil
 }
 
 // testAccPreCheckPlatformRSeries creates a throwaway f5osclient session to
@@ -180,4 +243,94 @@ func setupMockPlatformVersion(m *http.ServeMux, version string) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `{"f5-system-image:install":{"install-os-version":"%s","install-status":"success"}}`, version)
 	})
+}
+
+// TestSessionCacheConcurrencyDedupe exercises the session-cache
+// "double-check" pattern used in Configure by simulating concurrent
+// callers that attempt to get-or-create a session for the same cache
+// key. The test does not call the networked NewSession path; it
+// simulates creation to avoid external dependencies while validating
+// the concurrency semantics (only one final cache entry and all
+// callers receive the same pointer).
+func TestSessionCacheConcurrencyDedupe(t *testing.T) {
+	const goroutines = 20
+
+	// Ensure a clean starting state.
+	sessionCacheMu.Lock()
+	sessionCache = map[string]*f5ossdk.F5os{}
+	sessionCacheMu.Unlock()
+
+	host := "unit-test-host"
+	port := 8888
+	user := "tester"
+	password := "pw"
+	disableSSL := false
+	headers := map[string]string{}
+
+	cacheKey := sessionCacheKey(host, port, user, password, disableSSL, headers)
+
+	results := make(chan *f5ossdk.F5os, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+
+			// Read phase (fast, uses the mutex as in Configure).
+			sessionCacheMu.Lock()
+			client := sessionCache[cacheKey]
+			sessionCacheMu.Unlock()
+
+			if client == nil {
+				// Simulate the expensive creation path (NewSession)
+				// without performing network I/O. Sleep briefly to
+				// increase the chance of interleaving between
+				// goroutines.
+				time.Sleep(5 * time.Millisecond)
+				created := &f5ossdk.F5os{
+					Host:     host,
+					User:     user,
+					Password: password,
+				}
+
+				// Double-check + store, matching the provider's pattern.
+				sessionCacheMu.Lock()
+				if existing, ok := sessionCache[cacheKey]; ok {
+					client = existing
+				} else {
+					sessionCache[cacheKey] = created
+					client = created
+				}
+				sessionCacheMu.Unlock()
+			}
+
+			results <- client
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	// Verify all goroutines received the same pointer and the cache
+	// has one entry.
+	var first *f5ossdk.F5os
+	for c := range results {
+		if first == nil {
+			first = c
+			continue
+		}
+		if c != first {
+			t.Fatalf("concurrent callers received different client pointers: %p vs %p", first, c)
+		}
+	}
+
+	sessionCacheMu.Lock()
+	if len(sessionCache) != 1 {
+		t.Fatalf("expected 1 entry in sessionCache, got %d", len(sessionCache))
+	}
+	if sessionCache[cacheKey] != first {
+		t.Fatalf("sessionCache entry does not match returned clients: cache=%p returned=%p", sessionCache[cacheKey], first)
+	}
+	sessionCacheMu.Unlock()
 }

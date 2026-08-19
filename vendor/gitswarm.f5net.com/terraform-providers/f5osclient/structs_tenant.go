@@ -75,10 +75,14 @@ type F5ReqTenant struct {
 		TargetDeploymentFile    string `json:"target-deployment-file,omitempty"`
 		UpgradeStatus           string `json:"upgrade-status,omitempty"`
 		Nodes                   []int  `json:"nodes,omitempty"`
-		MgmtIp                  string `json:"mgmt-ip,omitempty"`
-		PrefixLength            int    `json:"prefix-length,omitempty"`
-		Gateway                 string `json:"gateway,omitempty"`
-		MacData                 struct {
+		// MaxNodes is the maximum number of nodes a tenant may scale to.
+		// Introduced in F5OS 2.0.0 (tenant config.max-nodes). Left omitempty
+		// so it is not sent to devices that predate 2.0.0.
+		MaxNodes     int    `json:"max-nodes,omitempty"`
+		MgmtIp       string `json:"mgmt-ip,omitempty"`
+		PrefixLength int    `json:"prefix-length,omitempty"`
+		Gateway      string `json:"gateway,omitempty"`
+		MacData      struct {
 			F5TenantL2InlineMacBlockSize string `json:"f5-tenant-l2-inline:mac-block-size,omitempty"`
 		} `json:"mac-data,omitempty"`
 		DagIpv6PrefixLength int `json:"dag-ipv6-prefix-length,omitempty"`
@@ -101,7 +105,7 @@ type F5ReqTenant struct {
 		} `json:"storage,omitempty"`
 		Hugepages []struct {
 			Slot int    `json:"slot,omitempty"`
-			Path string `json:"pathomitempty"`
+			Path string `json:"path,omitempty"`
 		} `json:"hugepages,omitempty"`
 		RunningState  string `json:"running-state,omitempty"`
 		TrustMode     string `json:"trust-mode,omitempty"`
@@ -155,7 +159,7 @@ type F5RespTenant struct {
 		} `json:"storage,omitempty"`
 		Hugepages []struct {
 			Slot int    `json:"slot,omitempty"`
-			Path string `json:"pathomitempty"`
+			Path string `json:"path,omitempty"`
 		} `json:"hugepages,omitempty"`
 		RunningState  string `json:"running-state,omitempty"`
 		TrustMode     string `json:"trust-mode,omitempty"`
@@ -185,8 +189,15 @@ type F5RespTenant struct {
 		TrustMode           bool   `json:"trust-mode,omitempty"`
 		DagIpv6PrefixLength int    `json:"dag-ipv6-prefix-length,omitempty"`
 		MacData             struct {
-			BaseMac                  string `json:"base-mac,omitempty"`
-			MacPoolSize              int    `json:"mac-pool-size,omitempty"`
+			BaseMac     string `json:"base-mac,omitempty"`
+			MacPoolSize int    `json:"mac-pool-size,omitempty"`
+			// F5TenantL2InlineMacBlock is best-effort. As of F5OS 2.0.0 the
+			// tenant state response no longer includes
+			// state.mac-data.f5-tenant-l2-inline:mac-block (nor its
+			// mac-block[].mac entries). It stays omitempty so an absent field
+			// simply decodes to a nil slice. Nothing in the provider consumes
+			// this field (only MacPoolSize, which 2.0.0 still returns, is read
+			// in the tenant Read path), so its absence is a functional no-op.
 			F5TenantL2InlineMacBlock []struct {
 				Mac string `json:"mac,omitempty"`
 			} `json:"f5-tenant-l2-inline:mac-block,omitempty"`
@@ -194,6 +205,15 @@ type F5RespTenant struct {
 		ApplianceMode struct {
 			Enabled bool `json:"enabled,omitempty"`
 		} `json:"appliance-mode,omitempty"`
+		// The following fields are optional/best-effort. As of F5OS 2.0.0
+		// the tenant state response no longer includes cpu-allocations,
+		// primary-slot, image-version, or instances. They must remain
+		// omitempty so an absent field simply decodes to the zero value.
+		// cpu-allocations, primary-slot, and image-version are consumed via
+		// this typed struct and are therefore safe when absent. The instances
+		// detail is also read from an untyped map in tenantWait, which guards
+		// each level of the map access before asserting types to avoid a
+		// panic when the field is nil.
 		CpuAllocations struct {
 			CpuAllocation []struct {
 				Node int   `json:"node,omitempty"`
@@ -215,6 +235,22 @@ type F5RespTenant struct {
 				MgmtMac      string    `json:"mgmt-mac,omitempty"`
 			} `json:"instance,omitempty"`
 		} `json:"instances,omitempty"`
+		// The following state fields are introduced in F5OS 2.0.0 and are
+		// read-only. They remain omitempty so an absent field simply decodes
+		// to the zero value on devices that predate 2.0.0.
+		//
+		// MaxNodes mirrors config.max-nodes (confirmed max-nodes=8 present on
+		// 2.0.0 tenants). MgmtVlan/MgmtVlanAccessible come from the
+		// f5-tenant-mgmt-vlan augmentation. FeatureFlags.ClusteringAsService
+		// reports whether clustering-as-a-service is enabled. Vlans mirrors
+		// the tenant's assigned VLAN IDs in state.
+		MaxNodes           int   `json:"max-nodes,omitempty"`
+		MgmtVlan           int   `json:"f5-tenant-mgmt-vlan:mgmt-vlan,omitempty"`
+		MgmtVlanAccessible bool  `json:"f5-tenant-mgmt-vlan:mgmt-vlan-accessible,omitempty"`
+		Vlans              []int `json:"vlans,omitempty"`
+		FeatureFlags       struct {
+			ClusteringAsService bool `json:"clustering-as-service,omitempty"`
+		} `json:"feature-flags,omitempty"`
 	} `json:"state,omitempty"`
 }
 

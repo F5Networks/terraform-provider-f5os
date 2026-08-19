@@ -388,6 +388,113 @@ func (p *F5os) DeleteTlsCertKey(certKeyName string) error {
 	return err
 }
 
+// uriTlsContainer is the RESTCONF path to the aaa-tls tls container
+// (config + state). Used by GetTlsCertKey and ImportTlsCertKey on
+// F5OS 2.0.0+.
+const uriTlsContainer = "/openconfig-system:system/aaa/f5-openconfig-aaa-tls:tls"
+
+// tlsContainerResponse models the JSON envelope returned by a GET on
+// the aaa-tls tls container. The device may emit either bare
+// ("certificate") or module-prefixed ("f5-openconfig-aaa-tls:
+// certificate") leaf names depending on firmware version — both
+// forms are decoded, with the module-prefixed variant taking
+// precedence when both are present.
+type tlsContainerResponse struct {
+	TLS struct {
+		Config struct {
+			Certificate         string `json:"certificate,omitempty"`
+			CertificatePrefixed string `json:"f5-openconfig-aaa-tls:certificate,omitempty"`
+			// Key is intentionally omitted here: the device never
+			// returns it and modeling it would just silently swallow a
+			// value if a future firmware started emitting one.
+		} `json:"config"`
+		State struct {
+			Certificate         string `json:"certificate,omitempty"`
+			CertificatePrefixed string `json:"f5-openconfig-aaa-tls:certificate,omitempty"`
+		} `json:"state"`
+	} `json:"f5-openconfig-aaa-tls:tls"`
+}
+
+// coalesce returns the first non-empty argument. Used by
+// GetTlsCertKey to pick between namespaced and bare leaf variants.
+func coalesce(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// tlsImportPayload is the wire format for PATCHing an existing
+// certificate + key onto the aaa-tls tls/config container. Both
+// leaves are optional — the caller decides which to set — but at
+// least one must be non-empty for the request to be meaningful.
+//
+// The body must be wrapped in the module-prefixed container key
+// "f5-openconfig-aaa-tls:tls" to match the PATCH target path. A bare
+// {"config": {...}} body is rejected by F5OS 2.0.0. The device's
+// verbatim error text uses its internal short module name
+// (error-tag "missing-element", message "missing element: tls in
+// /oc-sys:system/oc-sys:aaa/f5-aaa-tls:tls"); the RESTCONF path and
+// this payload use the public "f5-openconfig-aaa-tls" module name.
+type tlsImportPayload struct {
+	Tls struct {
+		Config struct {
+			Certificate string `json:"certificate,omitempty"`
+			Key         string `json:"key,omitempty"`
+		} `json:"config"`
+	} `json:"f5-openconfig-aaa-tls:tls"`
+}
+
+// GetTlsCertKey reads the aaa-tls tls container and returns the
+// certificate present under config.certificate (round-trip of what
+// the caller last imported) and state.certificate (device view).
+// The key is never returned by the device and cannot be reconstructed
+// from state; callers that need to detect key drift must track it
+// externally. Requires F5OS 2.0.0+.
+func (p *F5os) GetTlsCertKey() (*TlsCertKey, *TlsCertKeyState, error) {
+	f5osLogger.Debug("[GetTlsCertKey]", "Request path", hclog.Fmt("%+v", uriTlsContainer))
+	resp, err := p.GetRequest(uriTlsContainer)
+	if err != nil {
+		return nil, nil, fmt.Errorf("GET aaa-tls tls container failed: %w", err)
+	}
+	if len(resp) == 0 {
+		return &TlsCertKey{}, &TlsCertKeyState{}, nil
+	}
+	var envelope tlsContainerResponse
+	if err := json.Unmarshal(resp, &envelope); err != nil {
+		return nil, nil, fmt.Errorf("invalid JSON for aaa-tls tls container: %w", err)
+	}
+	cfg := &TlsCertKey{
+		Certificate: coalesce(envelope.TLS.Config.CertificatePrefixed, envelope.TLS.Config.Certificate),
+	}
+	state := &TlsCertKeyState{
+		Certificate: coalesce(envelope.TLS.State.CertificatePrefixed, envelope.TLS.State.Certificate),
+	}
+	return cfg, state, nil
+}
+
+// ImportTlsCertKey PATCHes the provided certificate and/or key onto
+// the aaa-tls tls/config container. This is the F5OS 2.0.0+ path for
+// installing an existing certificate/key pair instead of generating
+// a self-signed cert. Requires F5OS 2.0.0+.
+func (p *F5os) ImportTlsCertKey(certificate, key string) error {
+	if certificate == "" && key == "" {
+		return fmt.Errorf("ImportTlsCertKey: at least one of certificate or key must be non-empty")
+	}
+	var payload tlsImportPayload
+	payload.Tls.Config.Certificate = certificate
+	payload.Tls.Config.Key = key
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal aaa-tls import payload: %w", err)
+	}
+	f5osLogger.Debug("[ImportTlsCertKey]", "Request path", hclog.Fmt("%+v", uriTlsContainer))
+	if _, err := p.PatchRequest(uriTlsContainer, body); err != nil {
+		return fmt.Errorf("PATCH aaa-tls tls container failed: %w", err)
+	}
+	return nil
+}
+
 // PatchDNSConfig sets DNS config using PATCH to /system/dns
 func (c *F5os) PatchDNSConfig(dnsServers []string, searchDomains []string) error {
 	// Pre-allocate so json.Marshal produces "server":[] not "server":null
@@ -537,6 +644,11 @@ type ntpServerConfig struct {
 	KeyID   *int64 `json:"f5-openconfig-system-ntp:key-id,omitempty"`
 	Prefer  bool   `json:"prefer"`
 	Iburst  bool   `json:"iburst"`
+	// F5OS 2.0.0+ additive config leaves. Pointers with omitempty so we
+	// never send them to devices below 2.0.0 (which reject the keys).
+	AssociationType *string `json:"association-type,omitempty"`
+	Version         *int64  `json:"version,omitempty"`
+	Port            *int64  `json:"port,omitempty"`
 }
 
 type ntpServerPayload struct {
@@ -566,18 +678,7 @@ func (c *F5os) CreateNTPServer(server string, payload []byte) error {
 }
 
 func (c *F5os) CreateNTPServerPayload(server string, plan NTPServerModel) ([]byte, error) {
-	cfg := ntpServerConfig{
-		Address: server,
-		Prefer:  plan.Prefer.ValueBool(),
-		Iburst:  plan.IBurst.ValueBool(),
-	}
-	// Only include key-id when explicitly set (not null/unknown) so that
-	// omitempty correctly omits the field when the user did not configure it,
-	// while still sending key_id=0 when the user explicitly sets it to zero.
-	if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() {
-		v := plan.KeyID.ValueInt64()
-		cfg.KeyID = &v
-	}
+	cfg := buildNTPServerConfig(server, plan)
 	payload := ntpServerPayload{
 		Server: []struct {
 			Address string          `json:"address"`
@@ -590,6 +691,38 @@ func (c *F5os) CreateNTPServerPayload(server string, plan NTPServerModel) ([]byt
 		},
 	}
 	return json.Marshal(payload)
+}
+
+// buildNTPServerConfig maps an NTPServerModel to the wire-level
+// ntpServerConfig used by both POST (Create) and PATCH (Update)
+// payloads. Only fields explicitly set in the plan are included; nil
+// pointers keep the RESTCONF payload compatible with pre-2.0.0 devices
+// via `omitempty`.
+func buildNTPServerConfig(server string, plan NTPServerModel) ntpServerConfig {
+	cfg := ntpServerConfig{
+		Address: server,
+		Prefer:  plan.Prefer.ValueBool(),
+		Iburst:  plan.IBurst.ValueBool(),
+	}
+	if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() {
+		v := plan.KeyID.ValueInt64()
+		cfg.KeyID = &v
+	}
+	// F5OS 2.0.0+ leaves. Version-gating happens in the resource layer;
+	// here we just include each leaf iff the caller populated it.
+	if !plan.AssociationType.IsNull() && !plan.AssociationType.IsUnknown() {
+		v := plan.AssociationType.ValueString()
+		cfg.AssociationType = &v
+	}
+	if !plan.Version.IsNull() && !plan.Version.IsUnknown() {
+		v := plan.Version.ValueInt64()
+		cfg.Version = &v
+	}
+	if !plan.Port.IsNull() && !plan.Port.IsUnknown() {
+		v := plan.Port.ValueInt64()
+		cfg.Port = &v
+	}
+	return cfg
 }
 
 func (c *F5os) GetNTPServer(server string) (*NTPServerStruct, error) {
@@ -608,12 +741,27 @@ func (c *F5os) GetNTPServer(server string) (*NTPServerStruct, error) {
 	}
 
 	entry := envelope.Server[0]
-	return &NTPServerStruct{
-		Address: entry.Config.Address,
-		KeyID:   entry.Config.KeyID,
-		Prefer:  entry.Config.Prefer,
-		IBurst:  entry.Config.IBurst,
-	}, nil
+	out := &NTPServerStruct{
+		Address:              entry.Config.Address,
+		KeyID:                entry.Config.KeyID,
+		Prefer:               entry.Config.Prefer,
+		IBurst:               entry.Config.IBurst,
+		AssociationType:      entry.Config.AssociationType,
+		Version:              entry.Config.Version,
+		Port:                 entry.Config.Port,
+		StateAssociationType: entry.State.AssociationType,
+		StateIBurst:          entry.State.IBurst,
+		StatePort:            entry.State.Port,
+		StatePrefer:          entry.State.Prefer,
+		StateStratum:         entry.State.Stratum,
+		StateVersion:         entry.State.Version,
+		StateAuthenticated:   entry.State.Authenticated,
+	}
+	if entry.State.Address != "" {
+		addr := entry.State.Address
+		out.StateAddress = &addr
+	}
+	return out, nil
 }
 
 // GetNTPGlobalConfig reads the global NTP service and authentication settings
@@ -637,15 +785,7 @@ func (c *F5os) GetNTPGlobalConfig() (service bool, auth bool, err error) {
 // "openconfig-system:server":[...] which is what PATCH on
 // /ntp/servers/server={addr} expects.
 func (c *F5os) UpdateNTPServerPayload(server string, plan NTPServerModel) ([]byte, error) {
-	cfg := ntpServerConfig{
-		Address: server,
-		Prefer:  plan.Prefer.ValueBool(),
-		Iburst:  plan.IBurst.ValueBool(),
-	}
-	if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() {
-		v := plan.KeyID.ValueInt64()
-		cfg.KeyID = &v
-	}
+	cfg := buildNTPServerConfig(server, plan)
 	// PATCH on /server={addr} expects "openconfig-system:server" key
 	payload := map[string]interface{}{
 		"openconfig-system:server": []map[string]interface{}{
@@ -870,6 +1010,15 @@ const (
 	uriAAARoleConfig     = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config"
 	uriAAARoleRemoteGID  = "/openconfig-system:system/aaa/authentication/f5-system-aaa:roles/f5-system-aaa:role=%s/f5-system-aaa:config/f5-system-aaa:remote-gid"
 	uriAAAPasswordPolicy = "/openconfig-system:system/aaa/f5-openconfig-aaa-password-policy:password-policy/config"
+	// uriAAALoginPolicy targets the login-policy config introduced by the
+	// f5-openconfig-aaa-login-policy YANG module (2024-09-24), available on
+	// F5OS 2.0.0 and later.
+	uriAAALoginPolicy = "/openconfig-system:system/aaa/f5-openconfig-aaa-login-policy:login-policy/config"
+	// uriAAALdap targets the LDAP container introduced by the
+	// f5-openconfig-aaa-ldap YANG module. The user-object-class and
+	// group-object-class leaf-lists it exposes are available on F5OS 2.0.0
+	// and later.
+	uriAAALdap = "/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap"
 )
 
 type authOrderPayload struct {
@@ -1076,6 +1225,10 @@ type PasswordPolicyConfig struct {
 	MaxLetterRepeat   *int64 `json:"max-letter-repeat,omitempty"`
 	MaxSequenceRepeat *int64 `json:"max-sequence-repeat,omitempty"`
 	MaxClassRepeat    *int64 `json:"max-class-repeat,omitempty"`
+	// 2.0.0+ only fields
+	MinDays  *int64 `json:"min-days,omitempty"`
+	Remember *int64 `json:"remember,omitempty"`
+	WarnAge  *int64 `json:"warn-age,omitempty"`
 }
 
 // passwordPolicyResponse is the API response wrapper for password policy.
@@ -1115,6 +1268,155 @@ func (c *F5os) SetPasswordPolicy(config *PasswordPolicyConfig) error {
 	_, err = c.PatchRequest(uriAAAPasswordPolicy, body)
 	if err != nil {
 		return fmt.Errorf("PATCH password policy failed: %w", err)
+	}
+	return nil
+}
+
+// LoginPolicyConfig represents the AAA login-policy settings introduced by the
+// f5-openconfig-aaa-login-policy YANG module (2024-09-24) on F5OS 2.0.0+.
+// Pointer fields allow distinguishing "not set" from zero values.
+type LoginPolicyConfig struct {
+	AdminRoleLimit          *bool  `json:"admin-role-limit,omitempty"`
+	RestconfMaxSessionLimit *int64 `json:"restconf-max-session-limit,omitempty"`
+	SSHMaxSessionLimit      *int64 `json:"ssh-max-session-limit,omitempty"`
+}
+
+// loginPolicyResponse is the API response wrapper for login policy.
+type loginPolicyResponse struct {
+	Config LoginPolicyConfig `json:"f5-openconfig-aaa-login-policy:config"`
+}
+
+// loginPolicyPayload is the API request wrapper for login policy.
+type loginPolicyPayload struct {
+	Config LoginPolicyConfig `json:"f5-openconfig-aaa-login-policy:config"`
+}
+
+// GetLoginPolicy reads the current login-policy config from the device.
+// Only supported on F5OS 2.0.0 and later.
+func (c *F5os) GetLoginPolicy() (*LoginPolicyConfig, error) {
+	resp, err := c.GetRequest(uriAAALoginPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("GET login policy failed: %w", err)
+	}
+
+	var parsed loginPolicyResponse
+	if err := json.Unmarshal(resp, &parsed); err != nil {
+		return nil, fmt.Errorf("invalid JSON for login policy: %w", err)
+	}
+
+	return &parsed.Config, nil
+}
+
+// SetLoginPolicy updates login-policy config on the device using PATCH.
+// Only fields with non-nil values are sent. Only supported on F5OS 2.0.0+.
+func (c *F5os) SetLoginPolicy(config *LoginPolicyConfig) error {
+	payload := loginPolicyPayload{Config: *config}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal login policy payload: %w", err)
+	}
+
+	_, err = c.PatchRequest(uriAAALoginPolicy, body)
+	if err != nil {
+		return fmt.Errorf("PATCH login policy failed: %w", err)
+	}
+	return nil
+}
+
+// LdapConfig represents the subset of the LDAP container managed by the
+// provider. The user-object-class and group-object-class leaf-lists were
+// introduced by the f5-openconfig-aaa-ldap YANG module and are available on
+// F5OS 2.0.0 and later. Slice fields are nil when unmanaged so callers can
+// distinguish "not set" (nil, omitted from the payload) from "set to empty"
+// (non-nil zero-length slice, sent as [] to clear the leaf-list on the device).
+//
+// The struct is not tagged with omitempty because encoding/json treats a
+// non-nil empty slice the same as a nil slice under omitempty, which would
+// collapse the "clear to empty" case into "leave unset". SetLdapConfig builds
+// the payload explicitly to preserve the distinction.
+type LdapConfig struct {
+	UserObjectClass  []string `json:"user-object-class"`
+	GroupObjectClass []string `json:"group-object-class"`
+}
+
+// ldapResponse is the API response wrapper for the LDAP container.
+type ldapResponse struct {
+	Ldap LdapConfig `json:"f5-openconfig-aaa-ldap:ldap"`
+}
+
+// GetLdapConfig reads the current LDAP container config from the device.
+// Only the object-class leaf-lists are parsed. Available on F5OS 2.0.0+.
+func (c *F5os) GetLdapConfig() (*LdapConfig, error) {
+	resp, err := c.GetRequest(uriAAALdap)
+	if err != nil {
+		return nil, fmt.Errorf("GET ldap config failed: %w", err)
+	}
+
+	var parsed ldapResponse
+	if err := json.Unmarshal(resp, &parsed); err != nil {
+		return nil, fmt.Errorf("invalid JSON for ldap config: %w", err)
+	}
+
+	return &parsed.Ldap, nil
+}
+
+// SetLdapConfig updates the LDAP object-class leaf-lists on the device.
+//
+// Each managed leaf-list is written with PUT to its own resource path, which
+// gives replace semantics: the leaf-list on the device is set to exactly the
+// supplied values. This is deliberately NOT a PATCH of the ldap container —
+// RESTCONF PATCH applies YANG "merge" semantics to leaf-lists, which appends
+// the supplied entries to whatever is already on the device rather than
+// replacing them. Under PATCH, setting user-object-class to ["posixAccount"]
+// when the device already held ["posixAccount","inetOrgPerson"] leaves both
+// entries in place, so the value read back does not match what was written and
+// Terraform reports "Provider produced inconsistent result after apply".
+//
+// Leaf-list handling preserves the nil/empty distinction:
+//   - nil slice: unmanaged — the leaf-list is left untouched.
+//   - non-nil non-empty slice: PUT to replace the leaf-list with these values.
+//   - non-nil empty slice: DELETE the leaf-list to clear it (an empty PUT body
+//     is a no-op on the device, so DELETE is used to remove all entries).
+//
+// Available on F5OS 2.0.0+.
+func (c *F5os) SetLdapConfig(config *LdapConfig) error {
+	if err := c.setLdapLeafList("user-object-class", config.UserObjectClass); err != nil {
+		return err
+	}
+	if err := c.setLdapLeafList("group-object-class", config.GroupObjectClass); err != nil {
+		return err
+	}
+	return nil
+}
+
+// setLdapLeafList writes a single LDAP object-class leaf-list using replace
+// semantics. A nil values slice leaves the leaf-list unmanaged; a non-nil empty
+// slice clears it via DELETE; a non-nil non-empty slice replaces it via PUT.
+func (c *F5os) setLdapLeafList(leaf string, values []string) error {
+	// nil: unmanaged — do not touch the leaf-list.
+	if values == nil {
+		return nil
+	}
+
+	path := fmt.Sprintf("%s/%s", uriAAALdap, leaf)
+
+	// Non-nil empty slice: clear the leaf-list. A PUT of [] is a no-op on the
+	// device, so DELETE is used to remove all entries.
+	if len(values) == 0 {
+		if err := c.DeleteRequest(path); err != nil {
+			return fmt.Errorf("DELETE ldap %s failed: %w", leaf, err)
+		}
+		return nil
+	}
+
+	// Non-empty: PUT to replace the leaf-list with exactly these values.
+	payload := map[string]interface{}{fmt.Sprintf("f5-openconfig-aaa-ldap:%s", leaf): values}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal ldap %s payload: %w", leaf, err)
+	}
+	if _, err := c.PutRequest(path, body); err != nil {
+		return fmt.Errorf("PUT ldap %s failed: %w", leaf, err)
 	}
 	return nil
 }

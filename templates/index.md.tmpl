@@ -12,6 +12,21 @@ description: |-
 
 {{ tffile "examples/provider/provider.tf" }}
 
+## Compatibility
+
+Compatibility table between this provider, the [Terraform Plugin Protocol](https://www.terraform.io/plugin/how-terraform-works#terraform-plugin-protocol)
+version it implements, and Terraform:
+
+| F5OS Provider |     Terraform Plugin Protocol      | Terraform | F5OS Velos/rSeries Version |
+|:-------------:|:----------------------------------:|:---------:|:--------------------------:|
+|`1.0.0-1.10.2` |                `6`                 | `>= 1.x`  |      `>= 1.5.x/1.4.0`      |
+|`>= 1.11.1`    |                `6`                 | `>= 1.x`  |      `>= 1.8.x`            |
+
+**Please note**: Releases >= 1.11.1 are for F5OS-A 1.8.x on rSeries only. Please continue to use previous releases for other version support.
+
+Details can be found by querying the [Registry API](https://www.terraform.io/internals/provider-registry-protocol#list-available-versions),
+which returns the details about which versions are currently available for a particular provider.
+
 ## Proxy Support
 
 Provider runtime HTTP/HTTPS requests honor standard Go proxy environment variables:
@@ -29,5 +44,21 @@ export NO_PROXY=localhost,127.0.0.1,.internal.example.com
 ```
 
 When these variables are set, API and telemetry calls are routed through the proxy unless the target matches `NO_PROXY`.
+
+## Custom HTTP Headers
+
+The `custom_headers` attribute lets you inject arbitrary HTTP headers into every F5OS API request. When an HTTPS proxy is in use, the headers are also added to the CONNECT tunnel request (the "outer" frame), which is required for proxy authentication schemes that inspect tunnel headers.
+
+```hcl
+provider "f5os" {
+  host     = "https://192.0.2.1"
+  username = "admin"
+  password = "secret"
+  custom_headers = {
+    "X-Tenant-ID"  = "my-tenant"
+    "X-Request-ID" = "my-request-id"
+  }
+}
+```
 
 {{ .SchemaMarkdown | trimspace }}

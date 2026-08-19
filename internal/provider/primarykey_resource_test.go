@@ -1193,8 +1193,6 @@ func TestUnitPrimaryKeyMigrationContextCancelDuringPoll(t *testing.T) {
 // Acceptance test helpers
 // ---------------------------------------------------------------------------
 
-
-
 // testAccCheckPrimaryKeyHashPopulated queries the device directly to verify
 // that the primary key has a non-empty hash (i.e., a key has been set).
 func testAccCheckPrimaryKeyHashPopulated() resource.TestCheckFunc {

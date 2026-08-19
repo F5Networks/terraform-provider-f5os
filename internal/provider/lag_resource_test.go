@@ -452,9 +452,9 @@ func TestUnitLagReadGetLagInterfaceError(t *testing.T) {
 		if r.Method == "GET" {
 			lagGetCount++
 			// GET#1: Create's post-create read (succeed)
-			// GETs 2-4: framework's post-apply refresh Read + SDK retries (fail — error under test)
-			// GET#5+: destroy reads (succeed to allow cleanup)
-			if lagGetCount >= 2 && lagGetCount <= 4 {
+			// GETs 2-7: framework's post-apply refresh Read + SDK retries (fail — error under test)
+			// GET#8+: destroy reads (succeed to allow cleanup)
+			if lagGetCount >= 2 && lagGetCount <= 7 {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-message":"read failed"}]}}`)
 				return
@@ -561,8 +561,8 @@ func TestUnitLagUpdateGetLagMembersError(t *testing.T) {
 			if failLagGet {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-message":"member read failed"}]}}`)
-				// After the SDK exhausts its 3 retries, stop failing so cleanup works
-				if lagGetCount >= 7 {
+				// After the SDK exhausts its 6 retries, stop failing so cleanup works
+				if lagGetCount >= 10 {
 					failLagGet = false
 				}
 				return
@@ -634,14 +634,14 @@ func TestUnitLagUpdateRemoveMembersError(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_lacp_config.json"))
 	})
-	// RemoveLagMembers calls DELETE on each member — fail first 3 attempts (SDK retry cycle),
+	// RemoveLagMembers calls DELETE on each member — fail first 6 attempts (SDK retry cycle),
 	// then succeed on subsequent attempts (cleanup destroy).
 	// The SDK builds: /openconfig-interfaces:interfaces/interface=1.1/openconfig-if-ethernet:ethernet/config/openconfig-if-aggregate:aggregate-id
 	memberRemoveAttempt := 0
 	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=1.1/openconfig-if-ethernet:ethernet/config/openconfig-if-aggregate:aggregate-id", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "DELETE" {
 			memberRemoveAttempt++
-			if memberRemoveAttempt <= 3 {
+			if memberRemoveAttempt <= 6 {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-message":"remove member failed"}]}}`)
 				return
@@ -756,9 +756,9 @@ func TestUnitLagDeleteGetLagInterfaceError(t *testing.T) {
 			lagGetCount++
 			// GETs 1-2: step 1 Create read + post-apply Read (succeed)
 			// GET 3: step 2 pre-destroy Read/refresh (succeed)
-			// GETs 4-6: Delete's member lookup + SDK retries (fail — error under test)
-			// GETs 7+: framework retry destroy (succeed for cleanup)
-			if lagGetCount >= 4 && lagGetCount <= 6 {
+			// GETs 4-9: Delete's member lookup + SDK retries (fail — error under test)
+			// GETs 10+: framework retry destroy (succeed for cleanup)
+			if lagGetCount >= 4 && lagGetCount <= 9 {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-message":"get lag for delete failed"}]}}`)
 				return
@@ -827,13 +827,13 @@ func TestUnitLagDeleteRemoveMembersError(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/f5os_lacp_config.json"))
 	})
-	// RemoveLagMembers — fail first 3 attempts (SDK retry cycle), then recover.
+	// RemoveLagMembers — fail first 6 attempts (SDK retry cycle), then recover.
 	// The SDK builds: /openconfig-interfaces:interfaces/interface=1.1/openconfig-if-ethernet:ethernet/config/openconfig-if-aggregate:aggregate-id
 	memberDeleteAttempt := 0
 	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=1.1/openconfig-if-ethernet:ethernet/config/openconfig-if-aggregate:aggregate-id", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "DELETE" {
 			memberDeleteAttempt++
-			if memberDeleteAttempt <= 3 {
+			if memberDeleteAttempt <= 6 {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-message":"remove member 1.1 failed"}]}}`)
 				return
@@ -885,9 +885,9 @@ func TestUnitLagDeleteRemoveLacpInterfaceError(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-lacp:lacp/interfaces/interface=tf-lag", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "DELETE" {
 			lacpDeleteAttempt++
-			// Fail first 3 deletes (SDK retry cycle — error under test),
+			// Fail first 6 deletes (SDK retry cycle — error under test),
 			// succeed on subsequent attempts (framework cleanup)
-			if lacpDeleteAttempt <= 3 {
+			if lacpDeleteAttempt <= 6 {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-message":"delete lacp failed"}]}}`)
 				return
@@ -937,9 +937,9 @@ func TestUnitLagDeleteRemoveLagInterfaceError(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-interfaces:interfaces/interface=tf-lag", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "DELETE" {
 			lagDeleteAttempt++
-			// Fail first 3 deletes (SDK retry cycle — error under test),
+			// Fail first 6 deletes (SDK retry cycle — error under test),
 			// succeed on subsequent attempts (framework cleanup)
-			if lagDeleteAttempt <= 3 {
+			if lagDeleteAttempt <= 6 {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = fmt.Fprintf(w, `{"ietf-restconf:errors":{"error":[{"error-message":"delete lag failed"}]}}`)
 				return
@@ -1193,8 +1193,6 @@ resource "f5os_lag" "test_lag" {
 // ---------------------------------------------------------------------------
 // Acceptance test helpers — direct device API verification
 // ---------------------------------------------------------------------------
-
-
 
 // testAccCheckLagOnDevice queries the device directly and verifies that the
 // LAG interface exists with the expected native_vlan, trunk_vlans, members,

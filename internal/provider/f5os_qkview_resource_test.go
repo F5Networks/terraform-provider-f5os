@@ -884,7 +884,7 @@ func TestUnitQkviewCreateListErrorDuringExistsCheck(t *testing.T) {
 
 // TestUnitQkviewExistsNoMatchInList exercises the qkviewExists path where
 // the list contains files but none match the target filename. This covers
-// the final "return false, '', nil" in qkviewExists.
+// the final `return false, "", nil` in qkviewExists.
 func TestUnitQkviewExistsNoMatchInList(t *testing.T) {
 	testAccPreUnitCheck(t)
 	defer teardown()
@@ -2119,13 +2119,86 @@ func testAccCheckQkviewDestroy(s *terraform.State) error {
 	return nil
 }
 
+// testAccPreCheckQkviewCleanup deletes any qkview file on the device
+// whose normalized base name matches one of the supplied filenames.
+// This makes the acceptance tests self-healing: a prior run that
+// crashed or timed out may leave behind ".timedout" / ".canceled"
+// artifacts on the shared DUT that cause the next Create to fail with
+// "Resource Already Exists". Call from PreCheck for every test that
+// creates a qkview.
+//
+// Note on parallelism: the acceptance tests below use fixed qkview
+// filenames (e.g. "test_qkview"). GitLab CI serializes acceptance
+// jobs on a shared DUT via `resource_group: f5os_acc_dut` (see
+// .gitlab-ci.yml) so name collisions between concurrent jobs are not
+// possible. If a future runner ever removes that mutex or runs
+// tests with `t.Parallel()`, switch to per-test-run unique prefixes
+// (e.g. `fmt.Sprintf("test_qkview_%d", os.Getpid())`) to avoid two
+// jobs deleting each other's leftovers mid-run.
+func testAccPreCheckQkviewCleanup(t *testing.T, filenames ...string) {
+	t.Helper()
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Fatalf("qkview PreCheck cleanup: failed to create client: %v", err)
+	}
+	uri := "/openconfig-system:system/f5-system-diagnostics-qkview:diagnostics/qkview/list"
+	response, err := client.PostRequest(uri, nil)
+	if err != nil {
+		t.Fatalf("qkview PreCheck cleanup: failed to list qkviews: %v", err)
+	}
+	var listResponse QkviewListResponse
+	if err := json.Unmarshal(response, &listResponse); err != nil {
+		// Include the raw envelope so triage does not require a
+		// separate device round-trip to figure out what the server
+		// actually returned.
+		t.Fatalf("qkview PreCheck cleanup: failed to parse list envelope: %v; raw: %s", err, string(response))
+	}
+	var qkviewList QkviewList
+	if err := json.Unmarshal([]byte(listResponse.Output.Result), &qkviewList); err != nil {
+		t.Fatalf("qkview PreCheck cleanup: failed to parse qkview list: %v; raw result: %s", err, listResponse.Output.Result)
+	}
+	targets := make(map[string]struct{}, len(filenames))
+	for _, f := range filenames {
+		targets[normalizeQkviewFilename(f)] = struct{}{}
+	}
+	for _, item := range qkviewList.Qkviews {
+		if _, ok := targets[normalizeQkviewFilename(item.Filename)]; !ok {
+			continue
+		}
+		body, err := json.Marshal(map[string]string{"filename": item.Filename})
+		if err != nil {
+			t.Fatalf("qkview PreCheck cleanup: failed to marshal delete body for %q: %v", item.Filename, err)
+		}
+		respBytes, err := client.PostRequest(
+			"/openconfig-system:system/f5-system-diagnostics-qkview:diagnostics/qkview/delete",
+			body,
+		)
+		if err != nil {
+			t.Fatalf("qkview PreCheck cleanup: failed to delete leftover %q: %v", item.Filename, err)
+		}
+		// The delete RPC returns HTTP 200 even when the device
+		// refuses to delete the file (e.g. reports "Error deleting
+		// <name>" in the output.result envelope). Inspect the response
+		// body for known device-side error markers so a leftover
+		// artifact does not silently survive PreCheck and then fail
+		// the test's Create with "Resource Already Exists".
+		if strings.Contains(string(respBytes), "Error deleting") || strings.Contains(string(respBytes), `"error"`) {
+			t.Fatalf("qkview PreCheck cleanup: device reported delete error for %q: %s", item.Filename, string(respBytes))
+		}
+		t.Logf("qkview PreCheck cleanup: deleted leftover %q", item.Filename)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Acceptance Tests (require real F5OS device)
 // ---------------------------------------------------------------------------
 
 func TestAccQkviewResource_Basic(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck: func() {
+			testAccPreCheck(t)
+			testAccPreCheckQkviewCleanup(t, "test_qkview")
+		},
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckQkviewDestroy,
 		Steps: []resource.TestStep{
@@ -2149,7 +2222,10 @@ func TestAccQkviewResource_Basic(t *testing.T) {
 
 func TestAccQkviewResource_CustomParams(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck: func() {
+			testAccPreCheck(t)
+			testAccPreCheckQkviewCleanup(t, "custom_qkview")
+		},
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckQkviewDestroy,
 		Steps: []resource.TestStep{
@@ -2199,7 +2275,10 @@ func TestAccQkviewResource_InvalidMaxCoreSize(t *testing.T) {
 
 func TestAccQkviewResource_DuplicateFilename(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck: func() {
+			testAccPreCheck(t)
+			testAccPreCheckQkviewCleanup(t, "duplicate_qkview")
+		},
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
@@ -2219,7 +2298,10 @@ func TestAccQkviewResource_DuplicateFilename(t *testing.T) {
 
 func TestAccQkviewResource_RequiresReplace(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck: func() {
+			testAccPreCheck(t)
+			testAccPreCheckQkviewCleanup(t, "replace_test", "replace_test_new")
+		},
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
@@ -2240,7 +2322,10 @@ func TestAccQkviewResource_RequiresReplace(t *testing.T) {
 
 func TestAccQkviewResource_MinimalConfig(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck: func() {
+			testAccPreCheck(t)
+			testAccPreCheckQkviewCleanup(t, "minimal_qkview")
+		},
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckQkviewDestroy,
 		Steps: []resource.TestStep{
