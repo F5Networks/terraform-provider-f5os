@@ -64,7 +64,14 @@ in accordance with HashiCorp [Community Guidelines](https://www.hashicorp.com/co
 We also provide:
 
 * [Support](.github/SUPPORT.md) page for help when using the provider
-* [Contributing](.github/CONTRIBUTING.md) guidelines in case you want to help this project
+
+## Filing Issues and Getting Help
+
+If you encounter a bug or other issue while using Terraform Provider, use [F5 Technical Support](https://www.f5.com/support#how-f5-helps) to submit it to our team.
+
+**Important**: As of July 2026, GitHub issues are no longer being monitored by F5 support staff.
+
+Be sure to see the [BIG-IP LTM requirements](https://github.com/F5Networks/terraform-provider-bigip/blob/master/README.md#f5-bigip-ltm-requirements) in this repo for more details and supported versions of the Terraform Provider.
 
 ## Compatibility
 
