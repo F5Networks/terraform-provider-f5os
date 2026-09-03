@@ -10,6 +10,7 @@ package f5os
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
@@ -27,7 +28,72 @@ const (
 	uriBase          = "/openconfig-system:system"
 	uriSnmpBase      = "/openconfig-system:system/f5-system-snmp:snmp"
 	uriSnmpMib       = "/SNMPv2-MIB:SNMPv2-MIB/system"
+	uriPortGroups    = "/f5-portgroup:portgroups"
 )
+
+type PortGroupConfig struct {
+	Name string              `json:"name"`
+	Mode string              `json:"mode"`
+	DDM  *PortGroupDDMConfig `json:"f5-ddm:ddm,omitempty"`
+}
+
+type PortGroupDDMConfig struct {
+	PollFrequency *int64 `json:"f5-ddm:ddm-poll-frequency,omitempty"`
+}
+
+type portGroupResponse struct {
+	PortGroups struct {
+		PortGroup []struct {
+			PortGroupName string          `json:"portgroup_name"`
+			Config        PortGroupConfig `json:"config"`
+		} `json:"portgroup"`
+	} `json:"f5-portgroup:portgroups"`
+}
+
+func portGroupURI(name string) string {
+	return fmt.Sprintf("%s/portgroup=%s", uriPortGroups, url.PathEscape(name))
+}
+
+// GetPortGroup retrieves a hardware-defined rSeries port group.
+func (p *F5os) GetPortGroup(name string) (*PortGroupConfig, error) {
+	resp, err := p.GetRequest(portGroupURI(name))
+	if err != nil {
+		return nil, fmt.Errorf("GET port group %q failed: %w", name, err)
+	}
+
+	var parsed portGroupResponse
+	if err := json.Unmarshal(resp, &parsed); err != nil {
+		return nil, fmt.Errorf("invalid JSON for port group %q: %w", name, err)
+	}
+	if len(parsed.PortGroups.PortGroup) == 0 {
+		return nil, fmt.Errorf("port group %q was not returned by the device", name)
+	}
+	return &parsed.PortGroups.PortGroup[0].Config, nil
+}
+
+// SetPortGroupConfig updates a hardware-defined rSeries port group's config.
+func (p *F5os) SetPortGroupConfig(name string, config *PortGroupConfig) error {
+	payload := struct {
+		Config PortGroupConfig `json:"f5-portgroup:config"`
+	}{Config: *config}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal port group %q payload: %w", name, err)
+	}
+	if _, err := p.PatchRequest(portGroupURI(name)+"/config", body); err != nil {
+		return fmt.Errorf("PATCH port group %q failed: %w", name, err)
+	}
+	return nil
+}
+
+// ResetPortGroup resets a port group configuration to its device default.
+// Port groups are hardware-defined list entries and must not be deleted.
+func (p *F5os) ResetPortGroup(name string) error {
+	if err := p.DeleteRequest(portGroupURI(name) + "/config"); err != nil {
+		return fmt.Errorf("DELETE port group %q failed: %w", name, err)
+	}
+	return nil
+}
 
 func (p *F5os) CreatePartition(partitionObj *F5ReqPartitions) ([]byte, error) {
 	url := fmt.Sprintf("%s", uriPartition)

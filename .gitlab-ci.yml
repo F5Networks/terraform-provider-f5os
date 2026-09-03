@@ -60,11 +60,9 @@ cve-scan:
     - if: $CI_COMMIT_TAG
     - if: $CI_PIPELINE_SOURCE == "schedule"
   script:
-    # Build govulncheck with a toolchain new enough to parse the module's
-    # `go 1.25` sources. `go install @latest` otherwise builds it with the
-    # toolchain pinned by x/vuln's go.mod, whose type-checker rejects newer
-    # language versions with "package requires newer Go version".
-    - export GOTOOLCHAIN=go1.25.13
+    # Use the exact toolchain declared in go.mod so the current scanner does
+    # not trigger an automatic download from storage.googleapis.com.
+    - export GOTOOLCHAIN=local
     - go install golang.org/x/vuln/cmd/govulncheck@latest
     - export GOFLAGS=-mod=vendor
     - govulncheck -show verbose ./...
