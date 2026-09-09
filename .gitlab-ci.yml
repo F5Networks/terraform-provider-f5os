@@ -63,7 +63,7 @@ cve-scan:
     # Use the exact toolchain declared in go.mod so the current scanner does
     # not trigger an automatic download from storage.googleapis.com.
     - export GOTOOLCHAIN=local
-    - go install golang.org/x/vuln/cmd/govulncheck@latest
+    - go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
     - export GOFLAGS=-mod=vendor
     - govulncheck -show verbose ./...
 
