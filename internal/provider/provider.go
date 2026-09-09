@@ -374,6 +374,7 @@ func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewDNSResource,
 		NewPrimaryKeyResource,
 		NewNTPServerResource,
+		NewLdapServerResource,
 		NewF5osLoggingResource,
 		NewUserResource,
 		NewUserPasswordChangeResource,

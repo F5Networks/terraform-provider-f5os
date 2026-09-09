@@ -1085,6 +1085,18 @@ const (
 	// group-object-class leaf-lists it exposes are available on F5OS 2.0.0
 	// and later.
 	uriAAALdap = "/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap"
+	// uriAAAServerGroups targets the server-groups container for AAA server configuration.
+	// Individual LDAP servers are defined within server groups. Available on F5OS 1.x and 2.0.0+.
+	uriAAAServerGroups = "/openconfig-system:system/aaa/server-groups"
+	// uriAAAServerGroup is the pattern for accessing a specific server group.
+	// Used with fmt.Sprintf(uriAAAServerGroup, groupName)
+	uriAAAServerGroup = "/openconfig-system:system/aaa/server-groups/server-group=%s"
+	// uriAAAServerGroupServers is the pattern for accessing servers within a server group.
+	// Used with fmt.Sprintf(uriAAAServerGroupServers, groupName)
+	uriAAAServerGroupServers = "/openconfig-system:system/aaa/server-groups/server-group=%s/servers"
+	// uriAAAServerGroupServer is the pattern for accessing a specific server within a server group.
+	// Used with fmt.Sprintf(uriAAAServerGroupServer, groupName, address)
+	uriAAAServerGroupServer = "/openconfig-system:system/aaa/server-groups/server-group=%s/servers/server=%s"
 )
 
 type authOrderPayload struct {
@@ -1484,5 +1496,135 @@ func (c *F5os) setLdapLeafList(leaf string, values []string) error {
 	if _, err := c.PutRequest(path, body); err != nil {
 		return fmt.Errorf("PUT ldap %s failed: %w", leaf, err)
 	}
+	return nil
+}
+
+// LdapServerConfig represents an individual LDAP server within a server group.
+// The server is identified by its address (hostname or IP) and configured with
+// an optional port and connection type (ldap or ldaps).
+type LdapServerConfig struct {
+	Address  string `json:"address"`
+	AuthPort *int64 `json:"f5-openconfig-aaa-ldap:auth-port,omitempty"`
+	Type     string `json:"f5-openconfig-aaa-ldap:type,omitempty"`
+}
+
+// ldapServerResponse is the API response wrapper for individual LDAP servers.
+type ldapServerResponse struct {
+	Server []struct {
+		Address string           `json:"address"`
+		Config  LdapServerConfig `json:"f5-openconfig-aaa-ldap:ldap,omitempty"`
+	} `json:"openconfig-system:server"`
+}
+
+// ldapServerPayload is the API request payload for creating or updating LDAP servers.
+type ldapServerPayload struct {
+	Server []struct {
+		Address string           `json:"address"`
+		Config  LdapServerConfig `json:"f5-openconfig-aaa-ldap:ldap"`
+	} `json:"openconfig-system:server"`
+}
+
+// CreateLdapServer creates a new LDAP server within a server group.
+// The serverGroup is the name of an existing LDAP-type server group.
+// Available on F5OS 1.x and 2.0.0+.
+func (c *F5os) CreateLdapServer(serverGroup string, address string, port *int64, serverType string) error {
+	uri := fmt.Sprintf(uriAAAServerGroupServers, url.PathEscape(serverGroup))
+
+	config := LdapServerConfig{
+		Address:  address,
+		AuthPort: port,
+		Type:     serverType,
+	}
+
+	payload := ldapServerPayload{
+		Server: []struct {
+			Address string           `json:"address"`
+			Config  LdapServerConfig `json:"f5-openconfig-aaa-ldap:ldap"`
+		}{
+			{
+				Address: address,
+				Config:  config,
+			},
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal LDAP server payload: %w", err)
+	}
+
+	_, err = c.PostRequest(uri, body)
+	if err != nil {
+		return fmt.Errorf("failed to create LDAP server %s in group %s: %w", address, serverGroup, err)
+	}
+
+	return nil
+}
+
+// GetLdapServer retrieves an individual LDAP server from a server group.
+func (c *F5os) GetLdapServer(serverGroup string, address string) (*LdapServerConfig, error) {
+	uri := fmt.Sprintf(uriAAAServerGroupServer, url.PathEscape(serverGroup), url.PathEscape(address))
+
+	resp, err := c.GetRequest(uri)
+	if err != nil {
+		return nil, fmt.Errorf("GET LDAP server failed: %w", err)
+	}
+
+	var envelope ldapServerResponse
+	if err := json.Unmarshal(resp, &envelope); err != nil {
+		return nil, fmt.Errorf("invalid JSON for LDAP server: %w", err)
+	}
+
+	if len(envelope.Server) == 0 {
+		return nil, fmt.Errorf("LDAP server %s not found in response", address)
+	}
+
+	return &envelope.Server[0].Config, nil
+}
+
+// UpdateLdapServer updates an existing LDAP server in a server group using PATCH.
+// Only non-nil fields are updated.
+func (c *F5os) UpdateLdapServer(serverGroup string, address string, port *int64, serverType string) error {
+	uri := fmt.Sprintf(uriAAAServerGroupServer, url.PathEscape(serverGroup), url.PathEscape(address))
+
+	// Build config with only the fields we want to update
+	config := LdapServerConfig{
+		Address: address,
+	}
+
+	if port != nil {
+		config.AuthPort = port
+	}
+
+	if serverType != "" {
+		config.Type = serverType
+	}
+
+	payload := map[string]interface{}{
+		"f5-openconfig-aaa-ldap:ldap": config,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal LDAP server update payload: %w", err)
+	}
+
+	_, err = c.PatchRequest(uri, body)
+	if err != nil {
+		return fmt.Errorf("PATCH LDAP server %s failed: %w", address, err)
+	}
+
+	return nil
+}
+
+// DeleteLdapServer removes an LDAP server from a server group.
+func (c *F5os) DeleteLdapServer(serverGroup string, address string) error {
+	uri := fmt.Sprintf(uriAAAServerGroupServer, url.PathEscape(serverGroup), url.PathEscape(address))
+
+	err := c.DeleteRequest(uri)
+	if err != nil {
+		return fmt.Errorf("DELETE LDAP server %s failed: %w", address, err)
+	}
+
 	return nil
 }

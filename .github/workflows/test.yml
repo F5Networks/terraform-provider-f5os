@@ -62,7 +62,7 @@ jobs:
       # `go 1.25` sources. `go install @latest` otherwise builds it with the
       # toolchain pinned by x/vuln's go.mod, whose type-checker rejects newer
       # language versions with "package requires newer Go version".
-      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
         env:
           GOTOOLCHAIN: go1.25.13
       - run: govulncheck -show verbose ./...
