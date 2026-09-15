@@ -2,5 +2,17 @@
   "vlans": {
     "extracted-external": 100,
     "extracted-internal": 101
+  },
+  "interfaces": {
+    "1.0": {
+      "native_vlan": 100,
+      "trunk_vlans": [],
+      "enabled": true
+    },
+    "2.0": {
+      "native_vlan": 101,
+      "trunk_vlans": [],
+      "enabled": true
+    }
   }
 }

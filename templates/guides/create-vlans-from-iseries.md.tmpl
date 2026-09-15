@@ -14,6 +14,10 @@ over a `vlans` variable map. `scripts/vlans-from-iseries.sh` converts the
 VLAN portion of the `extracted-sys-settings.json` produced by
 [`terraform-provider-bigip`'s `scripts/extract-sys-settings.sh`](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)
 (that provider's Phase 1) into the `vlans` map this configuration expects.
+See [Configuring F5OS interfaces from discovered i-Series
+configuration](configure-interfaces-from-iseries.html) (Phase 4, this
+repo) for the next step, which assigns these VLANs to interfaces in the
+same working directory and depends on the VLANs created here.
 
 ## Why `for_each` over a variable map instead of one resource block per VLAN
 
@@ -89,8 +93,11 @@ TMOS scopes VLAN IDs per route domain/partition, so two VLANs with
 different names can legitimately share the same numeric tag on the
 source i-Series device -- but F5OS has no equivalent scoping and
 requires VLAN IDs to be unique. `vlans-from-iseries.sh` detects this
-and prints a warning naming every VLAN sharing a duplicate tag before
-applying; rename or merge the colliding VLANs manually if this occurs.
+and prints a warning naming every VLAN sharing a duplicate tag; `var.vlans`'
+validation (see below) also rejects this outright at `terraform plan`
+time, since `interfaces.tf` (Phase 4) needs a 1:1 tag-to-name mapping to
+resolve `native_vlan`/`trunk_vlans` back to the correct `f5os_vlan`
+resource. Rename or merge the colliding VLANs manually before applying.
 
 ## Applying
 

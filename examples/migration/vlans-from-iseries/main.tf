@@ -14,11 +14,15 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 # terraform-provider-bigip's `scripts/extract-sys-settings.sh` (Phase 1),
 # converted into the `vlans` map below via `scripts/vlans-from-iseries.sh`
 # in this repo. See docs/guides/create-vlans-from-iseries.md for the full
-# workflow.
+# workflow. interfaces.tf in this same directory (Phase 4) configures each
+# F5OS interface's native/trunk VLAN assignment against the VLANs created
+# here, and depends on this file's f5os_vlan resources completing first.
 #
-# terraform.tfvars.json.example shows the expected shape for `vlans`;
-# `terraform apply -var-file=vlans.auto.tfvars.json` (or any *.auto.tfvars
-# file) supplies the real, discovered values.
+# terraform.tfvars.json.example shows the expected shape for `vlans` and
+# `interfaces`; any *.auto.tfvars(.json) file placed in this directory
+# (e.g. the output of scripts/vlans-from-iseries.sh /
+# scripts/interfaces-from-iseries.sh) is loaded automatically by
+# `terraform apply` with no extra flags needed.
 # ---------------------------------------------------------------------------
 
 terraform {
