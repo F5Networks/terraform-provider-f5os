@@ -1,0 +1,6 @@
+{
+  "vlans": {
+    "extracted-external": 100,
+    "extracted-internal": 101
+  }
+}

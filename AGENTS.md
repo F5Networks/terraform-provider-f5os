@@ -215,6 +215,33 @@ Docs in `docs/` are generated from `templates/` and `examples/` via
 `terraform-plugin-docs`. Do not edit `docs/` directly. Run `make generate` to
 regenerate.
 
+## Commit conventions
+
+### Mandatory JIRA ID in commit description
+
+Every commit must include a `Ref:` line in the commit **description** (the
+body, not the title/summary line) referencing the JIRA (or BZ) ID(s) the
+change is for. This is enforced at commit level (not just at merge/PR
+level as before), applies to all repos across GitLab Self-Hosted and
+Perforce, and commits without it are blocked from merging or submission.
+
+Format: `Ref:JIRA-ID1,JIRA-ID2` (or `Ref:BZ-ID3,BZ-ID4`) -- comma-separated,
+no spaces, for multiple IDs. Example commit message:
+
+```
+Fix selfip AllowService panic on bare string port_lockdown values
+
+Normalize AllowService (string, []interface{}, or nil) to a []string
+before d.Set on port_lockdown, avoiding a panic when the API returns a
+bare string value.
+
+Ref:COREBIP-44004
+```
+
+If the branch name follows the `COREBIP-NNNNN` convention already in use
+in this repo, use that same ID unless the user specifies a different
+JIRA/BZ ID for the commit.
+
 ## Skills
 
 The `.agents/skills/` directory contains detailed workflows for specific tasks:
