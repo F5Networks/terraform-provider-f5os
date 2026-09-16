@@ -1,0 +1,181 @@
+---
+page_title: "Configuring system settings on F5OS from discovered i-Series configuration"
+description: |-
+  How to use examples/migration/system-settings-from-iseries and scripts/system-settings-from-iseries.sh to configure DNS, NTP, SNMP, AAA authentication order, and local platform users on an rSeries/Velos partition F5OS target from settings discovered on a source BIG-IP i-Series device.
+---
+
+# Configuring system settings on F5OS from discovered i-Series configuration
+
+`examples/migration/system-settings-from-iseries` is a system-settings
+phase of an i-Series -> r-Series (F5OS) migration workflow, independent of
+(and can be applied in parallel with) the VLAN creation workflow in
+[Creating VLANs on F5OS from discovered i-Series
+configuration](create-vlans-from-iseries.html): it configures
+`f5os_dns`, `f5os_ntp_server`, `f5os_snmp`, `f5os_auth`, and `f5os_user`
+to match DNS, NTP, SNMP, authentication order, and local user settings
+discovered on a source BIG-IP i-Series device.
+`scripts/system-settings-from-iseries.sh` converts the relevant portion
+of the `extracted-sys-settings.json` produced by
+[`terraform-provider-bigip`'s `scripts/extract-sys-settings.sh`](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)
+(that provider's Phase 1) into the variables this configuration expects.
+
+## What is (and isn't) migrated
+
+| Source (i-Series) | Target (F5OS) | Notes |
+|---|---|---|
+| `bigip_sys_dns.name_servers` / `.search` | `f5os_dns.dns_servers` / `.dns_domains` | Direct pass-through. |
+| `bigip_sys_ntp.servers` | `f5os_ntp_server.server` (one resource per server, `for_each`) | `iburst` is always enabled on the created resources for faster resynchronization after migration. Per-server `key_id`/`prefer` (NTP authentication) are not present in the source extraction and are not set. |
+| `bigip_sys_snmp.sys_contact` / `.sys_location` | `f5os_snmp.snmp_mib.syscontact` / `.syslocation` | Direct pass-through. `bigip_sys_snmp.allowedaddresses` (an SNMP client source-address access list) has **no equivalent** in `f5os_snmp` and is **not migrated** -- see [SNMP access-list caveat](#snmp-access-list-caveat) below. |
+| `bigip_auth_user.*` | `f5os_user.username` / `.role` | Username preserved verbatim; role is approximated (TMOS's partition-scoped role model has no direct F5OS equivalent) -- see [User role mapping](#user-role-mapping) below. Passwords are **never** present in the source extraction and must be set manually -- see [Passwords are not migrated](#passwords-are-not-migrated) below. The source device's `admin` user is **skipped entirely** -- see [Built-in admin account is not migrated](#built-in-admin-account-is-not-migrated) below. |
+| n/a | `f5os_auth.auth_order` | Always set to `["local"]` by the conversion script -- see [Authentication order](#authentication-order) below. |
+
+## Example Usage
+
+{{ tffile "examples/migration/system-settings-from-iseries/main.tf" }}
+
+{{ tffile "examples/migration/system-settings-from-iseries/variables.tf" }}
+
+{{ tffile "examples/migration/system-settings-from-iseries/outputs.tf" }}
+
+## Populating the variables from a Phase 1 extraction
+
+Run `terraform-provider-bigip`'s `scripts/extract-sys-settings.sh` against
+the source i-Series device first (see that provider's [extraction
+guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)),
+then convert its output with this repo's
+`scripts/system-settings-from-iseries.sh`:
+
+```sh
+./scripts/system-settings-from-iseries.sh extracted-sys-settings.json \
+  examples/migration/system-settings-from-iseries/system-settings.auto.tfvars.json
+```
+
+Terraform automatically loads any `*.auto.tfvars.json` file found in the
+working directory, so no explicit `-var-file` flag is needed as long as
+the generated file is placed alongside `main.tf` as shown above. See
+`terraform.tfvars.json.example` in the same directory for the expected
+shape:
+
+{{ codefile "json" "examples/migration/system-settings-from-iseries/terraform.tfvars.json.example" }}
+
+### Passwords are not migrated
+
+`bigip_auth_user.password` is always `null` in `extracted-sys-settings.json`
+-- BIG-IP never returns a user's password on read, so it cannot be
+extracted regardless of permissions. `system-settings-from-iseries.sh`
+therefore writes every user in the output `users` map with a
+`REPLACE-ME` placeholder password, and prints a summary count reminding
+you to change them. **You must edit every password in the generated
+`*.auto.tfvars.json` before running `terraform apply`** -- `f5os_user`
+will happily create accounts with the literal password `REPLACE-ME` if
+you don't, since it has no way to know that value is a placeholder.
+
+### Built-in admin account is not migrated
+
+Every F5OS system (rSeries appliance or Velos chassis partition) already
+has a built-in `admin` account created during initial device
+deployment, before Terraform ever runs. `f5os_user` creates users via a
+`POST` to the device's user-list endpoint, which fails with an "already
+exists" conflict error if attempted against that pre-existing `admin`
+account. `system-settings-from-iseries.sh` therefore drops any
+source-device user named `admin` from the output `users` map entirely
+(with a note printed to stderr) -- it is never a candidate for
+`f5os_user`, regardless of its TMOS role, since the account already
+exists on every F5OS target out of band.
+
+This is different from -- and takes precedence over -- the role
+approximation described below: even a source `admin` user with TMOS
+role `admin` is skipped, not merely mapped to F5OS role `admin`, because
+`f5os_user` cannot create it either way.
+
+If the source device's `admin` password needs to be replicated to the
+F5OS target, use
+[`f5os_user_password_change`](user_password_change.html) instead, which
+is designed specifically for changing passwords on default accounts
+(`admin`, `root`) that already exist on the device:
+
+```terraform
+resource "f5os_user_password_change" "admin" {
+  user_name    = "admin"
+  old_password = "<current F5OS admin password>"
+  new_password = "<password to migrate>"
+}
+```
+
+### User role mapping
+
+TMOS's role model is partition-scoped: `bigip_auth_user.partition_access`
+is a list of `{ partition, role }` pairs, so a single user can have
+different roles on different partitions. F5OS's `f5os_user.role` is a
+single platform-wide role (from `admin`, `operator`, `resource-admin`).
+These models are not equivalent, so the conversion script uses a
+best-effort approximation, not a lossless translation:
+
+- The user's **first** `partition_access` entry's `role` is used as the
+  source of truth (later entries, if any, for other partitions are
+  ignored).
+- TMOS `admin` -> F5OS `admin` (both are full-administrative roles).
+- Every other TMOS role (`guest`, `manager`, `auditor`,
+  `application-editor`, etc.) -> F5OS `operator`, since none of them has a
+  precise F5OS equivalent and `operator` is the least-privileged
+  non-`admin` F5OS role.
+
+The script prints a warning for every user whose role was approximated
+(i.e. every non-`admin` TMOS role) naming the user and the source role,
+so each mapping can be reviewed. Edit `f5os_role` in the generated
+`users` map manually if a different F5OS role (for example
+`resource-admin`) is actually required for a given user.
+
+### Authentication order
+
+`system-settings-from-iseries.sh` always sets `auth_order` to `["local"]`
+in its output, regardless of whether the source i-Series device has
+LDAP, RADIUS, or TACACS+ configured (`bigip_auth_ldap`/`bigip_auth_radius`/
+`bigip_auth_tacacs` entries in `extracted-sys-settings.json`, present only
+if configured on the source device). This is intentional, not an
+oversight: `f5os_auth`'s `auth_order` only controls authentication
+*method precedence* -- it does not itself configure a remote-auth
+server's connection details (LDAP bind DN, RADIUS shared secret, and so
+on), which is out of scope for this phase. If the source device uses
+LDAP/RADIUS/TACACS+, configure the equivalent F5OS remote-auth resources
+separately first, then set `var.auth_order` to include them (e.g.
+`["local", "ldap"]`) before applying.
+
+### SNMP access-list caveat
+
+`bigip_sys_snmp.allowedaddresses` restricts which source addresses may
+query SNMP on the i-Series device. `f5os_snmp` has no equivalent
+attribute -- F5OS does not expose a per-address SNMP client access list
+through this resource. If the source device has any `allowedaddresses`
+configured, `system-settings-from-iseries.sh` prints a warning naming
+them, but **this restriction is not migrated in any form**. If
+equivalent access control is still required on the F5OS target, enforce
+it through another mechanism (for example a management-network ACL or
+firewall rule) outside of this configuration.
+
+## Applying
+
+```sh
+cd examples/migration/system-settings-from-iseries
+terraform init
+terraform apply
+```
+
+Update the `provider "f5os"` block's `host`/`username`/`password` (or use
+the corresponding `F5OS_HOST`/`F5OS_USERNAME`/`F5OS_PASSWORD` environment
+variables) to point at the target rSeries appliance or Velos chassis
+partition before applying.
+
+~> **NOTE:** `f5os_dns` and `f5os_auth`'s `terraform destroy` behavior
+intentionally does not fully revert every change (DNS is left configured
+on the device since it's critical for connectivity; `f5os_auth` restores
+`auth_order` and role GID mappings but does not touch `password_policy`).
+See each resource's own documentation for details before running
+`terraform destroy` against a shared/production device.
+
+## Related migration guides
+
+- [Inventorying TMOS version and hardware](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/inventory-tmos-version) (Phase 0, `terraform-provider-bigip`)
+- [Extracting i-Series system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
+- [Creating VLANs on F5OS from discovered i-Series configuration](create-vlans-from-iseries.html) (this repo) -- the parallel VLAN-creation phase of this migration workflow.
+- [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2, `terraform-provider-bigip`)
