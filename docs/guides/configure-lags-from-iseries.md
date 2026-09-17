@@ -1,79 +1,58 @@
 ---
-page_title: "Configuring F5OS interfaces from discovered i-Series configuration"
+page_title: "Configuring F5OS LAGs from discovered i-Series configuration"
 description: |-
-  How to use examples/migration/vlans-from-iseries/interfaces.tf and scripts/interfaces-from-iseries.sh to assign native/trunk VLANs and enabled state to f5os_interface resources on an rSeries F5OS target, matching the interface/VLAN layout discovered on a source BIG-IP i-Series device.
+  How to use examples/migration/vlans-from-iseries/lags.tf and scripts/lags-from-iseries.sh to create f5os_lag resources on an rSeries F5OS target matching the trunk (LAG) configuration discovered on a source BIG-IP i-Series device, including LACP mode and member interfaces.
 ---
 
-# Configuring F5OS interfaces from discovered i-Series configuration
+# Configuring F5OS LAGs from discovered i-Series configuration
 
-`examples/migration/vlans-from-iseries/interfaces.tf` is Phase 4 of an
+`examples/migration/vlans-from-iseries/lags.tf` is Phase 5 of an
 i-Series -> r-Series (F5OS) migration workflow: it configures one
-`f5os_interface` resource per physical interface discovered on a source
-BIG-IP i-Series device, assigning the same native VLAN (untagged) and
-trunk VLANs (tagged) membership and enabled state as the source device,
-via a single `for_each` over an `interfaces` variable map.
-`scripts/interfaces-from-iseries.sh` converts the interface/VLAN
-membership portion of the `extracted-sys-settings.json` produced by
+`f5os_lag` resource per trunk discovered on a source BIG-IP i-Series
+device, preserving the trunk name, LACP type/mode/interval, member
+interfaces (mapped to F5OS names), and native/trunk VLAN assignment.
+`scripts/lags-from-iseries.sh` converts the trunk/VLAN membership
+portion of the `extracted-sys-settings.json` produced by
 [`terraform-provider-bigip`'s `scripts/extract-sys-settings.sh`](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)
-(that provider's Phase 1) into the `interfaces` map this configuration
-expects, including the TMOS -> rSeries interface name mapping described
-below.
+(that provider's Phase 1) into the `lags` map this configuration
+expects.
 
 This phase lives in the **same** `examples/migration/vlans-from-iseries`
 directory, and therefore the same Terraform state, as [Phase 3, VLAN
-creation](create-vlans-from-iseries.html) -- not a separate directory --
-specifically so `f5os_interface.from_iseries` can hold a real Terraform
-reference to `f5os_vlan.from_iseries`, making VLAN creation a graph
-dependency Terraform itself enforces rather than just an operational
-instruction to run one step before the other.
+creation](create-vlans-from-iseries.html) and [Phase 4, interface
+configuration](configure-interfaces-from-iseries.html) -- not a separate
+directory -- specifically so `f5os_lag.from_iseries` can hold a real
+Terraform reference to `f5os_vlan.from_iseries`, making VLAN creation a
+graph dependency Terraform itself enforces rather than just an
+operational instruction to run one step before the other.
 
-## Interface name mapping: i-Series (`1.1`) to rSeries (`1.0`)
+## Trunk membership is inverted between TMOS and F5OS
 
-TMOS (i-Series) names physical interfaces `<blade>.<port>` (e.g. `1.1`,
-`1.2`); single-appliance i-Series/VE platforms are always blade `1`.
-F5OS-A (rSeries) has no blade concept at all: a single rSeries appliance
-maps to `<port>.0`, with the blade number **dropped entirely**, not just
-reformatted. `scripts/interfaces-from-iseries.sh` performs this mapping
-automatically -- `1.1` becomes `1.0`, `1.2` becomes `2.0`, and so on --
-see [`terraform-provider-bigip`'s interface/trunk naming
-guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping)
-for the full naming-convention reference, including the VELOS
-(`<blade>/<port>.<subport>`) form this script does **not** produce (a
-VELOS chassis partition target needs a different mapping, applied
-manually).
-
-The dedicated management interface (`mgmt`) is excluded entirely: it has
-no rSeries data-plane equivalent, is not part of TMOS's numbered
-`<blade>.<port>` scheme, and is never a member of a VLAN's tagged/
-untagged interface list on the source device in the first place, so it
-never needs a native/trunk VLAN translation.
-
-Any interface name that doesn't match the expected TMOS `<blade>.<port>`
-pattern is passed through into the output map unchanged (so it isn't
-silently dropped) and reported to stderr for manual review -- it is not
-a valid rSeries name and must be renamed by hand before applying.
-
-Dropping the blade number this way only produces a 1:1 mapping when the
-source is genuinely single-blade (true for i-Series/VE, per the
-`mgmt`-only-management-interface note above). On a multi-blade source,
-two TMOS interfaces on different blades but the same port (e.g. `1.1`
-and `2.1`) collapse to the same rSeries name (`1.0`); the script detects
-this and reports it to stderr rather than silently keeping only one of
-the colliding interfaces' `native_vlan`/`trunk_vlans`/`enabled` values --
-see "rSeries name collisions" below.
-
-## Trunks (LAGs) are out of scope
-
-F5OS represents link aggregation as a separate `f5os_lag` resource, not
-`f5os_interface` -- a TMOS trunk name has no entry in
-`bigip_net_interfaces` (it isn't a physical interface) and is therefore
-never emitted into this script's `interfaces` output map. Any such
-trunk's VLAN membership is still surfaced separately (printed to stderr,
-not written to any file) so it isn't silently lost; translate it to
-`f5os_lag`'s `native_vlan`/`trunk_vlans` manually -- see
-[`terraform-provider-bigip`'s interface/trunk naming
+TMOS and F5OS represent link aggregation with **inverted ownership**
+(see [`terraform-provider-bigip`'s interface/trunk naming
 guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping#trunk-lag-mapping-is-not-11)
-for that mapping.
+for the full comparison): a TMOS trunk object owns its member list
+directly (`bigip_net_trunks` reports `interfaces = ["1.1", "1.2"]` on
+the trunk itself); the F5OS device API instead sets membership on each
+*physical interface* (`aggregate-id <lag-name>`), not on the LAG object.
+This provider's `f5os_lag` resource re-exposes membership as a
+`members` argument on the LAG resource itself (mirroring TMOS's
+ownership direction, not the raw device API's), so `lags.tf` below
+still looks like a single per-trunk resource with a member list, the
+same shape `scripts/lags-from-iseries.sh` produces.
+
+## Field mapping: TMOS trunk to F5OS LAG
+
+| TMOS (`bigip_net_trunks` field) | F5OS (`f5os_lag` argument) | Notes |
+|---|---|---|
+| `name` | `lags` map key (LAG name) | Preserved verbatim -- F5OS LAG names are free-form identifiers, not numeric IDs, so unlike physical interfaces there is no name-mapping step for the LAG name itself (member interface names still need mapping -- see below). |
+| `lacp` (`"enabled"`/`"disabled"`) | `lag_type` (`"LACP"`/`"STATIC"`) | A TMOS trunk with `lacp = "disabled"` (a static/non-LACP trunk) maps to F5OS's `STATIC` `lag_type`. |
+| `lacp_mode` (`"active"`/`"passive"`) | `mode` (`"ACTIVE"`/`"PASSIVE"`) | LACP-only; `null` for `STATIC` LAGs (matches `f5os_lag`'s own validation, which rejects a non-null `mode` when `lag_type` is `STATIC`). |
+| `lacp_timeout` (`"long"`/`"short"`) | `interval` (`"SLOW"`/`"FAST"`) | LACP-only, same nullability as `mode`. TMOS's "long" timeout (30s periodic) corresponds to F5OS's `SLOW` interval; "short" (1s) to `FAST`. |
+| `interfaces` (TMOS member names, e.g. `["1.1", "1.2"]`) | `members` (F5OS-mapped names, e.g. `["1.0", "2.0"]`) | Same blade-drop mapping as physical interfaces (see [Phase 4's interface name mapping](configure-interfaces-from-iseries.html#interface-name-mapping-i-series-11-to-rseries-10)) -- `scripts/lags-from-iseries.sh` applies it to each member name independently. |
+| `distribution_hash` | *(not migrated)* | `f5os_lag` hardcodes `src-dst-ipport` internally (see `internal/provider/lag_resource.go`) and does not expose a configurable distribution-hash argument; this is not something `scripts/lags-from-iseries.sh` can preserve. |
+| `bandwidth`, `working_member_count`, `stp`, `type` | *(not migrated)* | Runtime state/counters on F5OS (`state` block, `oper-status`), not something configured to match a TMOS value. |
+| *(none -- VLANs are separate TMOS objects tagged to the trunk)* | `native_vlan` / `trunk_vlans` | Same derivation as `f5os_interface` in Phase 4: `bigip_net_vlans`' per-VLAN `interfaces[]` membership list is inverted into a per-trunk `native_vlan`/`trunk_vlans` pair (a trunk name appears in that list exactly like a physical interface name would). |
 
 ## Example Usage
 
@@ -85,45 +64,52 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
  */
 
 # ---------------------------------------------------------------------------
-# Configures every F5OS (rSeries) interface discovered on the source
-# i-Series device with its native/trunk VLAN assignment and enabled
-# state, matching the source device's interface/VLAN layout.
+# Configures one F5OS LAG (Link Aggregation Group) per trunk discovered on
+# the source i-Series device, preserving the trunk name, LACP mode
+# (active/passive) and LACP/static type, member interfaces (mapped to
+# rSeries names), and native/trunk VLAN assignment.
 #
-# This is Phase 4 of the i-Series -> r-Series (F5OS) migration workflow
-# (VLAN creation, Phase 3/main.tf in this same directory, is this
-# phase's prerequisite): it consumes the interface portion of the JSON
-# produced by terraform-provider-bigip's `scripts/extract-sys-settings.sh`
-# (Phase 1), converted into the `interfaces` map below via
-# `scripts/interfaces-from-iseries.sh` in this repo. See
-# docs/guides/configure-interfaces-from-iseries.md for the full
-# workflow, including how TMOS interface names (`1.1`) are mapped to
-# rSeries names (`1.0`).
+# This is Phase 5 of the i-Series -> r-Series (F5OS) migration workflow
+# (VLAN creation, Phase 3/main.tf, and interface configuration, Phase
+# 4/interfaces.tf, are this phase's prerequisites -- both in this same
+# directory): it consumes the trunk portion of the JSON produced by
+# terraform-provider-bigip's `scripts/extract-sys-settings.sh` (Phase 1),
+# converted into the `lags` map below via `scripts/lags-from-iseries.sh`
+# in this repo. See docs/guides/configure-lags-from-iseries.md for the
+# full workflow, including how TMOS trunk membership (`interfaces =
+# ["1.1", "1.2"]`, owned by the trunk) inverts to F5OS LAG membership
+# (`members`, still expressed on the LAG resource itself by this
+# provider, unlike the raw device API where membership is set per
+# physical-interface `aggregate-id`).
 #
 # Depends on VLAN creation completing first: native_vlan/trunk_vlans
 # below are resolved from VLAN ID/tag to the actual f5os_vlan resource
 # via local.vlan_name_by_tag (defined in main.tf, alongside
 # f5os_vlan.from_iseries itself, so this file has no dependency on
-# lags.tf or vice versa), so Terraform infers a real dependency on
-# f5os_vlan.from_iseries from the resource reference alone; the explicit
-# depends_on below is additional, deliberate documentation of that same
-# intent (and a safety net if a future edit removes the reference
-# without noticing the ordering requirement it was providing).
+# interfaces.tf or vice versa -- an operator migrating only trunks can
+# delete interfaces.tf entirely without this file breaking), so
+# Terraform infers a real dependency on f5os_vlan.from_iseries from the
+# resource reference alone; the explicit depends_on below is additional,
+# deliberate documentation of that same intent.
 # ---------------------------------------------------------------------------
 
-resource "f5os_interface" "from_iseries" {
-  for_each = var.interfaces
+resource "f5os_lag" "from_iseries" {
+  for_each = var.lags
 
   depends_on = [f5os_vlan.from_iseries]
 
-  name    = each.key
-  enabled = each.value.enabled
+  name     = each.key
+  lag_type = each.value.lag_type
+  mode     = each.value.lag_type == "LACP" ? each.value.mode : null
+  interval = each.value.lag_type == "LACP" ? each.value.interval : null
+  members  = each.value.members
 
-  # each.value.native_vlan is nullable (an interface with no untagged
-  # VLAN membership on the source device has no native VLAN to
-  # configure); local.vlan_name_by_tag[...].vlan_id round-trips through
-  # the actual created resource's attribute rather than reusing the
-  # tag literal directly, so this expression -- not just depends_on --
-  # is what Terraform's graph actually walks to order these resources.
+  # each.value.native_vlan is nullable (a trunk with no untagged VLAN
+  # membership on the source device has no native VLAN to configure);
+  # local.vlan_name_by_tag[...].vlan_id round-trips through the actual
+  # created resource's attribute rather than reusing the tag literal
+  # directly, so this expression -- not just depends_on -- is what
+  # Terraform's graph actually walks to order these resources.
   native_vlan = (
     each.value.native_vlan == null
     ? null
@@ -137,8 +123,8 @@ resource "f5os_interface" "from_iseries" {
 }
 ```
 
-The `interfaces` variable definition (in `variables.tf`, alongside the
-`vlans` variable from Phase 3):
+The `lags` variable definition (in `variables.tf`, alongside the `vlans`
+and `interfaces` variables from Phases 3 and 4):
 
 ```terraform
 /*
@@ -451,28 +437,30 @@ output "configured_lags" {
 }
 ```
 
-## Populating `var.interfaces` from a Phase 1 extraction
+## Populating `var.lags` from a Phase 1 extraction
 
 Run `terraform-provider-bigip`'s `scripts/extract-sys-settings.sh`
 against the source i-Series device first (see that provider's
 [extraction
 guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)),
-then convert its output with this repo's
-`scripts/interfaces-from-iseries.sh`, alongside
-`scripts/vlans-from-iseries.sh` from Phase 3:
+then convert its output with this repo's `scripts/lags-from-iseries.sh`,
+alongside `scripts/vlans-from-iseries.sh` and
+`scripts/interfaces-from-iseries.sh` from Phases 3 and 4:
 
 ```sh
 ./scripts/vlans-from-iseries.sh extracted-sys-settings.json \
   examples/migration/vlans-from-iseries/vlans.auto.tfvars.json
 ./scripts/interfaces-from-iseries.sh extracted-sys-settings.json \
   examples/migration/vlans-from-iseries/interfaces.auto.tfvars.json
+./scripts/lags-from-iseries.sh extracted-sys-settings.json \
+  examples/migration/vlans-from-iseries/lags.auto.tfvars.json
 ```
 
 Terraform automatically loads any `*.auto.tfvars.json` file found in the
 working directory, so no explicit `-var-file` flag is needed as long as
-both generated files are placed alongside `main.tf` as shown above. See
-`terraform.tfvars.json.example` in the same directory for the expected
-shape of both variables together:
+all three generated files are placed alongside `main.tf` as shown above.
+See `terraform.tfvars.json.example` in the same directory for the
+expected shape of all three variables together:
 
 ```json
 {
@@ -507,64 +495,56 @@ shape of both variables together:
 ```
 
 Note `native_vlan`/`trunk_vlans` in this file are VLAN ID/tags, matched
-against `var.vlans`' values (not names) -- `interfaces.tf` resolves each
-one back to the corresponding `f5os_vlan.from_iseries` resource instance
-internally. `var.interfaces` validates this automatically: one
-`validation` block rejects any `native_vlan`/`trunk_vlans` ID that
-doesn't also appear in `var.vlans`, surfacing a missing-VLAN mistake at
-`terraform plan` time rather than as a confusing runtime error from the
-F5OS device; another rejects any map key that isn't a validly-shaped
-F5OS interface name (`<port>.0` for rSeries, `<blade>/<port>.0` for
-VELOS partitions), catching an unmapped or otherwise malformed TMOS name
-that `interfaces-from-iseries.sh` passed through unchanged (see
-"Interface name mapping" above).
+against `var.vlans`' values (not names) -- `lags.tf` resolves each one
+back to the corresponding `f5os_vlan.from_iseries` resource instance
+internally, exactly like `interfaces.tf` does in Phase 4. `var.lags`
+validates this the same way `var.interfaces` does: one block rejects any
+`native_vlan`/`trunk_vlans` ID that doesn't also appear in `var.vlans`;
+another rejects any `members` entry that isn't a validly-shaped F5OS
+interface name.
 
-If the source extraction is missing VLAN membership data entirely
-(`bigip_net_vlans` was omitted -- see [Registry
-fallback](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings#registry-fallback)
-in the Phase 1 extraction guide), `interfaces-from-iseries.sh` prints a
-warning to stderr and every interface is emitted with `native_vlan:
-null` and an empty `trunk_vlans` -- this looks identical to "no VLAN
-membership on the source device" in the output file, so check for that
-warning before assuming the generated `interfaces` map accurately
-reflects the source device.
+`var.lags` additionally validates the LACP-specific fields, mirroring
+`f5os_lag`'s own schema validators and `ValidateConfig` logic (see
+`internal/provider/lag_resource.go`): `lag_type` must be `"LACP"` or
+`"STATIC"`; `mode`/`interval` must both be `null` when `lag_type` is
+`"STATIC"`; and when `lag_type` is `"LACP"`, `mode` must be `"ACTIVE"` or
+`"PASSIVE"` and `interval` must be `"SLOW"` or `"FAST"`. Each of these
+fails at `terraform plan` time with a clear message instead of a
+runtime error from the F5OS device during apply.
+
+### Unmapped member interface names
+
+Identical to Phase 4's interface name mapping: a trunk member name that
+doesn't match the expected TMOS `<blade>.<port>` pattern is passed
+through into the output `members` list unchanged (so it isn't silently
+dropped) and reported to stderr for manual review -- it is not a valid
+rSeries name and must be renamed by hand before applying (`var.lags`'
+member-name validation will otherwise reject it at `terraform plan`
+time anyway).
+
+### Member name collisions within a LAG
+
+Dropping the blade number (see [Phase 4's interface name
+mapping](configure-interfaces-from-iseries.html#interface-name-mapping-i-series-11-to-rseries-10))
+can make two *different* TMOS member interfaces on the same trunk
+collapse to the same rSeries name on a multi-blade source. Unlike Phase
+4's `interfaces` map (where a collision drops one physical interface's
+configuration entirely), here the colliding names are de-duplicated
+into a single entry in that LAG's `members` list, since `f5os_lag`'s
+`members` is a set of interface names, not a map keyed by name -- there
+is nothing to silently overwrite. The script still reports every such
+collision to stderr, since it signals the blade-drop mapping's
+single-blade assumption doesn't hold for the source device.
 
 ### Ambiguous native VLANs
 
-A physical interface with more than one *untagged* VLAN membership on
-the source device is an invalid TMOS configuration this script can't
-silently resolve into a single `native_vlan` -- those are left with
+A trunk with more than one *untagged* VLAN membership on the source
+device is an invalid TMOS configuration this script can't silently
+resolve into a single `native_vlan` -- those are left with
 `native_vlan: null` in the output and reported to stderr for manual
-review, matching `terraform-provider-bigip`'s
-`extract-sys-settings.sh` `interface_vlans` derivation behavior (see
-that repo's [extraction guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings#interface-vlan-mapping)).
-
-### rSeries name collisions
-
-If two (or more) distinct TMOS interface names map to the same rSeries
-name after the blade number is dropped (see "Interface name mapping"
-above), only one of them ends up in the output map -- the others'
-`native_vlan`/`trunk_vlans`/`enabled` values are dropped entirely. This
-is reported to stderr with the offending rSeries name and every
-colliding TMOS name so it can be resolved manually (there is no way for
-the script to guess which TMOS interface's configuration should "win").
-This should not occur against a genuine single-blade i-Series/VE
-source; it is a signal the source device or extraction isn't what this
-mapping assumes.
-
-### Duplicate VLAN tags in `var.vlans`
-
-`interfaces.tf` builds a VLAN-tag-to-name reverse lookup to resolve
-`native_vlan`/`trunk_vlans` back to the `f5os_vlan.from_iseries`
-resource that owns each tag (see [Phase 3's VLAN name
-compatibility](create-vlans-from-iseries.html#vlan-name-compatibility)).
-Because a real TMOS source can have two VLAN names sharing the same
-tag (VLAN IDs are scoped per route domain/partition on TMOS, unlike
-this Terraform configuration), `var.vlans` includes a validation
-rejecting duplicate tags outright, with an error explaining the
-conflict -- this configuration has no route-domain/partition to
-disambiguate them, so any such collision must be resolved (renamed or
-merged) in `var.vlans` before applying, not just in `var.interfaces`.
+review, identical to Phase 4's [Ambiguous native
+VLANs](configure-interfaces-from-iseries.html#ambiguous-native-vlans)
+handling for physical interfaces.
 
 ## Applying
 
@@ -577,9 +557,17 @@ terraform apply
 Update the `provider "f5os"` block's `host`/`username`/`password` (or use
 the corresponding `F5OS_HOST`/`F5OS_USERNAME`/`F5OS_PASSWORD` environment
 variables) to point at the target rSeries appliance before applying.
-`f5os_interface` (like `f5os_vlan`) rejects the "Velos Controller"
-platform type -- this configuration targets an rSeries appliance or a
-Velos chassis partition, not a Velos controller.
+`f5os_lag` (like `f5os_vlan`/`f5os_interface`) rejects the "Velos
+Controller" platform type -- this configuration targets an rSeries
+appliance or a Velos chassis partition, not a Velos controller.
+
+Every member interface listed in a LAG's `members` must exist and have
+no VLAN configuration of its own before it can join the LAG (see
+`f5os_lag`'s `members` documentation) -- if Phase 4's `interfaces.tf`
+also configures one of the same physical interfaces directly (with a
+`native_vlan`/`trunk_vlans` of its own), remove that interface from
+`var.interfaces` before adding it to a LAG's `members` here, or the
+apply will conflict.
 
 ## Related migration guides
 
@@ -588,4 +576,4 @@ Velos chassis partition, not a Velos controller.
 - [Interface and trunk naming: TMOS (i-Series) vs F5OS (r-Series/VELOS)](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping) (`terraform-provider-bigip`)
 - [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2, `terraform-provider-bigip`)
 - [Creating VLANs on F5OS from discovered i-Series configuration](create-vlans-from-iseries.html) (Phase 3, this repo) -- prerequisite for this guide.
-- [Configuring F5OS LAGs from discovered i-Series configuration](configure-lags-from-iseries.html) (Phase 5, this repo) -- for trunk (LAG) member interfaces, not covered by this guide (a TMOS trunk name has no `bigip_net_interfaces` entry of its own).
+- [Configuring F5OS interfaces from discovered i-Series configuration](configure-interfaces-from-iseries.html) (Phase 4, this repo) -- prerequisite for this guide; not required to be applied first (LAG members do not need a `f5os_interface` resource of their own), but conflicts if the same physical interface is configured in both places (see "Applying" above).

@@ -45,3 +45,19 @@ resource "f5os_vlan" "from_iseries" {
   name    = each.key
   vlan_id = each.value
 }
+
+locals {
+  # Reverses var.vlans (name -> tag) into (tag -> name) so a VLAN
+  # ID/tag referenced by var.interfaces/var.lags can be resolved back
+  # to the f5os_vlan.from_iseries resource instance that owns it --
+  # this is what makes the dependency on VLAN creation a real
+  # Terraform reference rather than two configurations that merely
+  # happen to agree on the same numeric literals.
+  #
+  # Declared here (alongside f5os_vlan.from_iseries itself) rather than
+  # in interfaces.tf or lags.tf, since both Phase 4 (interfaces.tf) and
+  # Phase 5 (lags.tf) reference it independently of each other -- an
+  # operator migrating only trunks (or only interfaces) can delete the
+  # other phase's file entirely without this local becoming undeclared.
+  vlan_name_by_tag = { for name, tag in var.vlans : tag => name }
+}

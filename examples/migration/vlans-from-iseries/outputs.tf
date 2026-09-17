@@ -19,3 +19,17 @@ output "configured_interfaces" {
     }
   }
 }
+
+output "configured_lags" {
+  description = "Map of LAG name to its configured lag_type/mode/interval/members/native_vlan/trunk_vlans, for every LAG configured from the i-Series source."
+  value = {
+    for name, lag in f5os_lag.from_iseries : name => {
+      lag_type    = lag.lag_type
+      mode        = lag.mode
+      interval    = lag.interval
+      members     = lag.members
+      native_vlan = lag.native_vlan
+      trunk_vlans = lag.trunk_vlans
+    }
+  }
+}
