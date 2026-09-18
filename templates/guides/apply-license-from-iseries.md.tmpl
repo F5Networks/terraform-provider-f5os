@@ -1,0 +1,137 @@
+---
+page_title: "Applying a license to F5OS as part of an i-Series migration"
+description: |-
+  How to use examples/migration/license-from-iseries to activate the F5OS platform license on an rSeries appliance or Velos chassis partition using a new registration key obtained from F5, and how to verify activation succeeded.
+---
+
+# Applying a license to F5OS as part of an i-Series migration
+
+`examples/migration/license-from-iseries` is a licensing phase of an
+i-Series -> r-Series (F5OS) migration workflow, independent of (and can
+be applied before, after, or in parallel with) the VLAN creation
+workflow in [Creating VLANs on F5OS from discovered i-Series
+configuration](create-vlans-from-iseries.html) and the [system-settings
+workflow](configure-system-settings-from-iseries.html): it activates the
+target rSeries appliance's (or Velos chassis partition's) platform
+license via [`f5os_license`](../resources/license.html), using a
+registration key obtained from F5 specifically for that device.
+
+## i-Series license keys are not valid on r-Series
+
+Every other phase of this migration workflow converts data discovered
+on the source i-Series device into F5OS configuration
+(`scripts/vlans-from-iseries.sh`, `scripts/interfaces-from-iseries.sh`,
+`scripts/lags-from-iseries.sh`, `scripts/system-settings-from-iseries.sh`).
+Licensing is different: an i-Series device's TMOS registration key is
+tied to that specific BIG-IP platform/serial number and its licensed
+module set, and **cannot be reused, converted, or migrated onto an
+r-Series appliance or Velos chassis partition** -- F5OS uses an entirely
+separate licensing SKU and activation record from TMOS, keyed to the
+r-Series/Velos hardware's own serial number/base registration key, not
+the i-Series device being replaced.
+
+There is no `scripts/license-from-iseries.sh` conversion script in this
+repo, and there will not be one: this is a hard prerequisite, not a
+migration step with source data to transform.
+
+**Before applying this configuration, obtain a new base registration
+key (and, if applicable, add-on keys) from F5 for the target r-Series
+appliance or Velos chassis partition.** Contact F5 support or your F5
+account team with the device's serial number if you do not already
+have one. Applying `f5os_license` with an i-Series/TMOS key, a
+placeholder value, or a key issued for a different device fails at
+`terraform apply` time -- the device validates the key against F5's
+license activation service during the underlying EULA/install calls
+(see `f5os_license`'s own documentation and
+`internal/provider/license_resource.go`), not merely a local format
+check, so a wrong or reused key is rejected with an explicit device-side
+error rather than silently accepted.
+
+## Example Usage
+
+{{ tffile "examples/migration/license-from-iseries/main.tf" }}
+
+{{ tffile "examples/migration/license-from-iseries/variables.tf" }}
+
+{{ tffile "examples/migration/license-from-iseries/outputs.tf" }}
+
+## Populating the variables
+
+Unlike the other phases in this migration workflow, there is no
+extraction script that populates these variables from the source
+i-Series device -- `var.registration_key`/`var.addon_keys` come directly
+from the new key(s) issued by F5 for this r-Series/Velos target (see
+above). Copy `terraform.tfvars.json.example` in the same directory to a
+`*.auto.tfvars.json` file (Terraform loads any such file automatically)
+and fill in the real key(s):
+
+{{ codefile "json" "examples/migration/license-from-iseries/terraform.tfvars.json.example" }}
+
+`var.registration_key`/`var.addon_keys` are marked `sensitive` in
+`variables.tf`, matching `f5os_license.registration_key`/`.addon_keys`'
+own `Sensitive` schema attributes -- Terraform masks them from `plan`/
+`apply` output and from this configuration's state file display, but
+they are still stored in plaintext in the Terraform state file itself
+(same caveat as any other `Sensitive` attribute); protect
+`terraform.tfstate` accordingly.
+
+## Applying
+
+```sh
+cd examples/migration/license-from-iseries
+terraform init
+terraform apply
+```
+
+Update the `provider "f5os"` block's `host`/`username`/`password` (or
+use the corresponding `F5OS_HOST`/`F5OS_USERNAME`/`F5OS_PASSWORD`
+environment variables) to point at the target rSeries appliance or
+Velos chassis partition before applying.
+
+~> **NOTE:** `f5os_license`'s `terraform destroy` is a no-op -- it does
+not attempt to deactivate or revoke the license on the device (there is
+no supported "unlicense" operation). Destroying this resource only
+removes it from Terraform state; the device remains licensed. See
+`f5os_license`'s own documentation for details.
+
+## Verifying license activation
+
+A successful `terraform apply` means the device accepted the
+registration key(s) at the time `f5os_license.from_iseries` was
+created -- it does not, by itself, prove licensing remains active
+afterward (for example if the key were later revoked). Confirm
+activation directly against the device's `f5-system-licensing:licensing`
+RESTCONF endpoint:
+
+```sh
+curl -sku "$F5OS_USERNAME:$F5OS_PASSWORD" \
+  "https://$F5OS_HOST:8888/restconf/data/openconfig-system:system/f5-system-licensing:licensing" \
+  | jq '.["f5-system-licensing:licensing"].state.license'
+```
+
+A licensed device reports `"Licensed"` for
+`.state.license`; an unlicensed or expired device reports a different
+value (for example `"Not Licensed"`) -- if you see anything other than
+`"Licensed"` after `terraform apply` completes successfully, re-check
+the registration key with F5 rather than assuming the Terraform run
+alone guarantees activation. The same endpoint also reports
+`.state.registration-key.base`, which should match
+`var.registration_key`, and `.state.raw-license`, the full raw license
+text F5's activation service returned.
+
+This is the same verification approach
+`TestAccLicenseResource` (`internal/provider/license_resource_test.go`)
+uses internally -- it queries this endpoint via a side-channel
+`f5osclient` session rather than trusting Terraform state, specifically
+because `f5os_license`'s `Read` only refreshes `registration_key` from
+the device (not `addon_keys`/`license_server`), and because asserting a
+sensitive value via `TestCheckResourceAttr` would echo it into test
+output on any mismatch.
+
+## Related migration guides
+
+- [Inventorying TMOS version and hardware](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/inventory-tmos-version) (Phase 0, `terraform-provider-bigip`)
+- [Extracting i-Series system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
+- [Creating VLANs on F5OS from discovered i-Series configuration](create-vlans-from-iseries.html) (Phase 3, this repo) -- independent of this phase; can be applied before, after, or in parallel.
+- [Configuring system settings on F5OS from discovered i-Series configuration](configure-system-settings-from-iseries.html) (this repo) -- also independent of this phase.
+- [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2, `terraform-provider-bigip`)
