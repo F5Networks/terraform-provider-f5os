@@ -368,6 +368,221 @@ variable "lags" {
     error_message = "Every native_vlan/trunk_vlans VLAN ID in var.lags must also be present in var.vlans, so the referenced VLAN is actually created by f5os_vlan.from_iseries."
   }
 }
+
+# ---------------------------------------------------------------------------
+# tenants is keyed by tenant name (a fresh identifier the operator
+# assigns for the migrated tenant -- there is no source i-Series object
+# this name is preserved from, unlike vlans/interfaces/lags, since a
+# BIG-IP i-Series appliance has no equivalent of an F5OS tenant to name
+# it after). Each entry mirrors f5os_tenant's own attributes directly:
+# image_name (a tenant image already imported on the target device --
+# see f5os_tenant_image and the "Upload BIG-IP tenant image to r-Series"
+# story; f5os_tenant's own Create logic errors out if the named image's
+# status is "not-present" on the device), cpu_cores/memory (sized per
+# workload -- see docs/guides/deploy-tenants-from-iseries.md for sizing
+# guidance, since there is no i-Series field this maps from directly),
+# vlans (VLAN ID/tags, not names -- looked up against the VLANs created
+# by f5os_vlan.from_iseries in tenant.tf via local.vlan_name_by_tag, the
+# same lookup interfaces.tf/lags.tf use), and mgmt_ip/mgmt_gateway/
+# mgmt_prefix (the tenant's management-plane addressing).
+#
+# memory/max_nodes/mac_block_size/timeout/deployment_file are nullable:
+# f5os_tenant itself treats a null memory as "auto-calculate from
+# cpu_cores" (see calculateMemory in internal/provider/tenant_resource.go),
+# a null max_nodes/mac_block_size as "use the device default" (max_nodes
+# is additionally ignored entirely on F5OS versions before 2.0.0), a
+# null timeout as "use the resource's own 360s default", and
+# deployment_file is only meaningful (and only validated below) when
+# type is "BIG-IP-Next".
+#
+# Populate this by hand -- unlike var.vlans/var.interfaces/var.lags,
+# there is no Phase 1 JSON field to convert (see
+# docs/guides/deploy-tenants-from-iseries.md for why tenant sizing
+# cannot be automatically extracted from the source i-Series device the
+# way VLANs/interfaces/trunks are): cpu_cores/memory/virtual_disk_size
+# need sizing-guidance input, and mgmt_ip/mgmt_gateway/mgmt_prefix need
+# operator-assigned management-network addressing for the new tenant.
+# vlans, however, are just the VLAN ID/tags already present in
+# var.vlans -- copy the relevant values in from the same
+# vlans.auto.tfvars.json Phase 3 already generated.
+#
+# Example:
+#   tenants = {
+#     "tenant1" = {
+#       image_name        = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"
+#       type              = "BIG-IP"
+#       deployment_file   = null
+#       cpu_cores         = 8
+#       memory            = null
+#       virtual_disk_size = 82
+#       nodes             = [1]
+#       max_nodes         = null
+#       mac_block_size    = null
+#       cryptos           = "enabled"
+#       running_state     = "deployed"
+#       timeout           = 600
+#       mgmt_ip           = "10.100.100.26"
+#       mgmt_gateway      = "10.100.100.1"
+#       mgmt_prefix       = 24
+#       vlans             = [100, 200]
+#     }
+#   }
+# ---------------------------------------------------------------------------
+variable "tenants" {
+  description = "Map of tenant name (operator-assigned; no source i-Series equivalent) to its sizing (cpu_cores/memory/virtual_disk_size/nodes), image, management addressing (mgmt_ip/mgmt_gateway/mgmt_prefix), and migrated VLAN ID/tags, deployed to the F5OS (rSeries/Velos partition) target."
+  type = map(object({
+    image_name        = string
+    type              = string
+    deployment_file   = string
+    cpu_cores         = number
+    memory            = number
+    virtual_disk_size = number
+    nodes             = list(number)
+    max_nodes         = number
+    mac_block_size    = string
+    cryptos           = string
+    running_state     = string
+    timeout           = number
+    mgmt_ip           = string
+    mgmt_gateway      = string
+    mgmt_prefix       = number
+    vlans             = list(number)
+  }))
+  default = {}
+
+  # Mirrors f5os_tenant's own name schema documentation (see
+  # internal/provider/tenant_resource.go): first character must be a
+  # letter, only lowercase alphanumeric characters and hyphens allowed,
+  # max 50 characters. Catching this here means a malformed name in
+  # var.tenants (e.g. from a hand-edited tfvars file) fails at
+  # `terraform plan` with a clear message instead of a runtime error
+  # from the F5OS device during apply.
+  validation {
+    condition     = alltrue([for name in keys(var.tenants) : can(regex("^[a-z][a-z0-9-]{0,49}$", name))])
+    error_message = "Every tenant name in var.tenants must start with a lowercase letter, contain only lowercase alphanumeric characters or hyphens, and not exceed 50 characters (the F5OS f5os_tenant valid name format)."
+  }
+
+  # Mirrors f5os_tenant's own type validator (see
+  # internal/provider/tenant_resource.go): type is Optional+Computed
+  # with a "BIG-IP" default, so null must remain valid here too --
+  # same non-short-circuiting-|| pitfall as var.lags' mode/interval
+  # validations above applies to contains(), so the ternary below only
+  # calls contains() when type is non-null.
+  validation {
+    condition     = alltrue([for t in values(var.tenants) : t.type == null ? true : contains(["BIG-IP", "BIG-IP-Next"], t.type)])
+    error_message = "Every type in var.tenants must be \"BIG-IP\", \"BIG-IP-Next\", or null (to use the F5OS device default, \"BIG-IP\")."
+  }
+
+  # Mirrors f5os_tenant's own Create-time validation (see
+  # internal/provider/tenant_resource.go): deployment_file is required
+  # only when type is "BIG-IP-Next", and ignored otherwise -- tenant.tf
+  # only passes it through in that case, matching this validation.
+  validation {
+    condition     = alltrue([for t in values(var.tenants) : t.type == "BIG-IP-Next" ? t.deployment_file != null : true])
+    error_message = "deployment_file must be set in var.tenants when type is \"BIG-IP-Next\" (matches f5os_tenant's own Create-time requirement)."
+  }
+
+  # Mirrors f5os_tenant's own running_state validator (see
+  # internal/provider/tenant_resource.go). "deployed" is required to
+  # satisfy this story's acceptance criteria (the tenant must actually
+  # reach running state), but "configured" remains valid here too since
+  # some migrations stage a tenant without starting it immediately.
+  # running_state is Optional+Computed with a "configured" default, so
+  # null must remain valid here too -- same non-short-circuiting-||
+  # pitfall as above applies to contains().
+  validation {
+    condition     = alltrue([for t in values(var.tenants) : t.running_state == null ? true : contains(["configured", "deployed"], t.running_state)])
+    error_message = "Every running_state in var.tenants must be \"configured\", \"deployed\", or null (to use the F5OS device default, \"configured\")."
+  }
+
+  # Mirrors f5os_tenant's own cryptos validator (see
+  # internal/provider/tenant_resource.go): cryptos is Optional+Computed
+  # with an "enabled" default, so null must remain valid here too --
+  # same non-short-circuiting-|| pitfall as above applies to contains().
+  validation {
+    condition     = alltrue([for t in values(var.tenants) : t.cryptos == null ? true : contains(["enabled", "disabled"], t.cryptos)])
+    error_message = "Every cryptos in var.tenants must be \"enabled\", \"disabled\", or null (to use the F5OS device default, \"enabled\")."
+  }
+
+  # Mirrors f5os_tenant's own mac_block_size validator (see
+  # internal/provider/tenant_resource.go). Nullable: f5os_tenant treats
+  # a null mac_block_size as "use the device default" -- same
+  # non-short-circuiting-|| pitfall as var.lags' mode/interval
+  # validations above applies to contains(), so the ternary below only
+  # calls contains() when mac_block_size is non-null.
+  validation {
+    condition = alltrue([
+      for t in values(var.tenants) : t.mac_block_size == null ? true : contains(["one", "small", "medium", "large"], t.mac_block_size)
+    ])
+    error_message = "Every mac_block_size in var.tenants must be \"one\", \"small\", \"medium\", \"large\", or null (to use the F5OS device default)."
+  }
+
+  # cpu_cores/virtual_disk_size are Required (non-nullable, unlike
+  # memory/max_nodes/timeout below) on f5os_tenant itself, and must be
+  # positive to mean anything -- catch a zero/negative value (e.g. an
+  # unpopulated sizing field left at its Go zero value by a hand-edited
+  # tfvars file) here instead of a confusing device-side rejection.
+  validation {
+    condition     = alltrue([for t in values(var.tenants) : t.cpu_cores > 0 && t.virtual_disk_size > 0])
+    error_message = "Every cpu_cores and virtual_disk_size in var.tenants must be a positive number (both are Required, non-nullable attributes on f5os_tenant)."
+  }
+
+  # Mirrors f5os_tenant's own memory MarkdownDescription/calculateMemory
+  # behavior (see internal/provider/tenant_resource.go): null means "let
+  # the provider auto-calculate from cpu_cores", so only validate when
+  # non-null.
+  validation {
+    condition     = alltrue([for t in values(var.tenants) : t.memory == null ? true : t.memory > 0])
+    error_message = "Every memory in var.tenants must be a positive number of MB, or null (to let f5os_tenant auto-calculate it from cpu_cores)."
+  }
+
+  # Mirrors f5os_tenant's own max_nodes validator (see
+  # internal/provider/tenant_resource.go): int64validator.AtLeast(1),
+  # nullable (ignored entirely on F5OS versions before 2.0.0).
+  validation {
+    condition     = alltrue([for t in values(var.tenants) : t.max_nodes == null ? true : t.max_nodes >= 1])
+    error_message = "Every max_nodes in var.tenants must be at least 1, or null (to use the F5OS device default / omit on pre-2.0.0 devices)."
+  }
+
+  # Mirrors f5os_tenant's own timeout default (see
+  # internal/provider/tenant_resource.go: 360s). Nullable here (tenant.tf
+  # passes null through so the resource applies its own default);
+  # non-null values must be positive. This story's acceptance criteria
+  # ("tenant reaches running state within timeout") is satisfied by
+  # whatever positive value the operator sets (or the resource's 360s
+  # default if left null) -- this validation only guards against a
+  # nonsensical zero/negative override, not a specific minimum, since
+  # unlike f5os_tenant_image's large binary transfers a tenant's
+  # deploy-to-running-state time is far more workload/config dependent.
+  validation {
+    condition     = alltrue([for t in values(var.tenants) : t.timeout == null ? true : t.timeout > 0])
+    error_message = "Every timeout in var.tenants must be a positive number of seconds, or null (to use f5os_tenant's own 360s default)."
+  }
+
+  # Mirrors var.interfaces'/var.lags' VLAN-range validation above.
+  validation {
+    condition     = alltrue([for t in values(var.tenants) : alltrue([for id in t.vlans : id >= 0 && id <= 4095])])
+    error_message = "Every VLAN ID in var.tenants' vlans must be between 0 and 4095 (the F5OS f5os_vlan valid range)."
+  }
+
+  # Mirrors var.interfaces'/var.lags' VLAN-membership validation above.
+  validation {
+    condition     = alltrue([for t in values(var.tenants) : alltrue([for id in t.vlans : contains(values(var.vlans), id)])])
+    error_message = "Every VLAN ID in var.tenants' vlans must also be present in var.vlans, so the referenced VLAN is actually created by f5os_vlan.from_iseries."
+  }
+
+  # mgmt_prefix is a CIDR prefix length; f5os_tenant itself does not
+  # range-validate it (the device does, at apply time), but 0-32 is the
+  # only meaningful range for an IPv4 prefix length, which is what
+  # mgmt_ip/mgmt_gateway are documented and exemplified as throughout
+  # this provider (see examples/resources/f5os_tenant/resource.tf).
+  # Catching an out-of-range value here fails at `terraform plan`
+  # instead of a runtime error from the F5OS device during apply.
+  validation {
+    condition     = alltrue([for t in values(var.tenants) : t.mgmt_prefix >= 0 && t.mgmt_prefix <= 32])
+    error_message = "Every mgmt_prefix in var.tenants must be between 0 and 32 (a valid IPv4 CIDR prefix length)."
+  }
+}
 ```
 
 ```terraform
@@ -403,6 +618,23 @@ output "configured_lags" {
       members     = lag.members
       native_vlan = lag.native_vlan
       trunk_vlans = lag.trunk_vlans
+    }
+  }
+}
+
+output "deployed_tenants" {
+  description = "Map of tenant name to its running_state/status/sizing/mgmt_ip/vlans, for every tenant deployed from the i-Series source."
+  value = {
+    for name, tenant in f5os_tenant.from_iseries : name => {
+      running_state     = tenant.running_state
+      status            = tenant.status
+      cpu_cores         = tenant.cpu_cores
+      memory            = tenant.memory
+      virtual_disk_size = tenant.virtual_disk_size
+      mgmt_ip           = tenant.mgmt_ip
+      mgmt_gateway      = tenant.mgmt_gateway
+      mgmt_prefix       = tenant.mgmt_prefix
+      vlans             = tenant.vlans
     }
   }
 }
@@ -453,6 +685,26 @@ shape:
       "members": ["3.0", "4.0"],
       "native_vlan": null,
       "trunk_vlans": [200]
+    }
+  },
+  "tenants": {
+    "tenant1": {
+      "image_name": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+      "type": "BIG-IP",
+      "deployment_file": null,
+      "cpu_cores": 8,
+      "memory": null,
+      "virtual_disk_size": 82,
+      "nodes": [1],
+      "max_nodes": null,
+      "mac_block_size": null,
+      "cryptos": "enabled",
+      "running_state": "deployed",
+      "timeout": 600,
+      "mgmt_ip": "10.100.100.26",
+      "mgmt_gateway": "10.100.100.1",
+      "mgmt_prefix": 24,
+      "vlans": [100, 200]
     }
   }
 }

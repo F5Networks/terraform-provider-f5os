@@ -1,58 +1,68 @@
 ---
-page_title: "Configuring F5OS LAGs from discovered i-Series configuration"
+page_title: "Deploying F5OS tenants from discovered i-Series configuration"
 description: |-
-  How to use examples/migration/vlans-from-iseries/lags.tf and scripts/lags-from-iseries.sh to create f5os_lag resources on an rSeries F5OS target matching the trunk (LAG) configuration discovered on a source BIG-IP i-Series device, including LACP mode and member interfaces.
+  How to use examples/migration/vlans-from-iseries/tenant.tf to deploy f5os_tenant resources on an rSeries F5OS target, sized appropriately for the workload and attached to the VLANs migrated from a source BIG-IP i-Series device.
 ---
 
-# Configuring F5OS LAGs from discovered i-Series configuration
+# Deploying F5OS tenants from discovered i-Series configuration
 
-`examples/migration/vlans-from-iseries/lags.tf` is Phase 5 of an
-i-Series -> r-Series (F5OS) migration workflow: it configures one
-`f5os_lag` resource per trunk discovered on a source BIG-IP i-Series
-device, preserving the trunk name, LACP type/mode/interval, member
-interfaces (mapped to F5OS names), and native/trunk VLAN assignment.
-`scripts/lags-from-iseries.sh` converts the trunk/VLAN membership
-portion of the `extracted-sys-settings.json` produced by
-[`terraform-provider-bigip`'s `scripts/extract-sys-settings.sh`](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)
-(that provider's Phase 1) into the `lags` map this configuration
-expects.
+`examples/migration/vlans-from-iseries/tenant.tf` is Phase 6 of an
+i-Series -> r-Series (F5OS) migration workflow: it deploys one
+`f5os_tenant` resource per BIG-IP instance being migrated, sized for its
+workload (CPU cores, memory, virtual disk size), attached to the VLANs
+created in [Phase 3](create-vlans-from-iseries.html), and configured
+with the management IP/gateway/prefix the tenant needs to be reachable
+once running.
 
 This phase lives in the **same** `examples/migration/vlans-from-iseries`
 directory, and therefore the same Terraform state, as [Phase 3, VLAN
-creation](create-vlans-from-iseries.html) and [Phase 4, interface
-configuration](configure-interfaces-from-iseries.html) -- not a separate
-directory -- specifically so `f5os_lag.from_iseries` can hold a real
+creation](create-vlans-from-iseries.html), [Phase 4, interface
+configuration](configure-interfaces-from-iseries.html), and [Phase 5,
+LAG configuration](configure-lags-from-iseries.html) -- not a separate
+directory -- specifically so `f5os_tenant.from_iseries` can hold a real
 Terraform reference to `f5os_vlan.from_iseries`, making VLAN creation a
 graph dependency Terraform itself enforces rather than just an
 operational instruction to run one step before the other.
 
-## Trunk membership is inverted between TMOS and F5OS
+## Unlike Phases 3-5, tenant sizing has no direct i-Series source field
 
-TMOS and F5OS represent link aggregation with **inverted ownership**
-(see [`terraform-provider-bigip`'s interface/trunk naming
-guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping#trunk-lag-mapping-is-not-11)
-for the full comparison): a TMOS trunk object owns its member list
-directly (`bigip_net_trunks` reports `interfaces = ["1.1", "1.2"]` on
-the trunk itself); the F5OS device API instead sets membership on each
-*physical interface* (`aggregate-id <lag-name>`), not on the LAG object.
-This provider's `f5os_lag` resource re-exposes membership as a
-`members` argument on the LAG resource itself (mirroring TMOS's
-ownership direction, not the raw device API's), so `lags.tf` below
-still looks like a single per-trunk resource with a member list, the
-same shape `scripts/lags-from-iseries.sh` produces.
+VLANs, interfaces, and LAGs all have a structural 1:1 (or near-1:1)
+analog on the source TMOS device -- `bigip_net_vlans`,
+`bigip_net_interfaces`, and `bigip_net_trunks` map fairly directly onto
+`f5os_vlan`/`f5os_interface`/`f5os_lag`. A tenant's `cpu_cores`,
+`memory`, and `virtual_disk_size` do not: TMOS runs directly on the
+i-Series appliance's hardware (there is no concept of a TMOS "tenant"
+sized independently of the appliance itself), whereas F5OS carves each
+tenant out of the rSeries/Velos chassis's shared CPU/memory/disk pool.
+There is therefore no field in `terraform-provider-bigip`'s
+`extract-sys-settings.sh` output this phase can convert the way
+`scripts/vlans-from-iseries.sh`/`interfaces-from-iseries.sh`/`lags-from-iseries.sh`
+do for Phases 3-5.
 
-## Field mapping: TMOS trunk to F5OS LAG
+Size `cpu_cores`/`memory`/`virtual_disk_size` per the target workload
+using F5's published sizing guidance instead:
 
-| TMOS (`bigip_net_trunks` field) | F5OS (`f5os_lag` argument) | Notes |
-|---|---|---|
-| `name` | `lags` map key (LAG name) | Preserved verbatim -- F5OS LAG names are free-form identifiers, not numeric IDs, so unlike physical interfaces there is no name-mapping step for the LAG name itself (member interface names still need mapping -- see below). |
-| `lacp` (`"enabled"`/`"disabled"`) | `lag_type` (`"LACP"`/`"STATIC"`) | A TMOS trunk with `lacp = "disabled"` (a static/non-LACP trunk) maps to F5OS's `STATIC` `lag_type`. |
-| `lacp_mode` (`"active"`/`"passive"`) | `mode` (`"ACTIVE"`/`"PASSIVE"`) | LACP-only; `null` for `STATIC` LAGs (matches `f5os_lag`'s own validation, which rejects a non-null `mode` when `lag_type` is `STATIC`). |
-| `lacp_timeout` (`"long"`/`"short"`) | `interval` (`"SLOW"`/`"FAST"`) | LACP-only, same nullability as `mode`. TMOS's "long" timeout (30s periodic) corresponds to F5OS's `SLOW` interval; "short" (1s) to `FAST`. |
-| `interfaces` (TMOS member names, e.g. `["1.1", "1.2"]`) | `members` (F5OS-mapped names, e.g. `["1.0", "2.0"]`) | Same blade-drop mapping as physical interfaces (see [Phase 4's interface name mapping](configure-interfaces-from-iseries.html#interface-name-mapping-i-series-11-to-rseries-10)) -- `scripts/lags-from-iseries.sh` applies it to each member name independently. |
-| `distribution_hash` | *(not migrated)* | `f5os_lag` hardcodes `src-dst-ipport` internally (see `internal/provider/lag_resource.go`) and does not expose a configurable distribution-hash argument; this is not something `scripts/lags-from-iseries.sh` can preserve. |
-| `bandwidth`, `working_member_count`, `stp`, `type` | *(not migrated)* | Runtime state/counters on F5OS (`state` block, `oper-status`), not something configured to match a TMOS value. |
-| *(none -- VLANs are separate TMOS objects tagged to the trunk)* | `native_vlan` / `trunk_vlans` | Same derivation as `f5os_interface` in Phase 4: `bigip_net_vlans`' per-VLAN `interfaces[]` membership list is inverted into a per-trunk `native_vlan`/`trunk_vlans` pair (a trunk name appears in that list exactly like a physical interface name would). |
+- [Velos performance and sizing](https://clouddocs.f5.com/training/community/velos-training/html/velos_performance_and_sizing.html#memory-sizing)
+- [rSeries performance and sizing](https://clouddocs.f5.com/training/community/rseries-training/html/rseries_performance_and_sizing.html#memory-sizing)
+
+If `memory` is left `null`, `f5os_tenant` auto-calculates it from
+`cpu_cores` (3GB per vCPU on rSeries; 3.5GB per vCPU plus 512MB on
+Velos -- see `calculateMemory` in `internal/provider/tenant_resource.go`)
+-- a reasonable starting point, but not a substitute for sizing against
+the actual i-Series model/workload being migrated per the guidance
+above.
+
+## `image_name` must already be imported on the target device
+
+`f5os_tenant`'s `image_name` argument is not a file path or URL -- it
+must exactly match the name of a tenant image already present and
+verified on the target device (Create fails immediately if
+`f5-tenant-images:images` reports the image as `not-present`). Import
+the correct image first via
+[`f5os_tenant_image`](../resources/tenant_image.html) -- see [Uploading a
+BIG-IP tenant image to r-Series](../resources/tenant_image.html) for
+SCP/SFTP/HTTPS import and the version-compatibility considerations
+between the image and the source i-Series TMOS version being migrated.
 
 ## Example Usage
 
@@ -64,67 +74,88 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
  */
 
 # ---------------------------------------------------------------------------
-# Configures one F5OS LAG (Link Aggregation Group) per trunk discovered on
-# the source i-Series device, preserving the trunk name, LACP mode
-# (active/passive) and LACP/static type, member interfaces (mapped to
-# rSeries names), and native/trunk VLAN assignment.
+# Deploys one F5OS tenant per BIG-IP instance discovered on the source
+# i-Series device, sized appropriately for its workload (CPU cores,
+# memory, and virtual disk size), with the VLANs migrated in Phase 3
+# attached and the management IP/gateway/prefix configured so the tenant
+# is reachable once running.
 #
-# This is Phase 5 of the i-Series -> r-Series (F5OS) migration workflow
-# (VLAN creation, Phase 3/main.tf, and interface configuration, Phase
-# 4/interfaces.tf, are this phase's prerequisites -- both in this same
-# directory): it consumes the trunk portion of the JSON produced by
-# terraform-provider-bigip's `scripts/extract-sys-settings.sh` (Phase 1),
-# converted into the `lags` map below via `scripts/lags-from-iseries.sh`
-# in this repo. See docs/guides/configure-lags-from-iseries.md for the
-# full workflow, including how TMOS trunk membership (`interfaces =
-# ["1.1", "1.2"]`, owned by the trunk) inverts to F5OS LAG membership
-# (`members`, still expressed on the LAG resource itself by this
-# provider, unlike the raw device API where membership is set per
-# physical-interface `aggregate-id`).
+# This is Phase 6 of the i-Series -> r-Series (F5OS) migration workflow
+# (VLAN creation, Phase 3/main.tf; interface configuration, Phase
+# 4/interfaces.tf; and LAG configuration, Phase 5/lags.tf, are this
+# phase's prerequisites -- all in this same directory): unlike Phases
+# 3-5, there is no direct Phase 1 JSON source for a tenant's
+# cpu_cores/memory/virtual_disk_size -- TMOS's per-i-Series-appliance
+# resourcing does not map onto per-tenant sizing on F5OS the way
+# VLANs/interfaces/trunks do structurally. See
+# docs/guides/deploy-tenants-from-iseries.md for full sizing guidance
+# and the complete workflow.
 #
-# Depends on VLAN creation completing first: native_vlan/trunk_vlans
-# below are resolved from VLAN ID/tag to the actual f5os_vlan resource
-# via local.vlan_name_by_tag (defined in main.tf, alongside
+# Depends on VLAN creation completing first: vlans below is resolved
+# from VLAN ID/tag to the actual f5os_vlan resource via
+# local.vlan_name_by_tag (defined in main.tf, alongside
 # f5os_vlan.from_iseries itself, so this file has no dependency on
-# interfaces.tf or vice versa -- an operator migrating only trunks can
-# delete interfaces.tf entirely without this file breaking), so
-# Terraform infers a real dependency on f5os_vlan.from_iseries from the
-# resource reference alone; the explicit depends_on below is additional,
-# deliberate documentation of that same intent.
+# interfaces.tf or lags.tf or vice versa), so Terraform infers a real
+# dependency on f5os_vlan.from_iseries from the resource reference
+# alone; the explicit depends_on below is additional, deliberate
+# documentation of that same intent.
+#
+# Deliberately does NOT depend_on f5os_interface.from_iseries /
+# f5os_lag.from_iseries: a tenant's `vlans` argument only requires the
+# VLAN ID to exist in the chassis partition/platform (which f5os_vlan
+# guarantees), not that any particular physical interface or LAG
+# already carries that VLAN -- the L2 wiring (Phases 4/5) and the
+# tenant's VLAN membership (this phase) are independent concerns to
+# F5OS itself. Operationally, though, the tenant's data-plane VLANs
+# should already be trunked onto the interfaces/LAGs the tenant will
+# actually use before (or by the time) it reaches running_state =
+# "deployed", or its data-plane traffic has nowhere to go once running
+# -- this is a deployment-sequencing concern for the operator, not a
+# hard Terraform dependency, since enforcing one here would break the
+# "each phase's file can be deleted independently" property the rest of
+# this directory preserves (e.g. an operator who only needs the
+# management-plane parts of a migration, with data-plane VLAN trunking
+# handled out of band).
 # ---------------------------------------------------------------------------
 
-resource "f5os_lag" "from_iseries" {
-  for_each = var.lags
+resource "f5os_tenant" "from_iseries" {
+  for_each = var.tenants
 
   depends_on = [f5os_vlan.from_iseries]
 
-  name     = each.key
-  lag_type = each.value.lag_type
-  mode     = each.value.lag_type == "LACP" ? each.value.mode : null
-  interval = each.value.lag_type == "LACP" ? each.value.interval : null
-  members  = each.value.members
+  name              = each.key
+  image_name        = each.value.image_name
+  type              = each.value.type
+  deployment_file   = each.value.type == "BIG-IP-Next" ? each.value.deployment_file : null
+  cpu_cores         = each.value.cpu_cores
+  memory            = each.value.memory
+  virtual_disk_size = each.value.virtual_disk_size
+  nodes             = each.value.nodes
+  max_nodes         = each.value.max_nodes
+  mac_block_size    = each.value.mac_block_size
+  cryptos           = each.value.cryptos
+  running_state     = each.value.running_state
+  timeout           = each.value.timeout
 
-  # each.value.native_vlan is nullable (a trunk with no untagged VLAN
-  # membership on the source device has no native VLAN to configure);
-  # local.vlan_name_by_tag[...].vlan_id round-trips through the actual
-  # created resource's attribute rather than reusing the tag literal
-  # directly, so this expression -- not just depends_on -- is what
-  # Terraform's graph actually walks to order these resources.
-  native_vlan = (
-    each.value.native_vlan == null
-    ? null
-    : f5os_vlan.from_iseries[local.vlan_name_by_tag[each.value.native_vlan]].vlan_id
-  )
+  mgmt_ip      = each.value.mgmt_ip
+  mgmt_gateway = each.value.mgmt_gateway
+  mgmt_prefix  = each.value.mgmt_prefix
 
-  trunk_vlans = [
-    for tag in each.value.trunk_vlans :
+  # each.value.vlans is a list of VLAN ID/tags (matching var.vlans'
+  # values), not names; local.vlan_name_by_tag[...].vlan_id round-trips
+  # through the actual created f5os_vlan resource's attribute rather
+  # than reusing the tag literal directly, so this expression -- not
+  # just depends_on -- is what Terraform's graph actually walks to
+  # order these resources.
+  vlans = [
+    for tag in each.value.vlans :
     f5os_vlan.from_iseries[local.vlan_name_by_tag[tag]].vlan_id
   ]
 }
 ```
 
-The `lags` variable definition (in `variables.tf`, alongside the `vlans`
-and `interfaces` variables from Phases 3 and 4):
+The `tenants` variable definition (in `variables.tf`, alongside the
+`vlans`/`interfaces`/`lags` variables from Phases 3-5):
 
 ```terraform
 /*
@@ -669,30 +700,13 @@ output "deployed_tenants" {
 }
 ```
 
-## Populating `var.lags` from a Phase 1 extraction
+## Populating `var.tenants`
 
-Run `terraform-provider-bigip`'s `scripts/extract-sys-settings.sh`
-against the source i-Series device first (see that provider's
-[extraction
-guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)),
-then convert its output with this repo's `scripts/lags-from-iseries.sh`,
-alongside `scripts/vlans-from-iseries.sh` and
-`scripts/interfaces-from-iseries.sh` from Phases 3 and 4:
-
-```sh
-./scripts/vlans-from-iseries.sh extracted-sys-settings.json \
-  examples/migration/vlans-from-iseries/vlans.auto.tfvars.json
-./scripts/interfaces-from-iseries.sh extracted-sys-settings.json \
-  examples/migration/vlans-from-iseries/interfaces.auto.tfvars.json
-./scripts/lags-from-iseries.sh extracted-sys-settings.json \
-  examples/migration/vlans-from-iseries/lags.auto.tfvars.json
-```
-
-Terraform automatically loads any `*.auto.tfvars.json` file found in the
-working directory, so no explicit `-var-file` flag is needed as long as
-all three generated files are placed alongside `main.tf` as shown above.
-See `terraform.tfvars.json.example` in the same directory for the
-expected shape of all three variables together:
+Unlike `var.vlans`/`var.interfaces`/`var.lags`, there is no
+`scripts/tenants-from-iseries.sh` equivalent that fully populates
+`var.tenants` from a Phase 1 extraction -- populate it by hand, using
+`terraform.tfvars.json.example` in the same directory as a starting
+shape:
 
 ```json
 {
@@ -746,57 +760,45 @@ expected shape of all three variables together:
 }
 ```
 
-Note `native_vlan`/`trunk_vlans` in this file are VLAN ID/tags, matched
-against `var.vlans`' values (not names) -- `lags.tf` resolves each one
-back to the corresponding `f5os_vlan.from_iseries` resource instance
-internally, exactly like `interfaces.tf` does in Phase 4. `var.lags`
-validates this the same way `var.interfaces` does: one block rejects any
-`native_vlan`/`trunk_vlans` ID that doesn't also appear in `var.vlans`;
-another rejects any `members` entry that isn't a validly-shaped F5OS
-interface name.
+Note `vlans` in this file is a list of VLAN ID/tags, matched against
+`var.vlans`' values (not names) -- `tenant.tf` resolves each one back to
+the corresponding `f5os_vlan.from_iseries` resource instance internally,
+exactly like `interfaces.tf`/`lags.tf` do in Phases 4/5. `var.tenants`
+validates this the same way: one `validation` block rejects any `vlans`
+entry that doesn't also appear in `var.vlans`, surfacing a missing-VLAN
+mistake at `terraform plan` time rather than as a confusing runtime
+error from the F5OS device.
 
-`var.lags` additionally validates the LACP-specific fields, mirroring
-`f5os_lag`'s own schema validators and `ValidateConfig` logic (see
-`internal/provider/lag_resource.go`): `lag_type` must be `"LACP"` or
-`"STATIC"`; `mode`/`interval` must both be `null` when `lag_type` is
-`"STATIC"`; and when `lag_type` is `"LACP"`, `mode` must be `"ACTIVE"` or
-`"PASSIVE"` and `interval` must be `"SLOW"` or `"FAST"`. Each of these
-fails at `terraform plan` time with a clear message instead of a
-runtime error from the F5OS device during apply.
+`var.tenants` additionally validates every other field against
+`f5os_tenant`'s own schema constraints (mirroring the pattern used for
+`var.lags`' LACP-specific fields in Phase 5 -- see
+`internal/provider/tenant_resource.go` for the resource-side source of
+truth for each): `type` must be `"BIG-IP"` or `"BIG-IP-Next"`;
+`deployment_file` must be set when `type` is `"BIG-IP-Next"`;
+`running_state` must be `"configured"` or `"deployed"`; `cryptos` must
+be `"enabled"` or `"disabled"`; `mac_block_size` must be one of `"one"`,
+`"small"`, `"medium"`, `"large"`, or `null`; `cpu_cores`/
+`virtual_disk_size` must be positive (both are Required, non-nullable
+attributes on `f5os_tenant` itself); `memory`/`max_nodes`/`timeout` must
+be positive when set, or `null` to accept the resource's own default/
+auto-calculation behavior; and `mgmt_prefix` must be a valid IPv4 CIDR
+prefix length (0-32).
 
-### Unmapped member interface names
+## Reaching `running_state = "deployed"` within timeout
 
-Identical to Phase 4's interface name mapping: a trunk member name that
-doesn't match the expected TMOS `<blade>.<port>` pattern is passed
-through into the output `members` list unchanged (so it isn't silently
-dropped) and reported to stderr for manual review -- it is not a valid
-rSeries name and must be renamed by hand before applying (`var.lags`'
-member-name validation will otherwise reject it at `terraform plan`
-time anyway).
-
-### Member name collisions within a LAG
-
-Dropping the blade number (see [Phase 4's interface name
-mapping](configure-interfaces-from-iseries.html#interface-name-mapping-i-series-11-to-rseries-10))
-can make two *different* TMOS member interfaces on the same trunk
-collapse to the same rSeries name on a multi-blade source. Unlike Phase
-4's `interfaces` map (where a collision drops one physical interface's
-configuration entirely), here the colliding names are de-duplicated
-into a single entry in that LAG's `members` list, since `f5os_lag`'s
-`members` is a set of interface names, not a map keyed by name -- there
-is nothing to silently overwrite. The script still reports every such
-collision to stderr, since it signals the blade-drop mapping's
-single-blade assumption doesn't hold for the source device.
-
-### Ambiguous native VLANs
-
-A trunk with more than one *untagged* VLAN membership on the source
-device is an invalid TMOS configuration this script can't silently
-resolve into a single `native_vlan` -- those are left with
-`native_vlan: null` in the output and reported to stderr for manual
-review, identical to Phase 4's [Ambiguous native
-VLANs](configure-interfaces-from-iseries.html#ambiguous-native-vlans)
-handling for physical interfaces.
+Setting `running_state = "deployed"` (rather than the resource's own
+default, `"configured"`) is what actually starts the tenant and is
+required for this phase's "tenant reaches running state within timeout"
+goal. `f5os_tenant`'s `Create`/`Update` logic polls the device for the
+tenant's actual running state, returning an error (rather than hanging
+indefinitely) if it does not reach the desired state within `timeout`
+seconds (360s by default) -- see `tenantWait` in the vendored
+`f5osclient`. How long a tenant actually takes to reach `"deployed"`
+depends heavily on its `cpu_cores`/`memory`/`virtual_disk_size` and the
+target chassis's current load, so size `timeout` generously for larger
+tenants rather than relying on the 360s default, the same way
+[`f5os_tenant_image`'s `timeout`](../resources/tenant_image.html) should
+be sized generously for large image transfers.
 
 ## Applying
 
@@ -809,23 +811,21 @@ terraform apply
 Update the `provider "f5os"` block's `host`/`username`/`password` (or use
 the corresponding `F5OS_HOST`/`F5OS_USERNAME`/`F5OS_PASSWORD` environment
 variables) to point at the target rSeries appliance before applying.
-`f5os_lag` (like `f5os_vlan`/`f5os_interface`) rejects the "Velos
-Controller" platform type -- this configuration targets an rSeries
-appliance or a Velos chassis partition, not a Velos controller.
+`f5os_tenant` (like `f5os_vlan`/`f5os_interface`/`f5os_lag`) rejects the
+"Velos Controller" platform type -- this configuration targets an
+rSeries appliance or a Velos chassis partition, not a Velos controller.
 
-Every member interface listed in a LAG's `members` must exist and have
-no VLAN configuration of its own before it can join the LAG (see
-`f5os_lag`'s `members` documentation) -- if Phase 4's `interfaces.tf`
-also configures one of the same physical interfaces directly (with a
-`native_vlan`/`trunk_vlans` of its own), remove that interface from
-`var.interfaces` before adding it to a LAG's `members` here, or the
-apply will conflict.
+`name` and `image_name` both force replacement of the tenant if changed
+(`f5os_tenant`'s own `RequiresReplace` plan modifiers) -- renaming a
+tenant or changing its image after initial deployment recreates it
+rather than updating it in place.
 
 ## Related migration guides
 
 - [Inventorying TMOS version and hardware](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/inventory-tmos-version) (Phase 0, `terraform-provider-bigip`)
 - [Extracting i-Series system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
-- [Interface and trunk naming: TMOS (i-Series) vs F5OS (r-Series/VELOS)](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping) (`terraform-provider-bigip`)
 - [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2, `terraform-provider-bigip`)
 - [Creating VLANs on F5OS from discovered i-Series configuration](create-vlans-from-iseries.html) (Phase 3, this repo) -- prerequisite for this guide.
-- [Configuring F5OS interfaces from discovered i-Series configuration](configure-interfaces-from-iseries.html) (Phase 4, this repo) -- prerequisite for this guide; not required to be applied first (LAG members do not need a `f5os_interface` resource of their own), but conflicts if the same physical interface is configured in both places (see "Applying" above).
+- [Configuring F5OS interfaces from discovered i-Series configuration](configure-interfaces-from-iseries.html) (Phase 4, this repo) -- not a hard Terraform dependency of this guide, but the tenant's data-plane VLANs should already be wired to physical interfaces or LAGs before (or by the time) it reaches `running_state = "deployed"`.
+- [Configuring F5OS LAGs from discovered i-Series configuration](configure-lags-from-iseries.html) (Phase 5, this repo) -- same operational-sequencing note as Phase 4 above.
+- [Uploading a BIG-IP tenant image to r-Series](../resources/tenant_image.html) -- prerequisite for this guide; `image_name` must reference an already-imported, verified tenant image.
