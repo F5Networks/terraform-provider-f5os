@@ -217,6 +217,14 @@ regenerate.
 
 ## Commit conventions
 
+### Do not commit unless asked
+
+Do not run `git commit` (or amend/push) unless the user explicitly asks for a
+commit in the current turn. Finishing a task (including verified changes) is
+not itself a request to commit — leave changes staged/unstaged and summarize
+what changed, then wait for the user to say "commit" or similar before
+committing.
+
 ### Mandatory JIRA ID in commit description
 
 Every commit must include a `Ref:` line in the commit **description** (the

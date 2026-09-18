@@ -3490,3 +3490,114 @@ func TestAccTenantImageTransferStatusShape(t *testing.T) {
 
 	t.Logf("Transfer status shape validated: %d operations found", len(ops))
 }
+
+// testAccTenantImageLargeTransferImageName is a tenant image build that is
+// deliberately different from testAccImageName so this test always triggers
+// a genuine remote transfer (rather than adopting an image the DUT already
+// has cached). It lives in a different remote directory than
+// testAccImageRemotePath (see testAccTenantImageLargeTransferRemotePath), so
+// it has its own override var rather than reusing testAccImageRemotePath.
+//
+// Deliberately read directly via os.Getenv (not envOrDefault) so the zero
+// value ("") is observable in TestAccTenantImageLargeTransferWithExtendedTimeout
+// -- this test performs a genuine multi-GB transfer and must not run just
+// because TF_ACC is set; it additionally requires this env var to be
+// explicitly opted into, with no default value to fall back to.
+var testAccTenantImageLargeTransferImageName = os.Getenv("F5OS_TENANT_IMAGE_LARGE_TRANSFER")
+
+// testAccTenantImageLargeTransferRemotePath is the path on the image server
+// where testAccTenantImageLargeTransferImageName lives. Override with
+// F5OS_TENANT_IMAGE_LARGE_TRANSFER_REMOTE_PATH if
+// F5OS_TENANT_IMAGE_LARGE_TRANSFER is set to a build stored elsewhere.
+var testAccTenantImageLargeTransferRemotePath = envOrDefault(
+	"F5OS_TENANT_IMAGE_LARGE_TRANSFER_REMOTE_PATH", "v17.1.0/dist/release/VM")
+
+// TestAccTenantImageLargeTransferWithExtendedTimeout imports a tenant image
+// that is not already present on the DUT over HTTPS (see NOTE ON PROTOCOL
+// below), using a 600s timeout
+// (the minimum recommended for large image files per the "Upload BIG-IP
+// tenant image to r-Series" story's acceptance criteria: "Timeout configured
+// appropriately for large image files (600s+)"). Unlike the other Create
+// tests in this file, which mostly reuse testAccImageName (already cached on
+// most DUTs and therefore only exercise the "adopt existing image" code
+// path), this test intentionally picks a distinct image name so Create must
+// perform an actual multi-GB transfer end-to-end, and it verifies the
+// resulting status/size directly against the device API.
+//
+// NOTE ON PROTOCOL: The f5os_tenant_image resource and the vendored
+// f5osclient both fully support "scp" and "sftp" (see F5ReqTenantImage.Protocol
+// in structs_tenant.go and the mock-verified payload assertions in
+// TestUnitTenantImageAllFieldsCreateAndVerify in this file). However, no
+// SCP/SFTP-capable credential set for the shared image server
+// (10.238.1.148 / spkapexsrvc01.olympus.f5net.com) was available when this
+// test was written — SSH access requires credentials this environment did
+// not have, while the same server exposes the image catalog anonymously over
+// HTTPS. This test therefore validates the resource end-to-end (including
+// the 600s+ timeout requirement) using protocol="https", and SCP/SFTP
+// coverage remains at the unit/mock level until real credentials are
+// supplied. See TestUnitTenantImageAllFieldsCreateAndVerify for the SCP
+// payload-shape verification.
+//
+// EXPLICIT OPT-IN REQUIRED: unlike every other test in this file, this one
+// triggers a genuine multi-GB network transfer (by design -- see above), so
+// it must not run merely because TF_ACC is set. It additionally requires
+// F5OS_TENANT_IMAGE_LARGE_TRANSFER to be explicitly set (to the name of an
+// image not already cached on the target DUT), and fails safe by skipping
+// otherwise. Run it with a test timeout well above the 600s resource
+// timeout to leave headroom for polling overhead and the transfer itself
+// (e.g. `go test -run TestAccTenantImageLargeTransferWithExtendedTimeout
+// -timeout 20m`); the default `go test` timeout (10m) may not be enough
+// depending on network conditions to the image server, and a shorter CI
+// default (e.g. 5m) will not be.
+func TestAccTenantImageLargeTransferWithExtendedTimeout(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" || testAccTenantImageLargeTransferImageName == "" {
+		t.Skip("This test triggers a genuine multi-GB transfer and is opt-in only: " +
+			"set both TF_ACC and F5OS_TENANT_IMAGE_LARGE_TRANSFER (to an image name not " +
+			"already present on the target DUT) to run it. Also pass a generous -timeout " +
+			"(e.g. 20m) since it performs a real transfer against the 600s resource timeout.")
+	}
+	testAccPreCheck(t)
+
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Fatalf("Cannot create client: %v", err)
+	}
+
+	// Guard: skip (not fail) if the image is already on the device, since
+	// the whole point of this test is to force a real transfer.
+	if resp, err := client.GetImage(testAccTenantImageLargeTransferImageName); err == nil &&
+		resp != nil && len(resp.TenantImages) > 0 {
+		t.Skipf("Image %q already present on device; this test requires a fresh transfer. "+
+			"Delete it first or set F5OS_TENANT_IMAGE_LARGE_TRANSFER to an image not yet on the DUT.",
+			testAccTenantImageLargeTransferImageName)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckTenantImageDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTenantImageLargeTransferConfig,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_tenant_image.large_transfer_test", "id", testAccTenantImageLargeTransferImageName),
+					resource.TestCheckResourceAttr("f5os_tenant_image.large_transfer_test", "protocol", "https"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.large_transfer_test", "timeout", "600"),
+					testAccCheckTenantImageExistsOnDevice(testAccTenantImageLargeTransferImageName),
+				),
+			},
+		},
+	})
+}
+
+var testAccTenantImageLargeTransferConfig = fmt.Sprintf(`
+resource "f5os_tenant_image" "large_transfer_test" {
+  image_name  = %q
+  remote_host = %q
+  remote_path = %q
+  local_path  = "images/tenant"
+  protocol    = "https"
+  insecure    = true
+  timeout     = 600
+}
+`, testAccTenantImageLargeTransferImageName, testAccImageRemoteHost, testAccTenantImageLargeTransferRemotePath)
