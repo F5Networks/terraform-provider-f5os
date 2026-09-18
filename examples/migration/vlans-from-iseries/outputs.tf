@@ -33,3 +33,20 @@ output "configured_lags" {
     }
   }
 }
+
+output "deployed_tenants" {
+  description = "Map of tenant name to its running_state/status/sizing/mgmt_ip/vlans, for every tenant deployed from the i-Series source."
+  value = {
+    for name, tenant in f5os_tenant.from_iseries : name => {
+      running_state     = tenant.running_state
+      status            = tenant.status
+      cpu_cores         = tenant.cpu_cores
+      memory            = tenant.memory
+      virtual_disk_size = tenant.virtual_disk_size
+      mgmt_ip           = tenant.mgmt_ip
+      mgmt_gateway      = tenant.mgmt_gateway
+      mgmt_prefix       = tenant.mgmt_prefix
+      vlans             = tenant.vlans
+    }
+  }
+}
