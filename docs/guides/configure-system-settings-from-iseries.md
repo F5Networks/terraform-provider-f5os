@@ -458,4 +458,5 @@ See each resource's own documentation for details before running
 - [Inventorying TMOS version and hardware](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/inventory-tmos-version) (Phase 0, `terraform-provider-bigip`)
 - [Extracting i-Series system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
 - [Creating VLANs on F5OS from discovered i-Series configuration](create-vlans-from-iseries.html) (this repo) -- the parallel VLAN-creation phase of this migration workflow.
+- [Applying a license to F5OS as part of an i-Series migration](apply-license-from-iseries.html) (this repo) -- also independent of this phase.
 - [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2, `terraform-provider-bigip`)
