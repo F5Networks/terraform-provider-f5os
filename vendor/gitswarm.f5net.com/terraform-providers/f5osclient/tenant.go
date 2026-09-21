@@ -591,6 +591,14 @@ func (p *F5os) DeleteTenant(tenantName string) error {
 	p.CheckTenantnotexist(tenantName)
 	return nil
 }
+
+func (p *F5os) DeleteTenantCloudInit(tenantName string) error {
+	url := fmt.Sprintf("%s%s%s/tenant=%s/config/cloud-init", p.Host, p.UriRoot, uriTenant, tenantName)
+	f5osLogger.Info("[DeleteTenantCloudInit]", "Request path", hclog.Fmt("%+v", url))
+	_, err := p.doTenantRequest("DELETE", url, []byte(""))
+	return err
+}
+
 func (p *F5os) tenantWait(tenantName, runningState string) (bool, error) {
 	tenantMap, err := p.getTenantDeployStatus(tenantName)
 	if err != nil {

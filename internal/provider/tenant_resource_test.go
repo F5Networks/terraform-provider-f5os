@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/stretchr/testify/assert"
+	f5ossdk "gitswarm.f5net.com/terraform-providers/f5osclient"
 )
 
 func TestAccTenantDeployResource(t *testing.T) {
@@ -2938,6 +2941,85 @@ func TestUnitCalculateMemory(t *testing.T) {
 
 func int64Ptr(i int64) *int64 {
 	return &i
+}
+
+func TestTenantCloudInitStateMapping(t *testing.T) {
+	response := &f5ossdk.F5RespTenants{}
+	response.F5TenantsTenant = append(response.F5TenantsTenant, f5ossdk.F5RespTenant{})
+	response.F5TenantsTenant[0].Config.CloudInit = "tenant-bootstrap"
+
+	data := &TenantResourceModel{}
+	(&TenantResource{}).tenantResourceModeltoState(context.Background(), response, data)
+
+	assert.Equal(t, "tenant-bootstrap", data.CloudInit.ValueString())
+}
+
+func TestTenantCloudInitRequestSerialization(t *testing.T) {
+	tenant := f5ossdk.F5ReqTenant{}
+	tenant.Config.CloudInit = "tenant-bootstrap"
+
+	body, err := json.Marshal(f5ossdk.F5ReqTenants{F5TenantsTenant: []f5ossdk.F5ReqTenant{tenant}})
+
+	assert.NoError(t, err)
+	var payload struct {
+		Tenants []struct {
+			Config struct {
+				CloudInit string `json:"cloud-init"`
+			} `json:"config"`
+		} `json:"f5-tenants:tenant"`
+	}
+	assert.NoError(t, json.Unmarshal(body, &payload))
+	assert.Equal(t, "tenant-bootstrap", payload.Tenants[0].Config.CloudInit)
+}
+
+func TestUnitTenantCloudInit(t *testing.T) {
+	testAccPreUnitCheck(t)
+
+	var mu sync.Mutex
+	var capturedBody string
+	setupMockPlatformVersion(mux, "2.0.0-1")
+	setupTenant2_0_0MaxNodesMocks(t, &capturedBody, &mu,
+		"./fixtures/tenant_get_status_2_0_0_max_nodes.json",
+		"./fixtures/tenant_config_cloud_init.json")
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{{
+			Config: testAccTenantCloudInit(),
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("f5os_tenant.test2", "cloud_init", "tenant-bootstrap"),
+				func(s *terraform.State) error {
+					mu.Lock()
+					defer mu.Unlock()
+					if !strings.Contains(capturedBody, `"cloud-init":"tenant-bootstrap"`) {
+						return fmt.Errorf("expected create payload to contain Cloud-Init reference, got: %s", capturedBody)
+					}
+					return nil
+				},
+			),
+		}},
+	})
+}
+
+func testAccTenantCloudInit() string {
+	return fmt.Sprintf(`
+resource "f5os_tenant" "test2" {
+  name              = "testtenant-ecosys2"
+  image_name        = %q
+  cloud_init        = "tenant-bootstrap"
+  mgmt_ip           = "10.10.10.26"
+  mgmt_gateway      = "10.10.10.1"
+  mgmt_prefix       = 24
+  type              = "BIG-IP"
+  cpu_cores         = 8
+  running_state     = "configured"
+  virtual_disk_size = 82
+  mac_block_size    = "one"
+  vlans             = [1]
+}
+`, tenantUnitTestImage)
 }
 
 // TestUnitTenantGetImageError verifies Create error handling when GetImage fails.

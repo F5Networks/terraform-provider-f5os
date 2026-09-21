@@ -69,6 +69,7 @@ type F5ReqTenant struct {
 		TenantOp                string `json:"tenant-op,omitempty"`
 		Type                    string `json:"type,omitempty"`
 		Image                   string `json:"image,omitempty"`
+		CloudInit               string `json:"cloud-init,omitempty"`
 		DeploymentFile          string `json:"deployment-file,omitempty"`
 		DeploymentSpecification string `json:"deployment-specification,omitempty"`
 		TargetImage             string `json:"target-image,omitempty"`
@@ -131,6 +132,7 @@ type F5RespTenant struct {
 		TenantOp                string `json:"tenant-op,omitempty"`
 		Type                    string `json:"type,omitempty"`
 		Image                   string `json:"image,omitempty"`
+		CloudInit               string `json:"cloud-init,omitempty"`
 		DeploymentFile          string `json:"deployment-file,omitempty"`
 		DeploymentSpecification string `json:"deployment-specification,omitempty"`
 		TargetImage             string `json:"target-image,omitempty"`

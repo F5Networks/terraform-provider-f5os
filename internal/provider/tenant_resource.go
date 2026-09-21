@@ -47,6 +47,7 @@ type TenantResourceModel struct {
 	Name                types.String `tfsdk:"name"`
 	DeploymentFile      types.String `tfsdk:"deployment_file"`
 	ImageName           types.String `tfsdk:"image_name"`
+	CloudInit           types.String `tfsdk:"cloud_init"`
 	Cryptos             types.String `tfsdk:"cryptos"`
 	Type                types.String `tfsdk:"type"`
 	RunningState        types.String `tfsdk:"running_state"`
@@ -99,6 +100,10 @@ func (r *TenantResource) Schema(ctx context.Context, req resource.SchemaRequest,
 				MarkdownDescription: "Deployment file used for BIG-IP-Next .\nRequired for if `type` is `BIG-IP-Next`.",
 				Optional:            true,
 				Computed:            true,
+			},
+			"cloud_init": schema.StringAttribute{
+				MarkdownDescription: "Name or ID of the Cloud-Init config object referenced by this tenant.",
+				Optional:            true,
 			},
 			"type": schema.StringAttribute{
 				MarkdownDescription: "Name of the tenant image to be used.\nRequired for create operations",
@@ -346,9 +351,11 @@ func (r *TenantResource) Read(ctx context.Context, req resource.ReadRequest, res
 
 func (r *TenantResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var data *TenantResourceModel
+	var state *TenantResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 
 	if resp.Diagnostics.HasError() {
 		return
@@ -361,6 +368,13 @@ func (r *TenantResource) Update(ctx context.Context, req resource.UpdateRequest,
 	tflog.Info(ctx, fmt.Sprintf("[Update] tenantConfig :%+v", tenantConfig))
 	// mutex.Lock()
 	stop := r.client.F5OsKeepAlive(15 * time.Second)
+	if data.CloudInit.IsNull() && !state.CloudInit.IsNull() && !state.CloudInit.IsUnknown() {
+		if err := r.client.DeleteTenantCloudInit(data.Name.ValueString()); err != nil {
+			stop <- true
+			resp.Diagnostics.AddError("F5OS Client Error:", fmt.Sprintf("Failed to remove tenant Cloud-Init reference: %s", err))
+			return
+		}
+	}
 	respByte, err := r.client.UpdateTenant(tenantConfig, int(data.Timeout.ValueInt64()))
 	if err != nil {
 		stop <- true
@@ -468,6 +482,11 @@ func (r *TenantResource) tenantResourceModeltoState(ctx context.Context, respDat
 	}
 	data.Cryptos = types.StringValue(respData.F5TenantsTenant[0].State.Cryptos)
 	data.Type = types.StringValue(respData.F5TenantsTenant[0].State.Type)
+	if respData.F5TenantsTenant[0].Config.CloudInit != "" {
+		data.CloudInit = types.StringValue(respData.F5TenantsTenant[0].Config.CloudInit)
+	} else {
+		data.CloudInit = types.StringNull()
+	}
 	if respData.F5TenantsTenant[0].Config.DeploymentFile != "" {
 		data.DeploymentFile = types.StringValue(respData.F5TenantsTenant[0].Config.DeploymentFile)
 	} else if data.DeploymentFile.IsUnknown() {
@@ -507,6 +526,9 @@ func (r *TenantResource) getTenantCreateConfig(ctx context.Context, req resource
 	tenantSubbj.Name = data.Name.ValueString()
 	tenantSubbj.Config.Name = data.Name.ValueString()
 	tenantSubbj.Config.Image = data.ImageName.ValueString()
+	if !data.CloudInit.IsNull() && !data.CloudInit.IsUnknown() {
+		tenantSubbj.Config.CloudInit = data.CloudInit.ValueString()
+	}
 	tenantSubbj.Config.Gateway = data.MgmtGateway.ValueString()
 	tenantSubbj.Config.Type = data.Type.ValueString()
 	tenantSubbj.Config.MgmtIp = data.MgmtIP.ValueString()
@@ -548,6 +570,9 @@ func (r *TenantResource) getTenantUpdateConfig(ctx context.Context, req resource
 	tenantSubbj.Name = data.Name.ValueString()
 	tenantSubbj.Config.Name = data.Name.ValueString()
 	tenantSubbj.Config.Image = data.ImageName.ValueString()
+	if !data.CloudInit.IsNull() && !data.CloudInit.IsUnknown() {
+		tenantSubbj.Config.CloudInit = data.CloudInit.ValueString()
+	}
 	tenantSubbj.Config.Gateway = data.MgmtGateway.ValueString()
 	tenantSubbj.Config.Type = data.Type.ValueString()
 	tenantSubbj.Config.MgmtIp = data.MgmtIP.ValueString()

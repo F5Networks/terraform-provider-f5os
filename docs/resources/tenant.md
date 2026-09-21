@@ -35,6 +35,7 @@ resource "f5os_tenant" "test3" {
   # max_nodes is only supported on F5OS 2.0.0 and later; ignored on earlier
   # versions.
   max_nodes = 2
+  cloud_init = f5os_cloud_init.example.name
 }
 ```
 
@@ -62,6 +63,7 @@ The name cannot exceed 50 characters.
 
 - `cryptos` (String) Whether crypto and compression hardware offload should be enabled on the tenant.
 We recommend it is enabled, otherwise crypto and compression may be processed in CPU.
+- `cloud_init` (String) Name or ID of the Cloud-Init config object referenced by this tenant.
 - `dag_ipv6_prefix_length` (Number) Configuring DAG Global IPv6 Prefix Length,value Range from `1` to `128`.Default is `128`.
 - `deployment_file` (String) Deployment file used for BIG-IP-Next .
 Required for if `type` is `BIG-IP-Next`.
