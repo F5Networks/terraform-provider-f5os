@@ -4363,6 +4363,16 @@ func setupLdapMock(t *testing.T, currentLdap map[string]interface{}) {
 				"f5-openconfig-aaa-ldap:ldap": currentLdap,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
+		case "PATCH":
+			var payload map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
+				if ldap, ok := payload["f5-openconfig-aaa-ldap:ldap"].(map[string]interface{}); ok {
+					for k, v := range ldap {
+						currentLdap[k] = v
+					}
+				}
+			}
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
@@ -4399,8 +4409,8 @@ func setupLdapMock(t *testing.T, currentLdap map[string]interface{}) {
 // Update changes them. Verifies both leaf-lists round-trip.
 func TestUnitAuthResourceLdap2_0_0(t *testing.T) {
 	currentLdap := map[string]interface{}{
-		"user-object-class":  []interface{}{"person"},
-		"group-object-class": []interface{}{"groupOfNames"},
+		"user-object-class":  []interface{}{"posixAccount"},
+		"group-object-class": []interface{}{"posixGroup"},
 	}
 
 	testAccPreUnitCheck(t)
@@ -4474,17 +4484,31 @@ func setupLdapDriftMock(t *testing.T, drift *map[string]interface{}) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "GET" {
+		switch r.Method {
+		case "GET":
 			w.Header().Set("Content-Type", "application/yang-data+json")
 			w.WriteHeader(http.StatusOK)
+			// Return whatever is currently in drift
 			resp := map[string]interface{}{
 				"f5-openconfig-aaa-ldap:ldap": *drift,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
-			return
+		case "PATCH":
+			// Update the drift state to reflect the applied changes
+			var payload map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
+				if ldap, ok := payload["f5-openconfig-aaa-ldap:ldap"].(map[string]interface{}); ok {
+					for k, v := range ldap {
+						(*drift)[k] = v
+					}
+				}
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
-		w.WriteHeader(http.StatusMethodNotAllowed)
 	})
+
 	// Accept the client's per-leaf PUT/DELETE writes but do not persist: the
 	// caller drives GET state via *drift to simulate out-of-band eviction.
 	for _, leaf := range []string{"user-object-class", "group-object-class"} {

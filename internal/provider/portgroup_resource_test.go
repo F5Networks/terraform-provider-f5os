@@ -282,3 +282,47 @@ func TestUnitPortGroupResourceRejectsNonRSeries(t *testing.T) {
 		}},
 	})
 }
+
+// TestUnitPortGroupResourceSingleItemResponseShape tests that GetPortGroup
+// successfully parses the single-item payload shape returned by real F5OS hardware
+// (under "f5-portgroup:portgroup") in addition to collection shapes.
+func TestUnitPortGroupResourceSingleItemResponseShape(t *testing.T) {
+	testAccPreUnitCheck(t)
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Auth-Token", "test-token")
+		_, _ = fmt.Fprint(w, loadFixtureString("./fixtures/f5os_auth.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-platform:components/component", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, loadFixtureString("./fixtures/rseries_platform_state_ok.json"))
+	})
+	mux.HandleFunc("/restconf/data/openconfig-system:system/f5-system-image:image/state/install", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, loadFixtureString("./fixtures/rseries_platform_version.json"))
+	})
+	mux.HandleFunc(portGroupPath, func(w http.ResponseWriter, r *http.Request) {
+		// Single-item shape returned by live F5OS appliance
+		_, _ = fmt.Fprint(w, `{"f5-portgroup:portgroup":[{"portgroup_name":"1/1","config":{"name":"1/1","mode":"MODE_10GB","f5-ddm:ddm":{"f5-ddm:ddm-poll-frequency":30}}}]}`)
+	})
+	mux.HandleFunc(portGroupPath+"/config", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer teardown()
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: `resource "f5os_portgroup" "test" {
+  name = "1/1"
+  mode = "MODE_10GB"
+  ddm_poll_frequency = 30
+}`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_portgroup.test", "id", "1/1"),
+					resource.TestCheckResourceAttr("f5os_portgroup.test", "mode", "MODE_10GB"),
+					resource.TestCheckResourceAttr("f5os_portgroup.test", "ddm_poll_frequency", "30"),
+				),
+			},
+		},
+	})
+}

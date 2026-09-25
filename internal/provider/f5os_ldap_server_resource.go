@@ -143,11 +143,23 @@ func (r *LdapServerResource) Create(ctx context.Context, req resource.CreateRequ
 	// Create the LDAP server
 	err := r.client.CreateLdapServer(serverGroup, address, port, serverType)
 	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error creating LDAP server",
-			fmt.Sprintf("Could not create LDAP server %s in group %s: %s", address, serverGroup, err.Error()),
-		)
-		return
+		if strings.Contains(err.Error(), "object already exists") {
+			// Server already exists on the device, update it to match plan
+			tflog.Info(ctx, fmt.Sprintf("LDAP server %s already exists in group %s; updating to match plan", address, serverGroup))
+			if updateErr := r.client.UpdateLdapServer(serverGroup, address, port, serverType); updateErr != nil {
+				resp.Diagnostics.AddError(
+					"Error configuring existing LDAP server",
+					fmt.Sprintf("LDAP server %s already exists in group %s, but updating it failed: %s", address, serverGroup, updateErr.Error()),
+				)
+				return
+			}
+		} else {
+			resp.Diagnostics.AddError(
+				"Error creating LDAP server",
+				fmt.Sprintf("Could not create LDAP server %s in group %s: %s", address, serverGroup, err.Error()),
+			)
+			return
+		}
 	}
 
 	// Set the ID
@@ -183,8 +195,10 @@ func (r *LdapServerResource) Read(ctx context.Context, req resource.ReadRequest,
 	}
 
 	// Update state with retrieved values
-	state.Address = types.StringValue(serverConfig.Address)
-	state.ID = types.StringValue(fmt.Sprintf("%s:%s", serverGroup, address))
+	if serverConfig.Address != "" {
+		state.Address = types.StringValue(serverConfig.Address)
+	}
+	state.ID = types.StringValue(fmt.Sprintf("%s:%s", state.ServerGroup.ValueString(), state.Address.ValueString()))
 
 	if serverConfig.AuthPort != nil {
 		state.AuthPort = types.Int64Value(*serverConfig.AuthPort)
@@ -198,7 +212,7 @@ func (r *LdapServerResource) Read(ctx context.Context, req resource.ReadRequest,
 		state.Type = types.StringNull()
 	}
 
-	tflog.Trace(ctx, fmt.Sprintf("Read LDAP server %s from group %s", address, serverGroup))
+	tflog.Trace(ctx, fmt.Sprintf("Read LDAP server %s from group %s", state.Address.ValueString(), state.ServerGroup.ValueString()))
 
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -260,6 +274,23 @@ func (r *LdapServerResource) Delete(ctx context.Context, req resource.DeleteRequ
 
 	serverGroup := state.ServerGroup.ValueString()
 	address := state.Address.ValueString()
+
+	// If address is empty, try to recover it from the ID (server_group:address)
+	if address == "" && !state.ID.IsNull() && !state.ID.IsUnknown() {
+		parts := strings.SplitN(state.ID.ValueString(), ":", 2)
+		if len(parts) == 2 && parts[1] != "" {
+			address = parts[1]
+			if serverGroup == "" {
+				serverGroup = parts[0]
+			}
+		}
+	}
+
+	if address == "" {
+		// Nothing valid to delete from the device
+		tflog.Warn(ctx, fmt.Sprintf("Skipping LDAP server delete: address is empty (id: %s)", state.ID.ValueString()))
+		return
+	}
 
 	// Delete the LDAP server
 	err := r.client.DeleteLdapServer(serverGroup, address)
