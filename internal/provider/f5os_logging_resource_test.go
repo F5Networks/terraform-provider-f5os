@@ -1806,7 +1806,7 @@ func TestUnitLoggingDeleteIncludeHostnamePUTFailureFallback(t *testing.T) {
 			// Step 1: Create with include_hostname=true; PUT must succeed.
 			{
 				Config: testUnitLoggingIncludeHostnameOnlyConfig,
-				Check: resource.TestCheckResourceAttr("f5os_logging.test", "include_hostname", "true"),
+				Check:  resource.TestCheckResourceAttr("f5os_logging.test", "include_hostname", "true"),
 			},
 			// Step 2: Destroy — PUT fails, DELETE fallback must run and
 			// converge include-hostname to false. PreConfig flips the

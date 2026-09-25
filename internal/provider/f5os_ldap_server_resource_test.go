@@ -1,12 +1,19 @@
 package provider
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
 	"testing"
 
+	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -552,4 +559,217 @@ resource "f5os_ldap_server" "test" {
 			},
 		})
 	})
+}
+
+// TestUnitLdapServerCreateWirePayloadStructure validates the exact wire payload
+// sent to the F5OS RESTCONF endpoint, ensuring auth-port and type are placed in
+// the augmented f5-openconfig-aaa-ldap:ldap/config container and NOT in openconfig-system:server/config.
+func TestUnitLdapServerCreateWirePayloadStructure(t *testing.T) {
+	testAccPreUnitCheck(t)
+	defer teardown()
+
+	var capturedBody map[string]interface{}
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/server-groups/server-group=payload-group/servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+
+	client, err := newTestClientFromEnv()
+	assert.NoError(t, err)
+
+	port := int64(1389)
+	err = client.CreateLdapServer("payload-group", "10.171.125.61", &port, "ldap")
+	assert.NoError(t, err)
+
+	// Verify top-level structure
+	serverList, ok := capturedBody["openconfig-system:server"].([]interface{})
+	assert.True(t, ok, "expected openconfig-system:server list in payload")
+	assert.Len(t, serverList, 1)
+
+	entry := serverList[0].(map[string]interface{})
+	assert.Equal(t, "10.171.125.61", entry["address"])
+
+	// OpenConfig config container must contain address and MUST NOT contain auth-port or type
+	ocConfig, ok := entry["config"].(map[string]interface{})
+	assert.True(t, ok, "expected config map in server entry")
+	assert.Equal(t, "10.171.125.61", ocConfig["address"])
+	assert.NotContains(t, ocConfig, "f5-openconfig-aaa-ldap:auth-port")
+	assert.NotContains(t, ocConfig, "auth-port")
+	assert.NotContains(t, ocConfig, "type")
+
+	// LDAP augmented container must hold auth-port and type under its config
+	ldapContainer, ok := entry["f5-openconfig-aaa-ldap:ldap"].(map[string]interface{})
+	assert.True(t, ok, "expected f5-openconfig-aaa-ldap:ldap container")
+	ldapConfig, ok := ldapContainer["config"].(map[string]interface{})
+	assert.True(t, ok, "expected config inside f5-openconfig-aaa-ldap:ldap")
+	assert.Equal(t, float64(1389), ldapConfig["auth-port"])
+	assert.Equal(t, "ldap", ldapConfig["type"])
+}
+
+// TestUnitLdapServerCreateAdoptsExistingServer tests that when Create receives
+// "object already exists" from POST, it falls back to PATCH and adopts the server.
+func TestUnitLdapServerCreateAdoptsExistingServer(t *testing.T) {
+	testAccPreUnitCheck(t)
+	defer teardown()
+
+	patchCalled := false
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/server-groups/server-group=existing-group/servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = fmt.Fprint(w, `{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"data-exists","error-message":"object already exists"}]}}`)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/server-groups/server-group=existing-group/servers/server=10.171.125.61", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		switch r.Method {
+		case http.MethodPatch:
+			patchCalled = true
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{
+				"openconfig-system:server": [{
+					"address": "10.171.125.61",
+					"f5-openconfig-aaa-ldap:ldap": {
+						"address": "10.171.125.61",
+						"f5-openconfig-aaa-ldap:auth-port": 1389,
+						"f5-openconfig-aaa-ldap:type": "ldap"
+					}
+				}]
+			}`)
+		case http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	resource.Test(t, resource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+resource "f5os_ldap_server" "test" {
+	server_group = "existing-group"
+	address      = "10.171.125.61"
+	auth_port    = 1389
+	type         = "ldap"
+}
+`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ldap_server.test", "server_group", "existing-group"),
+					resource.TestCheckResourceAttr("f5os_ldap_server.test", "address", "10.171.125.61"),
+					resource.TestCheckResourceAttr("f5os_ldap_server.test", "auth_port", "1389"),
+					resource.TestCheckResourceAttr("f5os_ldap_server.test", "type", "ldap"),
+					func(s *terraform.State) error {
+						if !patchCalled {
+							return fmt.Errorf("expected PATCH to be called during adoption of existing server")
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestUnitLdapServerDeleteEmptyAddressProtection tests that Delete handles
+// an empty address gracefully without dispatching an invalid DELETE server= request.
+func TestUnitLdapServerDeleteEmptyAddressProtection(t *testing.T) {
+	testAccPreUnitCheck(t)
+	defer teardown()
+
+	deleteCalled := false
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/server-groups/server-group=del-group/servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/server-groups/server-group=del-group/servers/server=10.171.125.61", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		switch r.Method {
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{
+				"openconfig-system:server": [{
+					"address": "10.171.125.61",
+					"f5-openconfig-aaa-ldap:ldap": {
+						"address": "10.171.125.61",
+						"f5-openconfig-aaa-ldap:auth-port": 389,
+						"f5-openconfig-aaa-ldap:type": "ldap"
+					}
+				}]
+			}`)
+		case http.MethodDelete:
+			deleteCalled = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	// Direct check on Delete with empty address in model:
+	// Verify it extracts address from state.ID
+	client, err := newTestClientFromEnv()
+	assert.NoError(t, err)
+
+	res := &LdapServerResource{client: client}
+	ctx := context.Background()
+
+	var resSchema fwresource.SchemaResponse
+	res.Schema(ctx, fwresource.SchemaRequest{}, &resSchema)
+
+	ldapServerState := func(model LdapServerResourceModel) tfsdk.State {
+		state := tfsdk.State{
+			Schema: resSchema.Schema,
+			Raw:    tftypes.NewValue(resSchema.Schema.Type().TerraformType(ctx), nil),
+		}
+		if diagnostics := state.Set(ctx, &model); diagnostics.HasError() {
+			t.Fatalf("failed to create Terraform state: %v", diagnostics)
+		}
+		return state
+	}
+
+	// Case 1: address is empty, ID has "del-group:10.171.125.61" -> successfully deletes
+	req1 := fwresource.DeleteRequest{
+		State: ldapServerState(LdapServerResourceModel{
+			ID:          types.StringValue("del-group:10.171.125.61"),
+			ServerGroup: types.StringValue("del-group"),
+			Address:     types.StringValue(""),
+		}),
+	}
+	resp1 := &fwresource.DeleteResponse{}
+	res.Delete(ctx, req1, resp1)
+	assert.False(t, resp1.Diagnostics.HasError())
+	assert.True(t, deleteCalled, "expected Delete to recover address from ID and call DELETE")
+
+	// Case 2: address is empty, ID is empty -> safely returns without error
+	deleteCalled = false
+	req2 := fwresource.DeleteRequest{
+		State: ldapServerState(LdapServerResourceModel{
+			ID:          types.StringValue(""),
+			ServerGroup: types.StringValue("del-group"),
+			Address:     types.StringValue(""),
+		}),
+	}
+	resp2 := &fwresource.DeleteResponse{}
+	res.Delete(ctx, req2, resp2)
+	assert.False(t, resp2.Diagnostics.HasError())
+	assert.False(t, deleteCalled, "expected Delete to safely skip without calling DELETE")
 }

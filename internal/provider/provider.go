@@ -89,7 +89,7 @@ var (
 // after the initial NewSession returns.
 func sessionCacheKey(host string, port int, user, password string, disableSSL bool, headers map[string]string) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "host=%s\x00port=%d\x00user=%s\x00pw=%s\x00tlsSkip=%t\x00", host, port, user, password, disableSSL)
+	_, _ = fmt.Fprintf(h, "host=%s\x00port=%d\x00user=%s\x00pw=%s\x00tlsSkip=%t\x00", host, port, user, password, disableSSL)
 	// Sort header keys so map iteration order doesn't perturb the key.
 	keys := make([]string, 0, len(headers))
 	for k := range headers {
@@ -97,7 +97,7 @@ func sessionCacheKey(host string, port int, user, password string, disableSSL bo
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		fmt.Fprintf(h, "hdr:%s=%s\x00", k, headers[k])
+		_, _ = fmt.Fprintf(h, "hdr:%s=%s\x00", k, headers[k])
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -381,6 +381,7 @@ func (p *F5osProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewQkviewResource,
 		NewSnmpResource,
 		NewAuthResource,
+		NewLdapCommonResource,
 	}
 }
 

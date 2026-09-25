@@ -42,6 +42,13 @@ type PortGroupDDMConfig struct {
 }
 
 type portGroupResponse struct {
+	// Real F5OS device returns a single item under "f5-portgroup:portgroup"
+	PortGroup []struct {
+		PortGroupName string          `json:"portgroup_name"`
+		Config        PortGroupConfig `json:"config"`
+	} `json:"f5-portgroup:portgroup"`
+
+	// Collection or mock returns under "f5-portgroup:portgroups"
 	PortGroups struct {
 		PortGroup []struct {
 			PortGroupName string          `json:"portgroup_name"`
@@ -65,10 +72,13 @@ func (p *F5os) GetPortGroup(name string) (*PortGroupConfig, error) {
 	if err := json.Unmarshal(resp, &parsed); err != nil {
 		return nil, fmt.Errorf("invalid JSON for port group %q: %w", name, err)
 	}
-	if len(parsed.PortGroups.PortGroup) == 0 {
-		return nil, fmt.Errorf("port group %q was not returned by the device", name)
+	if len(parsed.PortGroup) > 0 {
+		return &parsed.PortGroup[0].Config, nil
 	}
-	return &parsed.PortGroups.PortGroup[0].Config, nil
+	if len(parsed.PortGroups.PortGroup) > 0 {
+		return &parsed.PortGroups.PortGroup[0].Config, nil
+	}
+	return nil, fmt.Errorf("port group %q was not returned by the device", name)
 }
 
 // SetPortGroupConfig updates a hardware-defined rSeries port group's config.
@@ -1413,13 +1423,24 @@ func (c *F5os) SetLoginPolicy(config *LoginPolicyConfig) error {
 // collapse the "clear to empty" case into "leave unset". SetLdapConfig builds
 // the payload explicitly to preserve the distinction.
 type LdapConfig struct {
-	UserObjectClass  []string `json:"user-object-class"`
-	GroupObjectClass []string `json:"group-object-class"`
+	BaseDN           interface{} `json:"base,omitempty"`
+	BindDN           interface{} `json:"binddn,omitempty"`
+	BindPW           interface{} `json:"bindpw,omitempty"`
+	BindTimelimit    interface{} `json:"bind_timelimit,omitempty"`
+	IdleTimelimit    interface{} `json:"idle_timelimit,omitempty"`
+	Timelimit        interface{} `json:"timelimit,omitempty"`
+	LDAPVersion      interface{} `json:"ldap_version,omitempty"`
+	ChaseReferrals   interface{} `json:"chase-referrals,omitempty"`
+	SSL              interface{} `json:"ssl,omitempty"`
+	ActiveDirectory  interface{} `json:"active_directory,omitempty"`
+	UserObjectClass  []string    `json:"user-object-class,omitempty"`
+	GroupObjectClass []string    `json:"group-object-class,omitempty"`
+	UnixAttributes   interface{} `json:"unix_attributes,omitempty"`
+	IgnoreCase       interface{} `json:"ignore-case,omitempty"`
 }
 
-// ldapResponse is the API response wrapper for the LDAP container.
 type ldapResponse struct {
-	Ldap LdapConfig `json:"f5-openconfig-aaa-ldap:ldap"`
+	Ldap *LdapConfig `json:"f5-openconfig-aaa-ldap:ldap"`
 }
 
 // GetLdapConfig reads the current LDAP container config from the device.
@@ -1435,66 +1456,29 @@ func (c *F5os) GetLdapConfig() (*LdapConfig, error) {
 		return nil, fmt.Errorf("invalid JSON for ldap config: %w", err)
 	}
 
-	return &parsed.Ldap, nil
+	if parsed.Ldap == nil {
+		return &LdapConfig{}, nil
+	}
+
+	return parsed.Ldap, nil
 }
 
-// SetLdapConfig updates the LDAP object-class leaf-lists on the device.
-//
-// Each managed leaf-list is written with PUT to its own resource path, which
-// gives replace semantics: the leaf-list on the device is set to exactly the
-// supplied values. This is deliberately NOT a PATCH of the ldap container —
-// RESTCONF PATCH applies YANG "merge" semantics to leaf-lists, which appends
-// the supplied entries to whatever is already on the device rather than
-// replacing them. Under PATCH, setting user-object-class to ["posixAccount"]
-// when the device already held ["posixAccount","inetOrgPerson"] leaves both
-// entries in place, so the value read back does not match what was written and
-// Terraform reports "Provider produced inconsistent result after apply".
-//
-// Leaf-list handling preserves the nil/empty distinction:
-//   - nil slice: unmanaged — the leaf-list is left untouched.
-//   - non-nil non-empty slice: PUT to replace the leaf-list with these values.
-//   - non-nil empty slice: DELETE the leaf-list to clear it (an empty PUT body
-//     is a no-op on the device, so DELETE is used to remove all entries).
-//
-// Available on F5OS 2.0.0+.
+// SetLdapConfig updates the LDAP configuration on the device.
 func (c *F5os) SetLdapConfig(config *LdapConfig) error {
-	if err := c.setLdapLeafList("user-object-class", config.UserObjectClass); err != nil {
-		return err
-	}
-	if err := c.setLdapLeafList("group-object-class", config.GroupObjectClass); err != nil {
-		return err
-	}
-	return nil
-}
-
-// setLdapLeafList writes a single LDAP object-class leaf-list using replace
-// semantics. A nil values slice leaves the leaf-list unmanaged; a non-nil empty
-// slice clears it via DELETE; a non-nil non-empty slice replaces it via PUT.
-func (c *F5os) setLdapLeafList(leaf string, values []string) error {
-	// nil: unmanaged — do not touch the leaf-list.
-	if values == nil {
-		return nil
+	payload := struct {
+		Ldap *LdapConfig `json:"f5-openconfig-aaa-ldap:ldap"`
+	}{
+		Ldap: config,
 	}
 
-	path := fmt.Sprintf("%s/%s", uriAAALdap, leaf)
-
-	// Non-nil empty slice: clear the leaf-list. A PUT of [] is a no-op on the
-	// device, so DELETE is used to remove all entries.
-	if len(values) == 0 {
-		if err := c.DeleteRequest(path); err != nil {
-			return fmt.Errorf("DELETE ldap %s failed: %w", leaf, err)
-		}
-		return nil
-	}
-
-	// Non-empty: PUT to replace the leaf-list with exactly these values.
-	payload := map[string]interface{}{fmt.Sprintf("f5-openconfig-aaa-ldap:%s", leaf): values}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal ldap %s payload: %w", leaf, err)
+		return fmt.Errorf("failed to marshal ldap config: %w", err)
 	}
-	if _, err := c.PutRequest(path, body); err != nil {
-		return fmt.Errorf("PUT ldap %s failed: %w", leaf, err)
+
+	_, err = c.PatchRequest(uriAAALdap, body)
+	if err != nil {
+		return fmt.Errorf("PATCH ldap config failed: %w", err)
 	}
 	return nil
 }
@@ -1516,92 +1500,59 @@ type ldapServerResponse struct {
 	} `json:"openconfig-system:server"`
 }
 
-// ldapServerPayload is the API request payload for creating or updating LDAP servers.
+// ldapServerPayload is the API request payload for updating LDAP servers.
 type ldapServerPayload struct {
-	Server []struct {
-		Address string           `json:"address"`
-		Config  LdapServerConfig `json:"f5-openconfig-aaa-ldap:ldap"`
-	} `json:"openconfig-system:server"`
+	Config LdapServerConfig `json:"f5-openconfig-aaa-ldap:ldap"`
 }
 
 // CreateLdapServer creates a new LDAP server within a server group.
-// The serverGroup is the name of an existing LDAP-type server group.
-// Available on F5OS 1.x and 2.0.0+.
-func (c *F5os) CreateLdapServer(serverGroup string, address string, port *int64, serverType string) error {
+func (c *F5os) CreateLdapServer(serverGroup, address string, port *int64, serverType string) error {
 	uri := fmt.Sprintf(uriAAAServerGroupServers, url.PathEscape(serverGroup))
 
-	config := LdapServerConfig{
-		Address:  address,
-		AuthPort: port,
-		Type:     serverType,
+	ldapConfig := map[string]interface{}{}
+	if port != nil {
+		ldapConfig["auth-port"] = *port
+	}
+	if serverType != "" {
+		ldapConfig["type"] = serverType
 	}
 
-	payload := ldapServerPayload{
-		Server: []struct {
-			Address string           `json:"address"`
-			Config  LdapServerConfig `json:"f5-openconfig-aaa-ldap:ldap"`
-		}{
+	payload := map[string]interface{}{
+		"openconfig-system:server": []map[string]interface{}{
 			{
-				Address: address,
-				Config:  config,
+				"address": address,
+				"config": map[string]interface{}{
+					"address": address,
+				},
+				"f5-openconfig-aaa-ldap:ldap": map[string]interface{}{
+					"config": ldapConfig,
+				},
 			},
 		},
 	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal LDAP server payload: %w", err)
+		return fmt.Errorf("failed to marshal LDAP server: %w", err)
 	}
 
 	_, err = c.PostRequest(uri, body)
 	if err != nil {
-		return fmt.Errorf("failed to create LDAP server %s in group %s: %w", address, serverGroup, err)
+		return fmt.Errorf("POST LDAP server failed: %w", err)
 	}
-
 	return nil
 }
 
-// GetLdapServer retrieves an individual LDAP server from a server group.
-func (c *F5os) GetLdapServer(serverGroup string, address string) (*LdapServerConfig, error) {
+// UpdateLdapServer updates an existing LDAP server.
+func (c *F5os) UpdateLdapServer(serverGroup, address string, port *int64, serverType string) error {
 	uri := fmt.Sprintf(uriAAAServerGroupServer, url.PathEscape(serverGroup), url.PathEscape(address))
 
-	resp, err := c.GetRequest(uri)
-	if err != nil {
-		return nil, fmt.Errorf("GET LDAP server failed: %w", err)
-	}
-
-	var envelope ldapServerResponse
-	if err := json.Unmarshal(resp, &envelope); err != nil {
-		return nil, fmt.Errorf("invalid JSON for LDAP server: %w", err)
-	}
-
-	if len(envelope.Server) == 0 {
-		return nil, fmt.Errorf("LDAP server %s not found in response", address)
-	}
-
-	return &envelope.Server[0].Config, nil
-}
-
-// UpdateLdapServer updates an existing LDAP server in a server group using PATCH.
-// Only non-nil fields are updated.
-func (c *F5os) UpdateLdapServer(serverGroup string, address string, port *int64, serverType string) error {
-	uri := fmt.Sprintf(uriAAAServerGroupServer, url.PathEscape(serverGroup), url.PathEscape(address))
-
-	// Build config with only the fields we want to update
-	config := LdapServerConfig{
-		Address: address,
-	}
-
-	if port != nil {
-		config.AuthPort = port
-	}
-
-	if serverType != "" {
-		config.Type = serverType
-	}
-
-	payload := map[string]interface{}{
-		"f5-openconfig-aaa-ldap:ldap": config,
+	// Address is not included in the PATCH body.
+	payload := ldapServerPayload{
+		Config: LdapServerConfig{
+			AuthPort: port,
+			Type:     serverType,
+		},
 	}
 
 	body, err := json.Marshal(payload)
@@ -1611,9 +1562,8 @@ func (c *F5os) UpdateLdapServer(serverGroup string, address string, port *int64,
 
 	_, err = c.PatchRequest(uri, body)
 	if err != nil {
-		return fmt.Errorf("PATCH LDAP server %s failed: %w", address, err)
+		return fmt.Errorf("failed to update LDAP server %s in group %s: %w", address, serverGroup, err)
 	}
-
 	return nil
 }
 
@@ -1627,4 +1577,21 @@ func (c *F5os) DeleteLdapServer(serverGroup string, address string) error {
 	}
 
 	return nil
+}
+
+// GetLdapServer retrieves an individual LDAP server from a server group.
+func (c *F5os) GetLdapServer(serverGroup string, address string) (*LdapServerConfig, error) {
+	uri := fmt.Sprintf(uriAAAServerGroupServer, url.PathEscape(serverGroup), url.PathEscape(address))
+	resp, err := c.GetRequest(uri)
+	if err != nil {
+		return nil, fmt.Errorf("GET LDAP server failed: %w", err)
+	}
+	var envelope ldapServerResponse
+	if err := json.Unmarshal(resp, &envelope); err != nil {
+		return nil, fmt.Errorf("invalid JSON for LDAP server: %w", err)
+	}
+	if len(envelope.Server) == 0 {
+		return nil, fmt.Errorf("LDAP server %s not found in response", address)
+	}
+	return &envelope.Server[0].Config, nil
 }
