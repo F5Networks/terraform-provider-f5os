@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -120,6 +121,7 @@ func (r *LdapServerResource) Configure(_ context.Context, req resource.Configure
 // Create creates the resource and sets the initial Terraform state.
 func (r *LdapServerResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan LdapServerResourceModel
+	var err error
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -140,8 +142,23 @@ func (r *LdapServerResource) Create(ctx context.Context, req resource.CreateRequ
 	// Get server type (ldap or ldaps)
 	serverType := plan.Type.ValueString()
 
-	// Create the LDAP server
-	err := r.client.CreateLdapServer(serverGroup, address, port, serverType)
+	// Log the plan values we received so test output shows exactly what
+	// we're about to act on (concise, single-line). This helps diagnose
+	// cases where the server-group or address are not what the test expects.
+	tflog.Info(ctx, fmt.Sprintf("LDAP Create plan: server_group=%s address=%s auth_port=%v type=%s", serverGroup, address, port, serverType))
+
+	// Require the server-group to already exist. The provider must not mutate
+	// unmanaged device resources during a standard Create operation.
+	if respBytes, gerr := r.client.GetRequest(fmt.Sprintf(f5os.UriAAAServerGroup, url.PathEscape(serverGroup))); gerr != nil || len(respBytes) == 0 {
+		resp.Diagnostics.AddError(
+			"LDAP server group missing",
+			fmt.Sprintf("Server group %q is not present on the device. Create or manage this server-group before creating servers. Underlying GET error: %v", serverGroup, gerr),
+		)
+		return
+	}
+
+	// Create the LDAP server using internal provider helper
+	err = r.client.CreateLdapServer(serverGroup, address, port, serverType)
 	if err != nil {
 		if strings.Contains(err.Error(), "object already exists") {
 			// Server already exists on the device, update it to match plan
@@ -184,9 +201,14 @@ func (r *LdapServerResource) Read(ctx context.Context, req resource.ReadRequest,
 	serverGroup := state.ServerGroup.ValueString()
 	address := state.Address.ValueString()
 
-	// Get the LDAP server config
+	// Get the LDAP server config using internal helper
 	serverConfig, err := r.client.GetLdapServer(serverGroup, address)
 	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
+			tflog.Warn(ctx, fmt.Sprintf("LDAP server %s not found in group %s; removing from state", address, serverGroup))
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error reading LDAP server",
 			fmt.Sprintf("Could not read LDAP server %s in group %s: %s", address, serverGroup, err.Error()),

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"testing"
 
@@ -406,18 +407,213 @@ func TestUnitLdapServerUpdatePreservesAddress(t *testing.T) {
 	assert.Equal(t, "192.0.2.99", config.Address, "address must not change during update")
 }
 
+func testAccLdapServerGroupName() string {
+	if g := os.Getenv("F5OS_LDAP_SERVER_GROUP"); g != "" {
+		return g
+	}
+	return "tf_acc_test_ldap_group"
+}
+
 func testAccLdapServerResourceConfig(name string, port int) string {
 	return fmt.Sprintf(`
 resource "f5os_ldap_server" "%s" {
-	server_group = "ldap_servers"
-	address      = "192.168.1.%d"
+    server_group = "%s"
+    address      = "192.0.2.10"
+    auth_port    = %d
+    type         = "ldap"
+}
+`, name, testAccLdapServerGroupName(), port)
+}
+
+func testAccLdapServerResourceConfigUpdated(name string, port int) string {
+	return fmt.Sprintf(`
+resource "f5os_ldap_server" "%s" {
+	server_group = "%s"
+	address      = "192.0.2.10"
 	auth_port    = %d
+	type         = "ldaps"
+}
+`, name, testAccLdapServerGroupName(), port)
+}
+
+// ensureTestServerGroup ensures the named LDAP server-group exists using
+// the provider API. If the group did not exist and was created by this helper,
+// the returned cleanup function will delete it. If the group already existed
+// before calling this helper the cleanup is a no-op.
+func ensureTestServerGroup(t *testing.T, groupName string) func() {
+	t.Helper()
+
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Logf("ensureTestServerGroup: could not create client: %v", err)
+		return func() {}
+	}
+
+	created, err := EnsureLdapServerGroupCreated(client, groupName)
+	if err != nil {
+		t.Fatalf("ensureTestServerGroup: failed to ensure server-group %q via API: %v", groupName, err)
+	}
+	if created {
+		t.Logf("ensureTestServerGroup: server-group %q created by test; will be destroyed in cleanup", groupName)
+		return func() {
+			if err := DeleteServerGroup(client, groupName); err != nil {
+				t.Logf("ensureTestServerGroup cleanup: failed to delete server-group %q: %v", groupName, err)
+			}
+		}
+	}
+	return func() {}
+}
+
+func TestAccLdapServerLifecycle(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
+	}
+
+	groupName := testAccLdapServerGroupName()
+	// Prefer API-based setup/cleanup for server-group so tests can run without SSH/CLI
+	cleanup := ensureTestServerGroup(t, groupName)
+	t.Cleanup(cleanup)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create
+			{
+				Config: testAccLdapServerResourceConfig("acc_test", 1389),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ldap_server.acc_test", "server_group", groupName),
+					resource.TestCheckResourceAttr("f5os_ldap_server.acc_test", "address", "192.0.2.10"),
+					resource.TestCheckResourceAttr("f5os_ldap_server.acc_test", "auth_port", "1389"),
+					resource.TestCheckResourceAttr("f5os_ldap_server.acc_test", "type", "ldap"),
+					func(s *terraform.State) error {
+						client, err := newTestClientFromEnv()
+						if err != nil {
+							return err
+						}
+						srv, err := client.GetLdapServer(groupName, "192.0.2.10")
+						if err != nil {
+							return err
+						}
+						if srv.AuthPort == nil || *srv.AuthPort != 1389 {
+							return fmt.Errorf("expected port 1389 on device, got %v", srv.AuthPort)
+						}
+						return nil
+					},
+				),
+			},
+			// Step 2: Import
+			{
+				ResourceName:      "f5os_ldap_server.acc_test",
+				ImportState:       true,
+				ImportStateId:     fmt.Sprintf("%s:192.0.2.10", groupName),
+				ImportStateVerify: true,
+			},
+			// Step 3: Update type
+			{
+				Config: testAccLdapServerResourceConfigUpdated("acc_test", 1389),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ldap_server.acc_test", "type", "ldaps"),
+				),
+			},
+			// Step 4: Add another server
+			{
+				Config: testAccLdapServerResourceConfigTwoServers(groupName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ldap_server.s1", "address", "192.0.2.10"),
+					resource.TestCheckResourceAttr("f5os_ldap_server.s2", "address", "192.0.2.11"),
+				),
+			},
+			// Step 5: Update servers
+			{
+				Config: testAccLdapServerResourceConfigTwoServersUpdated(groupName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_ldap_server.s1", "auth_port", "1636"),
+					resource.TestCheckResourceAttr("f5os_ldap_server.s2", "type", "ldaps"),
+				),
+			},
+			// Step 6: Destroy is automatic
+		},
+	})
+}
+
+// func testAccLdapServerResourceConfigTwoServers(groupName string) string {
+// 	return fmt.Sprintf(`
+// resource "f5os_ldap_server" "s1" {
+// 	server_group = "%s"
+// 	address      = "192.0.2.10"
+// 	auth_port    = 1389
+// 	type         = "ldap"
+// }
+// resource "f5os_ldap_server" "s2" {
+// 	server_group = "%s"
+// 	address      = "192.0.2.11"
+// 	auth_port    = 1389
+// 	type         = "ldap"
+// }
+// `, groupName, groupName)
+// }
+
+// func testAccLdapServerResourceConfigTwoServersUpdated(groupName string) string {
+// 	return fmt.Sprintf(`
+// resource "f5os_ldap_server" "s1" {
+// 	server_group = "%s"
+// 	address      = "192.0.2.10"
+// 	auth_port    = 1636
+// 	type         = "ldap"
+// }
+// resource "f5os_ldap_server" "s2" {
+// 	server_group = "%s"
+// 	address      = "192.0.2.11"
+// 	auth_port    = 1389
+// 	type         = "ldaps"
+// }
+// `, groupName, groupName)
+// }
+
+func testAccLdapServerResourceConfigTwoServers(groupName string) string {
+	return fmt.Sprintf(`
+resource "f5os_ldap_server" "s1" {
+	server_group = "%s"
+	address      = "192.0.2.10"
+	auth_port    = 1389
 	type         = "ldap"
 }
-`, name, port, port)
+resource "f5os_ldap_server" "s2" {
+	server_group = "%s"
+	address      = "192.0.2.11"
+	auth_port    = 1389
+	type         = "ldap"
+}
+`, groupName, groupName)
+}
+
+func testAccLdapServerResourceConfigTwoServersUpdated(groupName string) string {
+	return fmt.Sprintf(`
+resource "f5os_ldap_server" "s1" {
+	server_group = "%s"
+	address      = "192.0.2.10"
+	auth_port    = 1636
+	type         = "ldap"
+}
+resource "f5os_ldap_server" "s2" {
+	server_group = "%s"
+	address      = "192.0.2.11"
+	auth_port    = 1389
+	type         = "ldaps"
+}
+`, groupName, groupName)
 }
 
 func TestAccLdapServerResourceImport(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
+	}
+
+	groupName := testAccLdapServerGroupName()
+	cleanup := ensureTestServerGroup(t, groupName)
+	t.Cleanup(cleanup)
+
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
@@ -429,7 +625,7 @@ func TestAccLdapServerResourceImport(t *testing.T) {
 
 				ResourceName:      "f5os_ldap_server.test",
 				ImportState:       true,
-				ImportStateId:     "ldap_servers:192.168.1.389",
+				ImportStateId:     fmt.Sprintf("%s:192.0.2.10", groupName),
 				ImportStateVerify: true,
 			},
 		},
@@ -772,4 +968,79 @@ func TestUnitLdapServerDeleteEmptyAddressProtection(t *testing.T) {
 	res.Delete(ctx, req2, resp2)
 	assert.False(t, resp2.Diagnostics.HasError())
 	assert.False(t, deleteCalled, "expected Delete to safely skip without calling DELETE")
+}
+
+// TestUnitLdapServerReadNotFoundRemovesFromState tests that when an LDAP server
+// is missing on the device during Read, Read calls resp.State.RemoveResource
+// rather than returning an error.
+func TestUnitLdapServerReadNotFoundRemovesFromState(t *testing.T) {
+	testAccPreUnitCheck(t)
+	defer teardown()
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/server-groups/server-group=test-group/servers/server=10.171.125.99", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprint(w, `{"ietf-restconf:errors":{"error":[{"error-type":"application","error-tag":"data-missing","error-message":"data missing"}]}}`)
+	})
+
+	client, err := newTestClientFromEnv()
+	assert.NoError(t, err)
+
+	res := &LdapServerResource{client: client}
+	ctx := context.Background()
+
+	var resSchema fwresource.SchemaResponse
+	res.Schema(ctx, fwresource.SchemaRequest{}, &resSchema)
+
+	initialState := tfsdk.State{
+		Schema: resSchema.Schema,
+		Raw:    tftypes.NewValue(resSchema.Schema.Type().TerraformType(ctx), nil),
+	}
+	model := LdapServerResourceModel{
+		ID:          types.StringValue("test-group:10.171.125.99"),
+		ServerGroup: types.StringValue("test-group"),
+		Address:     types.StringValue("10.171.125.99"),
+	}
+	_ = initialState.Set(ctx, &model)
+
+	readReq := fwresource.ReadRequest{State: initialState}
+	readResp := &fwresource.ReadResponse{State: initialState}
+	res.Read(ctx, readReq, readResp)
+
+	assert.False(t, readResp.Diagnostics.HasError(), "Read should not return error when resource is not found")
+	assert.True(t, readResp.State.Raw.IsNull(), "Read should remove resource from state (null state)")
+}
+
+// TestUnitLdapServerReadStripsTypePrefix verifies Read correctly strips the
+// "f5-openconfig-aaa-ldap:" prefix from Type when the API response includes it.
+func TestUnitLdapServerReadStripsTypePrefix(t *testing.T) {
+	testAccPreUnitCheck(t)
+	defer teardown()
+
+	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/server-groups/server-group=test-group/servers/server=192.0.2.1", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yang-data+json")
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{                                                                                                                                                                                                                
+			"openconfig-system:server": [                                                                                                                                                                                                         
+			{                                                                                                                                                                                                                                   
+				"address": "192.0.2.1",                                                                                                                                                                                                           
+				"f5-openconfig-aaa-ldap:ldap": {                                                                                                                                                                                                  
+				"address": "192.0.2.1",                                                                                                                                                                                                         
+				"f5-openconfig-aaa-ldap:auth-port": 636,                                                                                                                                                                                        
+				"f5-openconfig-aaa-ldap:type": "f5-openconfig-aaa-ldap:ldaps"                                                                                                                                                                   
+			}                                                                                                                                                                                                                                   
+			}                                                                                                                                                                                                                                     
+		]                                                                                                                                                                                                                                       
+		}`)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+
+	client, err := newTestClientFromEnv()
+	assert.NoError(t, err)
+
+	config, err := client.GetLdapServer("test-group", "192.0.2.1")
+	assert.NoError(t, err)
+	assert.Equal(t, "ldaps", config.Type)
 }

@@ -591,7 +591,7 @@ func TestTransportProxy_CustomHeadersInCONNECTTunnel(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer clientConn.Close()
+		defer func() { _ = clientConn.Close() }()
 
 		_, _ = fmt.Fprint(clientConn, "HTTP/1.1 200 Connection Established\r\n\r\n")
 
@@ -599,7 +599,7 @@ func TestTransportProxy_CustomHeadersInCONNECTTunnel(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer targetConn.Close()
+		defer func() { _ = targetConn.Close() }()
 
 		done := make(chan struct{}, 2)
 		go func() { _, _ = io.Copy(targetConn, clientConn); done <- struct{}{} }()
@@ -624,7 +624,7 @@ func TestTransportProxy_CustomHeadersInCONNECTTunnel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET through HTTPS proxy failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	mu.Lock()
 	headers := capturedConnectHeaders

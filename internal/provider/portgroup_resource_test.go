@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
 	"regexp"
 	"testing"
 
@@ -22,7 +24,7 @@ const portGroupPath = "/restconf/data/f5-portgroup:portgroups/portgroup=1%2F1"
 
 func setupPortGroupMock(t *testing.T, mode *string) *int {
 	t.Helper()
-	deleteCalls := 0
+	ddmDeleteCalls := 0
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Auth-Token", "test-token")
 		_, _ = fmt.Fprint(w, loadFixtureString("./fixtures/f5os_auth.json"))
@@ -39,11 +41,6 @@ func setupPortGroupMock(t *testing.T, mode *string) *int {
 		_, _ = fmt.Fprintf(w, `{"f5-portgroup:portgroups":{"portgroup":[{"portgroup_name":"1/1","config":{"name":"1/1","mode":%q,"f5-ddm:ddm":{"f5-ddm:ddm-poll-frequency":30}}}]}}`, *mode)
 	})
 	mux.HandleFunc(portGroupPath+"/config", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete {
-			deleteCalls++
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
 		assert.Equal(t, http.MethodPatch, r.Method)
 		var request struct {
 			Config struct {
@@ -60,7 +57,15 @@ func setupPortGroupMock(t *testing.T, mode *string) *int {
 		*mode = request.Config.Mode
 		w.WriteHeader(http.StatusNoContent)
 	})
-	return &deleteCalls
+	mux.HandleFunc(portGroupPath+"/config/f5-ddm:ddm-poll-frequency", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			ddmDeleteCalls++
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+	return &ddmDeleteCalls
 }
 
 func portGroupSchema(t *testing.T, resource *PortGroupResource) resourceschema.Schema {
@@ -102,7 +107,7 @@ func portGroupPlan(t *testing.T, schema resourceschema.Schema, model PortGroupRe
 func TestUnitPortGroupResourceInProcessLifecycle(t *testing.T) {
 	testAccPreUnitCheck(t)
 	mode := "MODE_4x25G"
-	deleteCalls := setupPortGroupMock(t, &mode)
+	ddmDeleteCalls := setupPortGroupMock(t, &mode)
 	defer teardown()
 
 	client, err := newTestClientFromEnv()
@@ -138,7 +143,7 @@ func TestUnitPortGroupResourceInProcessLifecycle(t *testing.T) {
 		DDMPollFrequency: types.Int64Value(30),
 	})
 	updateResponse := &fwresource.UpdateResponse{State: createResponse.State}
-	resource.Update(ctx, fwresource.UpdateRequest{Plan: updatedPlan}, updateResponse)
+	resource.Update(ctx, fwresource.UpdateRequest{Plan: updatedPlan, State: createResponse.State}, updateResponse)
 	if updateResponse.Diagnostics.HasError() {
 		t.Fatalf("Update returned diagnostics: %v", updateResponse.Diagnostics)
 	}
@@ -157,7 +162,7 @@ func TestUnitPortGroupResourceInProcessLifecycle(t *testing.T) {
 	deleteResponse := &fwresource.DeleteResponse{}
 	resource.Delete(ctx, fwresource.DeleteRequest{State: readResponse.State}, deleteResponse)
 	assert.False(t, deleteResponse.Diagnostics.HasError(), "Delete returned diagnostics: %v", deleteResponse.Diagnostics)
-	assert.Equal(t, 1, *deleteCalls)
+	assert.Equal(t, 1, *ddmDeleteCalls, "Expected DDM delete to be called once")
 
 	importResponse := &fwresource.ImportStateResponse{State: portGroupState(t, schema, PortGroupResourceModel{})}
 	resource.ImportState(ctx, fwresource.ImportStateRequest{ID: "1/1"}, importResponse)
@@ -209,12 +214,13 @@ func TestUnitPortGroupResourceInProcessDiagnostics(t *testing.T) {
 	assert.True(t, readResponse.Diagnostics.HasError())
 
 	updateResponse := &fwresource.UpdateResponse{State: state}
-	resource.Update(ctx, fwresource.UpdateRequest{Plan: plan}, updateResponse)
+	resource.Update(ctx, fwresource.UpdateRequest{Plan: plan, State: state}, updateResponse)
 	assert.True(t, updateResponse.Diagnostics.HasError())
 
 	deleteResponse := &fwresource.DeleteResponse{}
 	resource.Delete(ctx, fwresource.DeleteRequest{State: state}, deleteResponse)
-	assert.True(t, deleteResponse.Diagnostics.HasError())
+	// Delete warns on failure but doesn't error, so resource is removed from state
+	assert.False(t, deleteResponse.Diagnostics.HasError())
 }
 
 func TestUnitPortGroupResourceLifecycle(t *testing.T) {
@@ -325,4 +331,238 @@ func TestUnitPortGroupResourceSingleItemResponseShape(t *testing.T) {
 			},
 		},
 	})
+}
+
+// TestAccPortGroupResourceLifecycle tests the full Create, Read, Update, and
+// Destroy lifecycle of f5os_portgroup on a live rSeries device.
+// This test discovers a port group without optics/state, tests DDM polling
+// frequency changes (no reboot), and finally tests a MODE change (which
+// triggers a device reboot and waits for recovery).
+func TestAccPortGroupResourceLifecycle(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless env 'TF_ACC' set")
+	}
+
+	// Identify port group target, current settings and its availabe modes
+	pgName, currentMode, currentDDM, altMode := findPortGroupAndOptions(t)
+	if pgName == "" {
+		t.Skip("No port group without state found on device")
+	}
+	newDDM := map[bool]string{true: "0", false: "60"}[currentDDM == "60"]
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create and read initial config with discovered current mode
+			{
+				Config: fmt.Sprintf(`resource "f5os_portgroup" "acc_test" {
+  name = "%s"
+  mode = "%s"
+}`, pgName, currentMode),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_portgroup.acc_test", "id", pgName),
+					resource.TestCheckResourceAttr("f5os_portgroup.acc_test", "name", pgName),
+					resource.TestCheckResourceAttrSet("f5os_portgroup.acc_test", "mode"),
+				),
+			},
+			// Step 2: Import
+			{
+				ResourceName:      "f5os_portgroup.acc_test",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+
+			// Step 3: Update
+			{
+				Config: fmt.Sprintf(`resource "f5os_portgroup" "acc_test" {
+  name               = "%s"
+  mode               = "%s"
+  ddm_poll_frequency = "%s"
+}`, pgName, currentMode, newDDM),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_portgroup.acc_test", "id", pgName),
+					resource.TestCheckResourceAttrSet("f5os_portgroup.acc_test", "mode"),
+					resource.TestCheckResourceAttr("f5os_portgroup.acc_test", "ddm_poll_frequency", newDDM),
+				),
+			},
+
+			// Step 3: MODE change (will trigger device reboot)
+			{
+				Config: fmt.Sprintf(`resource "f5os_portgroup" "acc_test" {
+  name = "%s"
+  mode = "%s"
+}`, pgName, altMode),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_portgroup.acc_test", "id", pgName),
+					resource.TestCheckResourceAttr("f5os_portgroup.acc_test", "mode", altMode),
+				),
+			},
+			// Step 3: Restore original mode before destroy
+			{
+				Config: fmt.Sprintf(`resource "f5os_portgroup" "acc_test" {
+  name = "%s"
+  mode = "%s"
+}`, pgName, currentMode),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("f5os_portgroup.acc_test", "id", pgName),
+					resource.TestCheckResourceAttr("f5os_portgroup.acc_test", "mode", currentMode),
+				),
+			},
+			// Step 4: Destroy is automatic
+		},
+	})
+}
+
+// findPortGroupAndOptions discovers the first port group without optics/state
+// (and with no adjacent port groups that have state), its current mode, current DDM
+// poll frequency, and an alternate supported mode by querying the device CLI via SSH.
+func findPortGroupAndOptions(t *testing.T) (pgName, currentMode, currentDDM, altMode string) {
+	t.Helper()
+	client, err := newTestClientFromEnv()
+	if err != nil {
+		t.Fatalf("failed to create client: %s", err)
+	}
+
+	// Get all port groups by querying the collection endpoint
+	resp, err := client.GetRequest("/f5-portgroup:portgroups")
+	if err != nil {
+		t.Fatalf("failed to query port groups: %s", err)
+	}
+
+	// Parse response to find port groups without state
+	var parsed struct {
+		PortGroups struct {
+			PortGroup []struct {
+				Name  string `json:"portgroup_name"`
+				State struct {
+					OpticState string `json:"optic-state"`
+				} `json:"state"`
+				Config struct {
+					Mode string `json:"mode"`
+					DDM  struct {
+						PollFrequency string `json:"f5-ddm:ddm-poll-frequency"`
+					} `json:"f5-ddm:ddm"`
+				} `json:"config"`
+			} `json:"portgroup"`
+		} `json:"f5-portgroup:portgroups"`
+	}
+
+	if err := json.Unmarshal(resp, &parsed); err != nil {
+		t.Fatalf("failed to parse port groups: %s", err)
+	}
+
+	// Find first port group without optic-state AND no adjacent port groups with state
+	// (adjacent port groups must be homogeneous in mode)
+	for i, pg := range parsed.PortGroups.PortGroup {
+		if pg.State.OpticState == "" {
+			// Check if adjacent port groups (i-1, i+1) also have no state
+			pgNum := i
+
+			// Check left neighbor
+			if pgNum > 0 && parsed.PortGroups.PortGroup[pgNum-1].State.OpticState != "" {
+				continue
+			}
+
+			// Check right neighbor
+			if pgNum < len(parsed.PortGroups.PortGroup)-1 && parsed.PortGroups.PortGroup[pgNum+1].State.OpticState != "" {
+				continue
+			}
+
+			pgName = pg.Name
+			currentMode = pg.Config.Mode
+			currentDDM = pg.Config.DDM.PollFrequency
+			if currentDDM == "" {
+				currentDDM = "30"
+			}
+			break
+		}
+	}
+
+	if pgName == "" {
+		return "", "", "", ""
+	}
+
+	// Query CLI to discover supported modes for this port group
+	supportedModes := discoverPortGroupModes(t, pgName)
+	if len(supportedModes) == 0 {
+		t.Fatalf("No supported modes discovered for port group %s", pgName)
+	}
+
+	// Find an alternate mode different from current
+	for _, mode := range supportedModes {
+		if mode != currentMode {
+			altMode = mode
+			break
+		}
+	}
+
+	if altMode == "" {
+		t.Fatalf("No alternate mode found for port group %s (only mode available: %s)", pgName, currentMode)
+	}
+
+	return pgName, currentMode, currentDDM, altMode
+}
+
+// discoverPortGroupModes uses expect to SSH into the device and query supported modes via CLI
+func discoverPortGroupModes(t *testing.T, pgName string) []string {
+	t.Helper()
+	host := os.Getenv("F5OS_HOST")
+	username := os.Getenv("F5OS_USERNAME")
+	password := os.Getenv("F5OS_PASSWORD")
+
+	if host == "" || username == "" || password == "" {
+		t.Logf("F5OS_HOST, F5OS_USERNAME, F5OS_PASSWORD not set, returning default modes")
+		return []string{"MODE_100GB", "MODE_4x25GB", "MODE_40GB", "MODE_4x10GB", "MODE_10GB", "MODE_25GB", "MODE_400GB", "MODE_4x100GB"}
+	}
+
+	// Create expect script to query CLI for supported modes
+	expectScript := fmt.Sprintf(`
+set timeout 10
+spawn sshpass -p "%s" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null %s@%s
+expect "admin@"
+send "config\r"
+expect "(config)#"
+send "portgroups portgroup %s config mode \t\t\r"
+expect "(config)#"
+puts $expect_out(buffer)
+send "exit\r"
+`, password, username, host, pgName)
+
+	// Run expect script
+	cmd := exec.Command("expect", "-c", expectScript)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("Failed to query CLI via expect: %v, returning default modes", err)
+		return []string{"MODE_100GB", "MODE_4x25GB", "MODE_40GB", "MODE_4x10GB", "MODE_10GB", "MODE_25GB", "MODE_400GB", "MODE_4x100GB"}
+	}
+
+	// Parse output for MODE_* strings
+	modes := extractModes(string(output))
+	if len(modes) > 0 {
+		t.Logf("Discovered %d supported modes via CLI for portgroup %s: %v", len(modes), pgName, modes)
+		return modes
+	}
+
+	t.Logf("Could not discover modes from CLI output, returning default modes. Output: %s", string(output))
+	return []string{"MODE_100GB", "MODE_4x25GB", "MODE_40GB", "MODE_4x10GB", "MODE_10GB", "MODE_25GB", "MODE_400GB", "MODE_4x100GB"}
+}
+
+// extractModes parses CLI output to find MODE_* strings
+func extractModes(output string) []string {
+	var modes []string
+	// Look for lines with MODE_* enums (e.g., MODE_10GB, MODE_25GB)
+	modePattern := regexp.MustCompile(`MODE_[A-Za-z0-9x]+`)
+	matches := modePattern.FindAllString(output, -1)
+
+	// Remove duplicates
+	seen := make(map[string]bool)
+	for _, mode := range matches {
+		if !seen[mode] {
+			modes = append(modes, mode)
+			seen[mode] = true
+		}
+	}
+
+	return modes
 }

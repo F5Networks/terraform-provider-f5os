@@ -90,11 +90,24 @@ type loginPolicyModel struct {
 	SSHMaxSessionLimit      types.Int64 `tfsdk:"ssh_max_session_limit"`
 }
 
-// ldapConfigModel represents the LDAP server-config object classes in
-// Terraform state. Introduced in F5OS 2.0.0 (f5-openconfig-aaa-ldap module).
+// ldapConfigModel represents the consolidated LDAP configuration in Terraform state.
+// Fields base_dn through ignore_case are available on all F5OS versions.
+// Fields user_object_class and group_object_class are available on F5OS 2.0.0+.
 type ldapConfigModel struct {
-	UserObjectClass  types.List `tfsdk:"user_object_class"`
-	GroupObjectClass types.List `tfsdk:"group_object_class"`
+	BaseDN           types.String `tfsdk:"base_dn"`
+	BindDN           types.String `tfsdk:"bind_dn"`
+	BindPW           types.String `tfsdk:"bind_pw"`
+	BindTimeout      types.Int64  `tfsdk:"bind_timeout"`
+	ReadTimeout      types.Int64  `tfsdk:"read_timeout"`
+	IdleTimeout      types.Int64  `tfsdk:"idle_timeout"`
+	LDAPVersion      types.Int64  `tfsdk:"ldap_version"`
+	ChaseReferrals   types.Bool   `tfsdk:"chase_referrals"`
+	SSL              types.Bool   `tfsdk:"ssl"`
+	ActiveDirectory  types.Bool   `tfsdk:"active_directory"`
+	UserObjectClass  types.List   `tfsdk:"user_object_class"`
+	GroupObjectClass types.List   `tfsdk:"group_object_class"`
+	UnixAttributes   types.Bool   `tfsdk:"unix_attributes"`
+	IgnoreCase       types.Bool   `tfsdk:"ignore_case"`
 }
 
 type AuthResourceModel struct {
@@ -240,19 +253,68 @@ func (r *AuthResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 				},
 			},
 			"ldap": schema.SingleNestedAttribute{
-				MarkdownDescription: "LDAP server configuration. Only supported on F5OS >= 2.0.0. " +
+				MarkdownDescription: "Consolidated LDAP server configuration. " +
 					"Only fields you specify are managed; unspecified fields are left at device defaults.",
 				Optional: true,
 				Attributes: map[string]schema.Attribute{
+					"base_dn": schema.StringAttribute{
+						MarkdownDescription: "Base distinguished name for LDAP searches.",
+						Optional:            true,
+					},
+				"bind_dn": schema.StringAttribute{
+					MarkdownDescription: "Bind distinguished name for LDAP connections.",
+					Optional:            true,
+				},
+				"bind_pw": schema.StringAttribute{
+					MarkdownDescription: "Bind password for LDAP connections. This is a write-only field and cannot be read back from the device.",
+					Optional:            true,
+					Sensitive:           true,
+				},
+				"bind_timeout": schema.Int64Attribute{
+						MarkdownDescription: "Bind operation timeout in seconds.",
+						Optional:            true,
+					},
+					"read_timeout": schema.Int64Attribute{
+						MarkdownDescription: "Read operation timeout in seconds.",
+						Optional:            true,
+					},
+					"idle_timeout": schema.Int64Attribute{
+						MarkdownDescription: "Idle connection timeout in seconds.",
+						Optional:            true,
+					},
+					"ldap_version": schema.Int64Attribute{
+						MarkdownDescription: "LDAP protocol version (2 or 3).",
+						Optional:            true,
+					},
+					"chase_referrals": schema.BoolAttribute{
+						MarkdownDescription: "Whether to chase LDAP referrals.",
+						Optional:            true,
+					},
+					"ssl": schema.BoolAttribute{
+						MarkdownDescription: "Enable SSL/TLS for LDAP connections.",
+						Optional:            true,
+					},
+					"active_directory": schema.BoolAttribute{
+						MarkdownDescription: "Optimize for Active Directory compatibility.",
+						Optional:            true,
+					},
 					"user_object_class": schema.ListAttribute{
-						MarkdownDescription: "Object classes used when searching for LDAP user objects (e.g. [\"posixAccount\"]).",
+						MarkdownDescription: "Object classes used when searching for LDAP user objects (e.g. [\"posixAccount\"]). Only supported on F5OS >= 2.0.0.",
 						Optional:            true,
 						ElementType:         types.StringType,
 					},
 					"group_object_class": schema.ListAttribute{
-						MarkdownDescription: "Object classes used when searching for LDAP group objects (e.g. [\"posixGroup\"]).",
+						MarkdownDescription: "Object classes used when searching for LDAP group objects (e.g. [\"posixGroup\"]). Only supported on F5OS >= 2.0.0.",
 						Optional:            true,
 						ElementType:         types.StringType,
+					},
+					"unix_attributes": schema.BoolAttribute{
+						MarkdownDescription: "Support UNIX-style attributes in LDAP.",
+						Optional:            true,
+					},
+					"ignore_case": schema.BoolAttribute{
+						MarkdownDescription: "Ignore case in LDAP searches.",
+						Optional:            true,
 					},
 				},
 			},
@@ -397,13 +459,20 @@ func (r *AuthResource) Create(ctx context.Context, req resource.CreateRequest, r
 		}
 	}
 
-	// Handle LDAP config if provided (F5OS 2.0.0+ only)
+	// Handle LDAP config if provided
 	if !plan.Ldap.IsNull() && !plan.Ldap.IsUnknown() {
 		var ldapModel ldapConfigModel
 		resp.Diagnostics.Append(plan.Ldap.As(ctx, &ldapModel, basetypes.ObjectAsOptions{})...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
+
+		// Validate v2.0.0+ fields
+		resp.Diagnostics.Append(r.validateLdapFields(ctx, &ldapModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
 		resp.Diagnostics.Append(r.writeLdapConfig(ctx, &ldapModel)...)
 		if resp.Diagnostics.HasError() {
 			return
@@ -618,13 +687,20 @@ func (r *AuthResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		}
 	}
 
-	// Update LDAP config if specified (F5OS 2.0.0+ only)
+	// Update LDAP config if specified
 	if !plan.Ldap.IsNull() && !plan.Ldap.IsUnknown() {
 		var ldapModel ldapConfigModel
 		resp.Diagnostics.Append(plan.Ldap.As(ctx, &ldapModel, basetypes.ObjectAsOptions{})...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
+
+		// Validate v2.0.0+ fields
+		resp.Diagnostics.Append(r.validateLdapFields(ctx, &ldapModel)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
 		resp.Diagnostics.Append(r.writeLdapConfig(ctx, &ldapModel)...)
 		if resp.Diagnostics.HasError() {
 			return
@@ -1143,6 +1219,24 @@ func (r *AuthResource) validateV20Fields(ctx context.Context, pp *passwordPolicy
 	return diags
 }
 
+// validateLdapFields checks whether the user configured v2.0.0+ LDAP fields on a
+// device that doesn't support them. Returns diagnostics with errors if so.
+func (r *AuthResource) validateLdapFields(ctx context.Context, lc *ldapConfigModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if platformVersionAtLeast(r.client.PlatformVersion, "v2.0") {
+		return diags
+	}
+	if !lc.UserObjectClass.IsNull() && !lc.UserObjectClass.IsUnknown() {
+		diags.AddError("Unsupported attribute",
+			"user_object_class is not supported on F5OS versions below 2.0.0")
+	}
+	if !lc.GroupObjectClass.IsNull() && !lc.GroupObjectClass.IsUnknown() {
+		diags.AddError("Unsupported attribute",
+			"group_object_class is not supported on F5OS versions below 2.0.0")
+	}
+	return diags
+}
+
 // readPasswordPolicy reads password policy from the device and refreshes
 // the PasswordPolicy field in the model.
 //
@@ -1612,22 +1706,28 @@ func loginPolicyConfigToModel(config *f5os.LoginPolicyConfig) loginPolicyModel {
 // Used when constructing types.ObjectValue.
 func ldapAttrTypes() map[string]attr.Type {
 	return map[string]attr.Type{
+		"base_dn":            types.StringType,
+		"bind_dn":            types.StringType,
+		"bind_pw":            types.StringType,
+		"bind_timeout":       types.Int64Type,
+		"read_timeout":       types.Int64Type,
+		"idle_timeout":       types.Int64Type,
+		"ldap_version":       types.Int64Type,
+		"chase_referrals":    types.BoolType,
+		"ssl":                types.BoolType,
+		"active_directory":   types.BoolType,
 		"user_object_class":  types.ListType{ElemType: types.StringType},
 		"group_object_class": types.ListType{ElemType: types.StringType},
+		"unix_attributes":    types.BoolType,
+		"ignore_case":        types.BoolType,
 	}
 }
 
 // writeLdapConfig converts the Terraform model to an API config struct and
-// sends it to the device via PATCH. The LDAP object-class leaf-lists are only
-// available on F5OS 2.0.0+, so writing to an older device is rejected with a
-// clear error.
+// sends it to the device via PATCH. Validation of v2.0.0+ fields is performed
+// before calling this function.
 func (r *AuthResource) writeLdapConfig(ctx context.Context, lc *ldapConfigModel) diag.Diagnostics {
 	var diags diag.Diagnostics
-	if !platformVersionAtLeast(r.client.PlatformVersion, "v2.0") {
-		diags.AddError("Unsupported attribute",
-			"ldap configuration (user_object_class/group_object_class) is not supported on F5OS versions below 2.0.0")
-		return diags
-	}
 	config, d := ldapModelToConfig(ctx, lc)
 	diags.Append(d...)
 	if diags.HasError() {
@@ -1668,23 +1768,45 @@ func (r *AuthResource) readLdapConfig(ctx context.Context, state *AuthResourceMo
 		return diags
 	}
 
-	// Normal read: only refresh fields already in state.
+	// Normal read: preserve state but refresh list fields from device.
+	// Note: We only refresh leaf-lists (user_object_class, group_object_class)
+	// from the device. Other fields are left as-is from state to avoid
+	// re-populating device defaults that the user didn't explicitly configure.
+	// bind_pw is never refreshed from device (write-only).
 	var current ldapConfigModel
 	diags.Append(state.Ldap.As(ctx, &current, basetypes.ObjectAsOptions{})...)
 	if diags.HasError() {
 		return diags
 	}
 
-	// Refresh managed fields unconditionally from the device so out-of-band
-	// drift is surfaced. Dropping the previous "config.X != nil" guard is
-	// deliberate: if the device evicts the value (nil) while state still holds
-	// a non-null list, we must write the device's value back so Terraform sees
-	// the diff and re-applies. ListValueFrom preserves the nil/empty
-	// distinction from GetLdapConfig: a nil slice becomes a null list
-	// (leaf-list absent on device), a non-nil empty slice becomes an empty list
-	// (leaf-list present but cleared).
+	// Refresh list fields from device to surface out-of-band drift.
+	// The device uses PATCH/merge semantics, so the device list may contain
+	// pre-existing values + our configured values. We preserve our configured
+	// values from state (subset of device list) to avoid polluting state with
+	// unmanaged device defaults, while still detecting if our values were evicted.
 	if !current.UserObjectClass.IsNull() {
-		lv, d := types.ListValueFrom(ctx, types.StringType, config.UserObjectClass)
+		// Get the values we configured from state
+		var configuredUsers []string
+		diags.Append(current.UserObjectClass.ElementsAs(ctx, &configuredUsers, false)...)
+		if diags.HasError() {
+			return diags
+		}
+		// Filter device list to only include values we know we configured
+		// (as a subset). This detects eviction (complete absence) while
+		// avoiding pollution from unmanaged device defaults.
+		var filteredUsers []string
+		configuredSet := make(map[string]bool)
+		for _, u := range configuredUsers {
+			configuredSet[u] = true
+		}
+		for _, deviceVal := range config.UserObjectClass {
+			if configuredSet[deviceVal] {
+				filteredUsers = append(filteredUsers, deviceVal)
+			}
+		}
+		// If any configured values are missing from device, that's drift.
+		// Use the filtered device list to avoid state pollution.
+		lv, d := types.ListValueFrom(ctx, types.StringType, filteredUsers)
 		diags.Append(d...)
 		if diags.HasError() {
 			return diags
@@ -1692,7 +1814,23 @@ func (r *AuthResource) readLdapConfig(ctx context.Context, state *AuthResourceMo
 		current.UserObjectClass = lv
 	}
 	if !current.GroupObjectClass.IsNull() {
-		lv, d := types.ListValueFrom(ctx, types.StringType, config.GroupObjectClass)
+		// Same logic for group classes
+		var configuredGroups []string
+		diags.Append(current.GroupObjectClass.ElementsAs(ctx, &configuredGroups, false)...)
+		if diags.HasError() {
+			return diags
+		}
+		var filteredGroups []string
+		configuredSet := make(map[string]bool)
+		for _, g := range configuredGroups {
+			configuredSet[g] = true
+		}
+		for _, deviceVal := range config.GroupObjectClass {
+			if configuredSet[deviceVal] {
+				filteredGroups = append(filteredGroups, deviceVal)
+			}
+		}
+		lv, d := types.ListValueFrom(ctx, types.StringType, filteredGroups)
 		diags.Append(d...)
 		if diags.HasError() {
 			return diags
@@ -1709,10 +1847,50 @@ func (r *AuthResource) readLdapConfig(ctx context.Context, state *AuthResourceMo
 }
 
 // ldapModelToConfig converts a Terraform ldapConfigModel to an f5osclient
-// LdapConfig struct. Only non-null leaf-lists are set.
+// LdapConfig struct. Only non-null fields are set.
 func ldapModelToConfig(ctx context.Context, lc *ldapConfigModel) (*f5os.LdapConfig, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	config := &f5os.LdapConfig{}
+
+	if !lc.BaseDN.IsNull() && !lc.BaseDN.IsUnknown() {
+		config.BaseDN = lc.BaseDN.ValueString()
+	}
+	if !lc.BindDN.IsNull() && !lc.BindDN.IsUnknown() {
+		config.BindDN = lc.BindDN.ValueString()
+	}
+	if !lc.BindPW.IsNull() && !lc.BindPW.IsUnknown() {
+		config.BindPW = lc.BindPW.ValueString()
+	}
+	if !lc.BindTimeout.IsNull() && !lc.BindTimeout.IsUnknown() {
+		config.BindTimelimit = lc.BindTimeout.ValueInt64()
+	}
+	if !lc.ReadTimeout.IsNull() && !lc.ReadTimeout.IsUnknown() {
+		config.Timelimit = lc.ReadTimeout.ValueInt64()
+	}
+	if !lc.IdleTimeout.IsNull() && !lc.IdleTimeout.IsUnknown() {
+		config.IdleTimelimit = lc.IdleTimeout.ValueInt64()
+	}
+	if !lc.LDAPVersion.IsNull() && !lc.LDAPVersion.IsUnknown() {
+		config.LDAPVersion = lc.LDAPVersion.ValueInt64()
+	}
+	if !lc.ChaseReferrals.IsNull() && !lc.ChaseReferrals.IsUnknown() {
+		config.ChaseReferrals = lc.ChaseReferrals.ValueBool()
+	}
+	if !lc.SSL.IsNull() && !lc.SSL.IsUnknown() {
+		v := lc.SSL.ValueBool()
+		if v {
+			config.SSL = &v
+		}
+	}
+	if !lc.ActiveDirectory.IsNull() && !lc.ActiveDirectory.IsUnknown() {
+		config.ActiveDirectory = lc.ActiveDirectory.ValueBool()
+	}
+	if !lc.UnixAttributes.IsNull() && !lc.UnixAttributes.IsUnknown() {
+		config.UnixAttributes = lc.UnixAttributes.ValueBool()
+	}
+	if !lc.IgnoreCase.IsNull() && !lc.IgnoreCase.IsUnknown() {
+		config.IgnoreCase = lc.IgnoreCase.ValueBool()
+	}
 	if !lc.UserObjectClass.IsNull() && !lc.UserObjectClass.IsUnknown() {
 		var classes []string
 		diags.Append(lc.UserObjectClass.ElementsAs(ctx, &classes, false)...)
@@ -1733,12 +1911,58 @@ func ldapModelToConfig(ctx context.Context, lc *ldapConfigModel) (*f5os.LdapConf
 }
 
 // ldapConfigToModel converts an f5osclient LdapConfig to a Terraform
-// ldapConfigModel for populating state.
+// ldapConfigModel for populating state. All non-populated fields are left null.
 func ldapConfigToModel(ctx context.Context, config *f5os.LdapConfig) (ldapConfigModel, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	model := ldapConfigModel{
+		BaseDN:           types.StringNull(),
+		BindDN:           types.StringNull(),
+		BindPW:           types.StringNull(),
+		BindTimeout:      types.Int64Null(),
+		ReadTimeout:      types.Int64Null(),
+		IdleTimeout:      types.Int64Null(),
+		LDAPVersion:      types.Int64Null(),
+		ChaseReferrals:   types.BoolNull(),
+		SSL:              types.BoolNull(),
+		ActiveDirectory:  types.BoolNull(),
 		UserObjectClass:  types.ListNull(types.StringType),
 		GroupObjectClass: types.ListNull(types.StringType),
+		UnixAttributes:   types.BoolNull(),
+		IgnoreCase:       types.BoolNull(),
+	}
+
+	if v, ok := config.BaseDN.(string); ok && v != "" {
+		model.BaseDN = types.StringValue(v)
+	}
+	if v, ok := config.BindDN.(string); ok && v != "" {
+		model.BindDN = types.StringValue(v)
+	}
+	if v, ok := config.BindTimelimit.(float64); ok && v > 0 {
+		model.BindTimeout = types.Int64Value(int64(v))
+	}
+	if v, ok := config.Timelimit.(float64); ok && v > 0 {
+		model.ReadTimeout = types.Int64Value(int64(v))
+	}
+	if v, ok := config.IdleTimelimit.(float64); ok && v > 0 {
+		model.IdleTimeout = types.Int64Value(int64(v))
+	}
+	if v, ok := config.LDAPVersion.(float64); ok && v > 0 {
+		model.LDAPVersion = types.Int64Value(int64(v))
+	}
+	if v, ok := config.ChaseReferrals.(bool); ok {
+		model.ChaseReferrals = types.BoolValue(v)
+	}
+	if v, ok := config.SSL.(bool); ok {
+		model.SSL = types.BoolValue(v)
+	}
+	if v, ok := config.ActiveDirectory.(bool); ok {
+		model.ActiveDirectory = types.BoolValue(v)
+	}
+	if v, ok := config.UnixAttributes.(bool); ok {
+		model.UnixAttributes = types.BoolValue(v)
+	}
+	if v, ok := config.IgnoreCase.(bool); ok {
+		model.IgnoreCase = types.BoolValue(v)
 	}
 	if config.UserObjectClass != nil {
 		lv, d := types.ListValueFrom(ctx, types.StringType, config.UserObjectClass)

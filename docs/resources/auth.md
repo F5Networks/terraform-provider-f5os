@@ -63,7 +63,7 @@ resource "f5os_auth" "aaa" {
 ### Optional
 
 - `auth_order` (List of String) Ordered list of authentication methods. Allowed values: local, radius, tacacs, ldap.
-- `ldap` (Attributes) LDAP server configuration. Only supported on F5OS >= 2.0.0. Only fields you specify are managed; unspecified fields are left at device defaults. (see [below for nested schema](#nestedatt--ldap))
+- `ldap` (Attributes) Consolidated LDAP server configuration. Only fields you specify are managed; unspecified fields are left at device defaults. (see [below for nested schema](#nestedatt--ldap))
 - `login_policy` (Attributes) AAA login-policy settings. Only supported on F5OS >= 2.0.0. Only fields you specify are managed; unspecified fields are left at device defaults. (see [below for nested schema](#nestedatt--login_policy))
 - `password_policy` (Attributes) Password policy settings. Only fields you specify are managed; unspecified fields are left at device defaults. (see [below for nested schema](#nestedatt--password_policy))
 - `remote_roles` (Attributes Set) Remote role mappings. Configure role GID (and optionally LDAP group association). (see [below for nested schema](#nestedatt--remote_roles))
@@ -77,8 +77,20 @@ resource "f5os_auth" "aaa" {
 
 Optional:
 
-- `group_object_class` (List of String) Object classes used when searching for LDAP group objects (e.g. ["posixGroup"]).
-- `user_object_class` (List of String) Object classes used when searching for LDAP user objects (e.g. ["posixAccount"]).
+- `active_directory` (Boolean) Optimize for Active Directory compatibility.
+- `base_dn` (String) Base distinguished name for LDAP searches.
+- `bind_dn` (String) Bind distinguished name for LDAP connections.
+- `bind_pw` (String, Sensitive) Bind password for LDAP connections.
+- `bind_timeout` (Number) Bind operation timeout in seconds.
+- `chase_referrals` (Boolean) Whether to chase LDAP referrals.
+- `group_object_class` (List of String) Object classes used when searching for LDAP group objects (e.g. ["posixGroup"]). Only supported on F5OS >= 2.0.0.
+- `idle_timeout` (Number) Idle connection timeout in seconds.
+- `ignore_case` (Boolean) Ignore case in LDAP searches.
+- `ldap_version` (Number) LDAP protocol version (2 or 3).
+- `read_timeout` (Number) Read operation timeout in seconds.
+- `ssl` (Boolean) Enable SSL/TLS for LDAP connections.
+- `unix_attributes` (Boolean) Support UNIX-style attributes in LDAP.
+- `user_object_class` (List of String) Object classes used when searching for LDAP user objects (e.g. ["posixAccount"]). Only supported on F5OS >= 2.0.0.
 
 
 <a id="nestedatt--login_policy"></a>

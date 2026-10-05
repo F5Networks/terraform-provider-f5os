@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -67,6 +69,9 @@ func (r *PortGroupResource) Create(ctx context.Context, req resource.CreateReque
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if err := waitForPortGroupReboot(ctx, r.client); err != nil {
+		resp.Diagnostics.AddWarning("Port group configuration may still be applying", err.Error())
+	}
 	data.ID = data.Name
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -96,8 +101,9 @@ func (r *PortGroupResource) setDDMPollFrequency(data *PortGroupResourceModel, po
 }
 
 func (r *PortGroupResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var data PortGroupResourceModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	var plan, state PortGroupResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -105,12 +111,21 @@ func (r *PortGroupResource) Update(ctx context.Context, req resource.UpdateReque
 		resp.Diagnostics.AddError("Client Error", "`f5os_portgroup` resource is supported only on rSeries appliances.")
 		return
 	}
-	r.updateAndRead(ctx, &data, &resp.Diagnostics)
+	// Warn if mode is changing (will trigger device reboot)
+	if plan.Mode.ValueString() != state.Mode.ValueString() {
+		resp.Diagnostics.AddWarning("Mode change will trigger device reboot",
+			fmt.Sprintf("Changing port group %q mode from %s to %s will trigger a device reboot and may affect other running workloads",
+				plan.Name.ValueString(), state.Mode.ValueString(), plan.Mode.ValueString()))
+	}
+	r.updateAndRead(ctx, &plan, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	data.ID = data.Name
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+	if err := waitForPortGroupReboot(ctx, r.client); err != nil {
+		resp.Diagnostics.AddWarning("Port group configuration may still be applying", err.Error())
+	}
+	plan.ID = plan.Name
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 func (r *PortGroupResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -119,8 +134,10 @@ func (r *PortGroupResource) Delete(ctx context.Context, req resource.DeleteReque
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if err := r.client.ResetPortGroup(data.Name.ValueString()); err != nil {
-		resp.Diagnostics.AddError("F5OS Client Error", fmt.Sprintf("Unable to reset port group %q: %s", data.Name.ValueString(), err))
+	// Only clear DDM poll frequency on delete, do not change mode (mode persists in hardware)
+	if err := r.client.ClearPortGroupDDM(data.Name.ValueString()); err != nil {
+		resp.Diagnostics.AddWarning("Port group DDM could not be cleared", 
+			fmt.Sprintf("Resource removed from state but device DDM config persists: %s", err))
 	}
 }
 
@@ -146,4 +163,51 @@ func (r *PortGroupResource) updateAndRead(_ context.Context, data *PortGroupReso
 	}
 	data.Mode = types.StringValue(portGroup.Mode)
 	r.setDDMPollFrequency(data, portGroup)
+}
+
+// waitForPortGroupReboot waits for the device to handle port group configuration
+// changes. Port group mode changes trigger a system reboot; this helper sleeps
+// for an initial grace period, then continuously tries to GET /f5-portgroup:portgroups
+// until it succeeds, with a total timeout of 10 minutes.
+//
+// The wait is skipped when the client host is a loopback address (unit tests
+// with httptest.Server) to avoid adding unnecessary latency.
+func waitForPortGroupReboot(ctx context.Context, client *f5ossdk.F5os) error {
+	// Skip the wait for unit tests targeting localhost/127.0.0.1.
+	if strings.Contains(client.Host, "127.0.0.1") || strings.Contains(client.Host, "localhost") {
+		return nil
+	}
+
+	// Initial grace period to let the device fully reboot if needed. Port group
+	// mode changes can take several minutes to reboot and come back.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(30 * time.Second):
+	}
+
+	// Keep trying to GET /f5-portgroup:portgroups for up to 5 minutes
+	deadline := time.Now().Add(5 * time.Minute)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		
+		// Try to GET the portgroups endpoint - keep retrying until it succeeds
+		resp, err := client.GetRequest("/f5-portgroup:portgroups")
+		if err == nil && len(resp) > 0 {
+			// Successfully got portgroups response, device has fully recovered
+			return nil
+		}
+		
+		// Failed, wait and retry
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+	return fmt.Errorf("RESTCONF API did not become available within 5 minutes after port group operation")
 }
