@@ -19,6 +19,9 @@ configuration](configure-interfaces-from-iseries.html) (Phase 4, this
 repo) for the next step, which assigns these VLANs to interfaces in the
 same working directory and depends on the VLANs created here.
 
+For the full cross-repo phase sequence, see the [overall i-Series to
+r-Series migration flow](iseries-to-rseries-migration-flow.html).
+
 ## Why `for_each` over a variable map instead of one resource block per VLAN
 
 The number and identity of VLANs on a source i-Series device is not known

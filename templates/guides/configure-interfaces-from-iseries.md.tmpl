@@ -19,6 +19,9 @@ membership portion of the `extracted-sys-settings.json` produced by
 expects, including the TMOS -> rSeries interface name mapping described
 below.
 
+For the full cross-repo phase sequence, see the [overall i-Series to
+r-Series migration flow](iseries-to-rseries-migration-flow.html).
+
 This phase lives in the **same** `examples/migration/vlans-from-iseries`
 directory, and therefore the same Terraform state, as [Phase 3, VLAN
 creation](create-vlans-from-iseries.html) -- not a separate directory --
