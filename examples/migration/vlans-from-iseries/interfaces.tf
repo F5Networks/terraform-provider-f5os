@@ -15,7 +15,8 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 # produced by terraform-provider-bigip's `scripts/extract-sys-settings.sh`
 # (Phase 1), converted into the `interfaces` map below via
 # `scripts/interfaces-from-iseries.sh` in this repo. See
-# docs/guides/configure-interfaces-from-iseries.md for the full
+# https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/configure-interfaces-from-iseries
+# for the full
 # workflow, including how TMOS interface names (`1.1`) are mapped to
 # rSeries names (`1.0`).
 #

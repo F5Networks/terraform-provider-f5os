@@ -74,7 +74,7 @@
 #                                      something configured to match a
 #                                      TMOS value; see
 #                                      terraform-provider-bigip's
-#                                      docs/guides/interface-trunk-mapping.md)
+#                                      https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping)
 #
 # Member interface name mapping: identical blade-drop rule as
 # scripts/interfaces-from-iseries.sh ("<blade>.<port>" -> "<port>.0");

@@ -19,6 +19,9 @@ of the `extracted-sys-settings.json` produced by
 [`terraform-provider-bigip`'s `scripts/extract-sys-settings.sh`](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)
 (that provider's Phase 1) into the variables this configuration expects.
 
+For the full cross-repo phase sequence, see the [overall i-Series to
+r-Series migration flow](iseries-to-rseries-migration-flow.html).
+
 ## What is (and isn't) migrated
 
 | Source (i-Series) | Target (F5OS) | Notes |

@@ -16,7 +16,8 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 # terraform-provider-bigip's `scripts/extract-sys-settings.sh`, converted
 # into this configuration's variables via
 # `scripts/system-settings-from-iseries.sh` in this repo. See
-# docs/guides/configure-system-settings-from-iseries.md for the full
+# https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/configure-system-settings-from-iseries
+# for the full
 # workflow, including the role-mapping and password-migration caveats.
 #
 # terraform.tfvars.json.example shows the expected shape for every

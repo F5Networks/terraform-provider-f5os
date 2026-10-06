@@ -19,7 +19,8 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 # cpu_cores/memory/virtual_disk_size -- TMOS's per-i-Series-appliance
 # resourcing does not map onto per-tenant sizing on F5OS the way
 # VLANs/interfaces/trunks do structurally. See
-# docs/guides/deploy-tenants-from-iseries.md for full sizing guidance
+# https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/deploy-tenants-from-iseries
+# for full sizing guidance
 # and the complete workflow.
 #
 # Depends on VLAN creation completing first: vlans below is resolved

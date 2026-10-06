@@ -6,7 +6,8 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 
 # ---------------------------------------------------------------------------
 # There is no i-Series source field for any of these variables -- see
-# docs/guides/apply-license-from-iseries.md's "i-Series license keys are
+# https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/apply-license-from-iseries
+# "i-Series license keys are
 # not valid on r-Series" section. registration_key/addon_keys are new
 # registration keys obtained from F5 specifically for the target
 # r-Series appliance or Velos chassis; the i-Series device's own TMOS
@@ -18,7 +19,7 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 #   addon_keys        = ["NNNWWWW-9PPPPKK"]
 # ---------------------------------------------------------------------------
 variable "registration_key" {
-  description = "The base registration key obtained from F5 for the target r-Series appliance or Velos chassis partition, applied via f5os_license.registration_key. This is a NEW key issued for this F5OS device -- an i-Series/TMOS license key is never valid here (see docs/guides/apply-license-from-iseries.md)."
+  description = "The base registration key obtained from F5 for the target r-Series appliance or Velos chassis partition, applied via f5os_license.registration_key. This is a NEW key issued for this F5OS device -- an i-Series/TMOS license key is never valid here. See https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/apply-license-from-iseries."
   type        = string
   sensitive   = true
 

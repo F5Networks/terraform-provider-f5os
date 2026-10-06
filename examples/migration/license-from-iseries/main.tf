@@ -18,7 +18,8 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 # i-Series device -- the registration key is a brand-new credential
 # issued by F5 for this specific r-Series/Velos target, obtained
 # out-of-band before running `terraform apply` here. See
-# docs/guides/apply-license-from-iseries.md for the full workflow,
+# https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/apply-license-from-iseries
+# for the full workflow,
 # including why i-Series/TMOS license keys cannot be reused and how to
 # verify activation succeeded.
 #

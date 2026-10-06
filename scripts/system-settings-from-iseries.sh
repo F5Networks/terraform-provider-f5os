@@ -29,7 +29,8 @@
 #                                     main.tf.
 #
 # What this script does NOT migrate (see
-# docs/guides/configure-system-settings-from-iseries.md for details):
+# https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/configure-system-settings-from-iseries
+# for details):
 #   - User passwords: bigip_auth_user.password is always null in the
 #     extraction (BIG-IP never returns it on read) -- every user in the
 #     output `users` map gets a REPLACE-ME placeholder password that MUST
@@ -119,13 +120,13 @@ jq -r '
 # already exists on every F5OS target out of band. Its password (also
 # never present in the source extraction -- see the header comment) can
 # still be set via f5os_user_password_change instead; see
-# docs/guides/configure-system-settings-from-iseries.md.
+# https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/configure-system-settings-from-iseries.
 ADMIN_COUNT="$(jq '[ .[] | select(.type == "bigip_auth_user") | select(.values.name == "admin") ] | length' "${IN_FILE}")"
 if [ "${ADMIN_COUNT}" -gt 0 ]; then
   echo "NOTE: source device has an \"admin\" user -- skipped from the output \`users\` map." >&2
   echo "      F5OS already has a built-in \"admin\" account; f5os_user cannot create it (device" >&2
   echo "      rejects the create with an \"already exists\" conflict). Use f5os_user_password_change" >&2
-  echo "      to manage its password instead -- see docs/guides/configure-system-settings-from-iseries.md." >&2
+  echo "      to manage its password instead -- see https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/configure-system-settings-from-iseries." >&2
 fi
 
 jq '

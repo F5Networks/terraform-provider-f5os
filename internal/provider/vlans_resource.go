@@ -59,7 +59,7 @@ func NewVlansResource() resource.Resource {
 // uses for its own multi-item Delete).
 //
 // Trade-off versus `for_each` + f5os_vlan (see
-// docs/guides/create-vlans-from-iseries.md): collapsing many VLANs into
+// https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/create-vlans-from-iseries): collapsing many VLANs into
 // one f5os_vlans resource instance means Terraform's native per-item
 // resource addressing (`terraform state mv`, `-target`, individual
 // `terraform import` of a single VLAN) no longer applies to individual

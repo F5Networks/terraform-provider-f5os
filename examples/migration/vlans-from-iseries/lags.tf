@@ -16,7 +16,9 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 # directory): it consumes the trunk portion of the JSON produced by
 # terraform-provider-bigip's `scripts/extract-sys-settings.sh` (Phase 1),
 # converted into the `lags` map below via `scripts/lags-from-iseries.sh`
-# in this repo. See docs/guides/configure-lags-from-iseries.md for the
+# in this repo. See
+# https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/configure-lags-from-iseries
+# for the
 # full workflow, including how TMOS trunk membership (`interfaces =
 # ["1.1", "1.2"]`, owned by the trunk) inverts to F5OS LAG membership
 # (`members`, still expressed on the LAG resource itself by this
