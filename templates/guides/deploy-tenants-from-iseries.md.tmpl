@@ -14,6 +14,9 @@ created in [Phase 3](create-vlans-from-iseries.html), and configured
 with the management IP/gateway/prefix the tenant needs to be reachable
 once running.
 
+For the full cross-repo phase sequence, see the [overall i-Series to
+r-Series migration flow](iseries-to-rseries-migration-flow.html).
+
 This phase lives in the **same** `examples/migration/vlans-from-iseries`
 directory, and therefore the same Terraform state, as [Phase 3, VLAN
 creation](create-vlans-from-iseries.html), [Phase 4, interface

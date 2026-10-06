@@ -16,6 +16,9 @@ target rSeries appliance's (or Velos chassis partition's) platform
 license via [`f5os_license`](../resources/license.html), using a
 registration key obtained from F5 specifically for that device.
 
+For the full cross-repo phase sequence, see the [overall i-Series to
+r-Series migration flow](iseries-to-rseries-migration-flow.html).
+
 ## i-Series license keys are not valid on r-Series
 
 Every other phase of this migration workflow converts data discovered

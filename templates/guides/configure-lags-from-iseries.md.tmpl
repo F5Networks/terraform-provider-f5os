@@ -17,6 +17,9 @@ portion of the `extracted-sys-settings.json` produced by
 (that provider's Phase 1) into the `lags` map this configuration
 expects.
 
+For the full cross-repo phase sequence, see the [overall i-Series to
+r-Series migration flow](iseries-to-rseries-migration-flow.html).
+
 This phase lives in the **same** `examples/migration/vlans-from-iseries`
 directory, and therefore the same Terraform state, as [Phase 3, VLAN
 creation](create-vlans-from-iseries.html) and [Phase 4, interface
