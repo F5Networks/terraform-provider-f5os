@@ -55,8 +55,9 @@
 #   single-appliance i-Series/VE platforms are always blade `1`. rSeries
 #   (F5OS-A) has no blade concept at all -- it maps to `<port>.0` with
 #   the blade number dropped entirely (not reformatted -- dropped). See
-#   docs/guides/create-vlans-from-iseries.md and
-#   terraform-provider-bigip's docs/guides/interface-trunk-mapping.md
+#   https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/create-vlans-from-iseries
+#   and terraform-provider-bigip's
+#   https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping
 #   for the full naming-convention reference, including the VELOS
 #   (`<blade>/<port>.<subport>`) form this script does NOT produce.
 #
@@ -90,7 +91,9 @@
 # VLANs it would need on the eventual f5os_lag resource) is still
 # surfaced separately under `.trunk_only_names_encountered` (printed to
 # stderr) so it isn't silently lost -- see
-# terraform-provider-bigip's docs/guides/interface-trunk-mapping.md for
+# terraform-provider-bigip's
+# https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping
+# for
 # translating trunk membership to `f5os_lag`.
 #
 # rSeries name collisions: dropping the blade number means two TMOS

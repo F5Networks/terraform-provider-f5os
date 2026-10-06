@@ -52,7 +52,7 @@
 # VLAN name; anything still longer than 58 characters, or that doesn't
 # start with a letter, is left as-is with a warning printed to stderr so
 # it can be fixed manually before applying to F5OS -- see
-# docs/guides/create-vlans-from-iseries.md.
+# https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/create-vlans-from-iseries.
 
 set -euo pipefail
 
