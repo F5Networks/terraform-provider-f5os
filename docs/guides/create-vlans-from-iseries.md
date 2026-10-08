@@ -50,7 +50,9 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 # consumes the VLAN portion of the JSON produced by
 # terraform-provider-bigip's `scripts/extract-sys-settings.sh` (Phase 1),
 # converted into the `vlans` map below via `scripts/vlans-from-iseries.sh`
-# in this repo. See docs/guides/create-vlans-from-iseries.md for the full
+# in this repo. See
+# https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/create-vlans-from-iseries
+# for the full
 # workflow. interfaces.tf in this same directory (Phase 4) configures each
 # F5OS interface's native/trunk VLAN assignment against the VLANs created
 # here, and depends on this file's f5os_vlan resources completing first.
@@ -382,7 +384,9 @@ variable "lags" {
 # see f5os_tenant_image and the "Upload BIG-IP tenant image to r-Series"
 # story; f5os_tenant's own Create logic errors out if the named image's
 # status is "not-present" on the device), cpu_cores/memory (sized per
-# workload -- see docs/guides/deploy-tenants-from-iseries.md for sizing
+# workload -- see
+# https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/deploy-tenants-from-iseries
+# for sizing
 # guidance, since there is no i-Series field this maps from directly),
 # vlans (VLAN ID/tags, not names -- looked up against the VLANs created
 # by f5os_vlan.from_iseries in tenant.tf via local.vlan_name_by_tag, the
@@ -400,7 +404,8 @@ variable "lags" {
 #
 # Populate this by hand -- unlike var.vlans/var.interfaces/var.lags,
 # there is no Phase 1 JSON field to convert (see
-# docs/guides/deploy-tenants-from-iseries.md for why tenant sizing
+# https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/deploy-tenants-from-iseries
+# for why tenant sizing
 # cannot be automatically extracted from the source i-Series device the
 # way VLANs/interfaces/trunks are): cpu_cores/memory/virtual_disk_size
 # need sizing-guidance input, and mgmt_ip/mgmt_gateway/mgmt_prefix need

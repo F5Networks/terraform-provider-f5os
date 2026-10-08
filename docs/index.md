@@ -40,9 +40,9 @@ version it implements, and Terraform:
 | F5OS Provider |     Terraform Plugin Protocol      | Terraform | F5OS Velos/rSeries Version |
 |:-------------:|:----------------------------------:|:---------:|:--------------------------:|
 |`1.0.0-1.10.2` |                `6`                 | `>= 1.x`  |      `>= 1.5.x/1.4.0`      |
-|`>= 1.11.1`    |                `6`                 | `>= 1.x`  |      `>= 1.8.x`            |
+|`>= 1.11.1`    |                `6`                 | `>= 1.x`  |      `>= 1.8.x, 2.0.0`     |
 
-**Please note**: Releases >= 1.11.1 are for F5OS-A 1.8.x on rSeries only. Please continue to use previous releases for other version support.
+**Please note**: Releases >= 1.11.1 are for F5OS-A 1.8.x and 2.0.0 on rSeries only. Please continue to use previous releases for other version support.
 
 Details can be found by querying the [Registry API](https://www.terraform.io/internals/provider-registry-protocol#list-available-versions),
 which returns the details about which versions are currently available for a particular provider.

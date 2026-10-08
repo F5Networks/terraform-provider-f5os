@@ -30,6 +30,8 @@ cover.out
 *.test
 *.iml
 *.tf
+!examples/resources/**/*.tf
+!examples/migration/**/*.tf
 *.pem
 *.pub
 *.back

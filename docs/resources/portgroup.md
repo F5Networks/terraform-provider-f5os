@@ -10,12 +10,6 @@ description: |-
 
 Manage the mode of a hardware-defined port group on an F5OS rSeries appliance.
 
-## Important Notes
-
-- **Mode changes trigger device reboots**: Changing the port group mode will cause the device to reboot and reinitialize the cluster. Plan mode changes carefully and avoid combining with other resource modifications in the same apply.
-- **Destroy behavior**: When destroying this resource, only the DDM poll frequency is cleared. The port group mode persists in hardware and is not reset.
-- **Adjacent port group constraints**: For QSFP ports, adjacent port groups must be homogeneous (have compatible modes). Ensure adjacent QSFP port groups support the desired mode before changing.
-
 ## Example Usage
 
 ```terraform
@@ -25,8 +19,8 @@ resource "f5os_portgroup" "example" {
 }
 
 resource "f5os_portgroup" "with_ddm" {
-  name                = "5"
-  mode                = "MODE_25GB"
+  name               = "5"
+  mode               = "MODE_25GB"
   ddm_poll_frequency = 60
 }
 ```
@@ -41,7 +35,7 @@ resource "f5os_portgroup" "with_ddm" {
 
 ### Optional
 
-- `ddm_poll_frequency` (Number) Digital diagnostic monitoring polling frequency. When omitted, the device default is used.
+- `ddm_poll_frequency` (Number) Digital diagnostic monitoring polling frequency.
 
 ### Read-Only
 

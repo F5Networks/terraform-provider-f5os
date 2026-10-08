@@ -13,6 +13,7 @@ Manages an individual LDAP server within an LDAP-type server group on F5OS. LDAP
 ## Example Usage
 
 ```terraform
+# Basic LDAPS example.
 resource "f5os_ldap_server" "example" {
   server_group = "ldap-servers"
   address      = "192.0.2.10"
@@ -20,15 +21,14 @@ resource "f5os_ldap_server" "example" {
   type         = "ldaps"
 }
 
-# Example with default LDAP port (389)
+# Example with default LDAP port (389).
 resource "f5os_ldap_server" "example_standard" {
   server_group = "ldap-servers"
   address      = "192.0.2.11"
-  # auth_port defaults to 389 for 'ldap' type
-  type = "ldap"
+  type         = "ldap"
 }
 
-# Example with minimal configuration (uses device defaults for port and type)
+# Example with minimal configuration (uses device defaults for port and type).
 resource "f5os_ldap_server" "example_minimal" {
   server_group = "ldap-servers"
   address      = "192.0.2.12"
