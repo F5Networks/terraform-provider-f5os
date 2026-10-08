@@ -34,6 +34,8 @@ const (
 	uriPlatformType       = "/openconfig-platform:components/component=platform/state/description"
 	uriInterface          = "/openconfig-interfaces:interfaces"
 	uriConfigBackup       = "/openconfig-system:system/f5-database:database/f5-database:config-backup"
+	uriConfigRestore      = "/openconfig-system:system/f5-database:database/f5-database:config-restore"
+	uriFileImport         = "/f5-utils-file-transfer:file/import"
 	uriFileExport         = "/f5-utils-file-transfer:file/export"
 	uriFileDelete         = "/f5-utils-file-transfer:file/delete"
 	uriFileList           = "/f5-utils-file-transfer:file/list"
@@ -170,6 +172,22 @@ type FileExport struct {
 	Password   string `json:"password"`
 	Protocol   string `json:"protocol"`
 	Insecure   string `json:"insecure"`
+}
+
+// FileImport is the payload for POSTing to /f5-utils-file-transfer:file/import,
+// which pulls a remote file down onto the device (the mirror image of
+// FileExport). Shape matches F5ReqTenantImage in tenant.go, which targets
+// the same generic file-transfer "import" endpoint for tenant images --
+// see that type's comment for the YANG empty-leaf encoding of Insecure.
+type FileImport struct {
+	Insecure   interface{} `json:"insecure,omitempty"`
+	LocalFile  string      `json:"local-file,omitempty"`
+	RemoteFile string      `json:"remote-file,omitempty"`
+	RemoteHost string      `json:"remote-host,omitempty"`
+	Protocol   string      `json:"protocol,omitempty"`
+	Username   string      `json:"username,omitempty"`
+	Password   string      `json:"password,omitempty"`
+	RemotePort int         `json:"remote-port,omitempty"`
 }
 
 // RequestError contains information about any error we get from a request.
@@ -1344,6 +1362,181 @@ func (p *F5os) ExportConfigBackup(exportCfg FileExport) ([]byte, error) {
 	return p.PostRequest(uriFileExport, payload)
 }
 
+// RestoreConfigBackup restores the F5OS platform configuration database
+// from a backup file identified by backupName. If importCfg is non-nil,
+// the backup file is first pulled down from a remote host onto the
+// device (via the generic f5-utils-file-transfer:file/import RESTCONF
+// action -- the mirror image of ExportConfigBackup/uriFileExport) into
+// configs/<backupName>, using the same operation-id/remote-file-path
+// polling semantics as tenant.go's ImportImage; if importCfg is nil,
+// backupName must already exist under configs/ on the device (e.g. from
+// a prior CreateConfigBackup in the same or an earlier apply, or a file
+// placed there out of band).
+//
+// f5-database:config-restore is a synchronous RESTCONF action, confirmed
+// against both a live F5OS 1.8.3 and a live 2.0.0 device's YANG schema
+// (grouping config-restore has a plain input/output action shape with
+// no operation-id/transfer-status grouping, unlike file import/export)
+// -- so timeout here only bounds the optional remote-import step, not
+// the restore RPC itself.
+func (p *F5os) RestoreConfigBackup(backupName string, timeout int64, importCfg *FileImport) (string, error) {
+	if importCfg != nil {
+		importCfg.LocalFile = fmt.Sprintf("configs/%s", backupName)
+		f5osLogger.Debug("[RestoreConfigBackup]", "Request path", hclog.Fmt("%+v", uriFileImport))
+		byteBody, err := json.Marshal(importCfg)
+		if err != nil {
+			return "", err
+		}
+
+		respData, err := p.PostRequest(uriFileImport, byteBody)
+		if err != nil {
+			return "", err
+		}
+		if strings.Contains(string(respData), "Aborted: local-file already exists") {
+			return "", fmt.Errorf("%s", string(respData))
+		}
+
+		operationID := parseImportOperationID(respData)
+		f5osLogger.Debug("[RestoreConfigBackup]", "import operation-id", hclog.Fmt("%+v", operationID))
+
+		completed := false
+		waitTime := time.Second * time.Duration(timeout)
+		for start := time.Now(); time.Since(start).Seconds() < waitTime.Seconds(); time.Sleep(p.pollInterval(5 * time.Second)) {
+			inProgress, waitErr := p.configRestoreImportWait(importCfg.RemoteFile, operationID)
+			if waitErr != nil {
+				return "", waitErr
+			}
+			if !inProgress {
+				completed = true
+				break
+			}
+		}
+		if !completed {
+			return "", fmt.Errorf("config backup import timed out")
+		}
+		f5osLogger.Debug("[RestoreConfigBackup]", "successfully imported backup file from host", hclog.Fmt("%+v", importCfg.RemoteHost))
+	}
+
+	f5osLogger.Debug("[RestoreConfigBackup]", "Request path", hclog.Fmt("%+v", uriConfigRestore))
+	payload := map[string]string{"f5-database:name": backupName}
+	byteBody, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := p.PostRequest(uriConfigRestore, byteBody)
+	if err != nil {
+		return "", err
+	}
+
+	obj := make(map[string]any)
+	if err := json.NewDecoder(bytes.NewReader(resp)).Decode(&obj); err != nil {
+		return "", fmt.Errorf("unable to decode response from config-restore endpoint")
+	}
+	output, ok := obj["f5-database:output"].(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("unexpected response from config-restore endpoint: missing f5-database:output")
+	}
+	result, ok := output["result"].(string)
+	if !ok {
+		// A missing or non-string "result" key means the response
+		// doesn't match the expected shape at all -- treat this the
+		// same as any other malformed response (error), rather than
+		// silently falling through to an empty result string that
+		// would be indistinguishable from success by the "contains
+		// failed" check below.
+		return "", fmt.Errorf("unexpected response from config-restore endpoint: missing or non-string result")
+	}
+
+	// f5-database:config-restore's exact success message text has not
+	// been confirmed against a live device: invoking a real restore
+	// against a shared, in-use DUT was intentionally avoided during
+	// development, since the sibling config-check action's YANG source
+	// notes "reset-to-default remains a required prerequisite for
+	// config-restore" -- i.e. restoring against a populated device may
+	// not be the safe, idempotent no-op that a freshly-taken
+	// self-backup-then-restore round trip might otherwise suggest.
+	// Failure IS confirmed against a live device (both 1.8.3 and
+	// 2.0.0): restoring a nonexistent backup name returns HTTP 400 with
+	// an f5-database:config-restore-failed body, which PostRequest
+	// already surfaces as an error above, before we reach this point.
+	// Defensively also guard against a 200-with-failure-body shape (as
+	// f5-database:config-backup's sibling action does -- see
+	// CreateConfigBackup's prefix check on backupResult). The match is
+	// deliberately narrow -- the confirmed HTTP-400 failure body's own
+	// wording, "Database config-restore failed." -- rather than a
+	// blanket case-insensitive "failed" substring, which could
+	// misclassify an unconfirmed success message that happens to
+	// mention "failed" in an unrelated context (e.g. "0 items failed
+	// validation"). The raw result string is always returned to the
+	// caller (regardless of the substring check) so it can be surfaced
+	// to the user (e.g. in a Computed schema attribute) rather than
+	// silently discarded, given that exact success wording has not been
+	// confirmed.
+	if strings.Contains(result, "config-restore failed") {
+		return result, fmt.Errorf("%s", result)
+	}
+	f5osLogger.Info("[RestoreConfigBackup]", "config-restore result", hclog.Fmt("%+v", result))
+	return result, nil
+}
+
+// configRestoreImportWait polls the transfer-operation list for the
+// status of config-restore's optional remote-import step, identified by
+// operationID (preferred) or remoteFile (legacy fallback, matching
+// tenant.go's importWait matching semantics). This is intentionally a
+// separate function from tenant.go's importWait (which is scoped to
+// *F5ReqTenantImage) rather than a generalization of it, to avoid
+// touching existing, already-tested tenant-image import logic for an
+// unrelated feature.
+func (p *F5os) configRestoreImportWait(remoteFile, operationID string) (bool, error) {
+	transferMap, err := p.getImporttransferStatus()
+	if err != nil {
+		return false, err
+	}
+	if transferMap == nil {
+		return true, nil
+	}
+
+	ops, ok := transferMap["f5-utils-file-transfer:transfer-operation"].([]interface{})
+	if !ok || ops == nil {
+		return true, nil
+	}
+
+	for _, val := range ops {
+		entry, ok := val.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		if operationID != "" {
+			entryID, _ := entry["operation-id"].(string)
+			if entryID != operationID {
+				continue
+			}
+		} else {
+			remotePath, _ := entry["remote-file-path"].(string)
+			if remotePath != remoteFile {
+				continue
+			}
+		}
+
+		transStatus, _ := entry["status"].(string)
+		f5osLogger.Info("[configRestoreImportWait]", "Trans Status: ", hclog.Fmt("%+v", transStatus))
+
+		if strings.HasPrefix(transStatus, "In Progress") || strings.Contains(transStatus, "File Transfer Initiated") {
+			return true, nil
+		}
+		if strings.Contains(transStatus, "Completed") {
+			return false, nil
+		}
+		if transStatus != "" {
+			return false, fmt.Errorf("%s", transStatus)
+		}
+		return true, nil
+	}
+	return true, nil
+}
+
 func (p *F5os) Eula(regKey string, addonKeys []string) error {
 	payload := EulaPayload{
 		RegKey:    regKey,
@@ -1427,12 +1620,22 @@ func (p *F5os) fileTransferStatus(key, transferId string) (string, error) {
 		return "", fmt.Errorf("unable to read file transfer status")
 	}
 
-	transfers := obj["f5-utils-file-transfer:transfer-operation"].([]any)
+	transfers, ok := obj["f5-utils-file-transfer:transfer-operation"].([]any)
+	if !ok {
+		return "", fmt.Errorf("unexpected transfer-operation shape in file transfer status response")
+	}
 	for _, v := range transfers {
-		m := v.(map[string]any)
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
 		opID, ok := m[key].(string)
 		if ok && opID == transferId {
-			return strings.Trim(m["status"].(string), " "), nil
+			status, ok := m["status"].(string)
+			if !ok {
+				return "", fmt.Errorf("unexpected transfer-operation status shape for file/operation-id: %s", transferId)
+			}
+			return strings.Trim(status, " "), nil
 		}
 	}
 

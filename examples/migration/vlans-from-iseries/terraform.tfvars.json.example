@@ -1,0 +1,49 @@
+{
+  "vlans": {
+    "extracted-external": 100,
+    "extracted-internal": 101,
+    "extracted-trunked": 200
+  },
+  "interfaces": {
+    "1.0": {
+      "native_vlan": 100,
+      "trunk_vlans": [],
+      "enabled": true
+    },
+    "2.0": {
+      "native_vlan": 101,
+      "trunk_vlans": [],
+      "enabled": true
+    }
+  },
+  "lags": {
+    "lag1": {
+      "lag_type": "LACP",
+      "mode": "ACTIVE",
+      "interval": "SLOW",
+      "members": ["3.0", "4.0"],
+      "native_vlan": null,
+      "trunk_vlans": [200]
+    }
+  },
+  "tenants": {
+    "tenant1": {
+      "image_name": "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle",
+      "type": "BIG-IP",
+      "deployment_file": null,
+      "cpu_cores": 8,
+      "memory": null,
+      "virtual_disk_size": 82,
+      "nodes": [1],
+      "max_nodes": null,
+      "mac_block_size": null,
+      "cryptos": "enabled",
+      "running_state": "deployed",
+      "timeout": 600,
+      "mgmt_ip": "10.100.100.26",
+      "mgmt_gateway": "10.100.100.1",
+      "mgmt_prefix": 24,
+      "vlans": [100, 200]
+    }
+  }
+}

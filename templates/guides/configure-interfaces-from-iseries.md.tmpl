@@ -1,0 +1,200 @@
+---
+page_title: "Configuring F5OS interfaces from discovered i-Series configuration"
+description: |-
+  How to use examples/migration/vlans-from-iseries/interfaces.tf and scripts/interfaces-from-iseries.sh to assign native/trunk VLANs and enabled state to f5os_interface resources on an rSeries F5OS target, matching the interface/VLAN layout discovered on a source BIG-IP i-Series device.
+---
+
+# Configuring F5OS interfaces from discovered i-Series configuration
+
+`examples/migration/vlans-from-iseries/interfaces.tf` is Phase 4 of an
+i-Series -> r-Series (F5OS) migration workflow: it configures one
+`f5os_interface` resource per physical interface discovered on a source
+BIG-IP i-Series device, assigning the same native VLAN (untagged) and
+trunk VLANs (tagged) membership and enabled state as the source device,
+via a single `for_each` over an `interfaces` variable map.
+`scripts/interfaces-from-iseries.sh` converts the interface/VLAN
+membership portion of the `extracted-sys-settings.json` produced by
+[`terraform-provider-bigip`'s `scripts/extract-sys-settings.sh`](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)
+(that provider's Phase 1) into the `interfaces` map this configuration
+expects, including the TMOS -> rSeries interface name mapping described
+below.
+
+For the full cross-repo phase sequence, see the [overall i-Series to
+r-Series migration flow](iseries-to-rseries-migration-flow.html).
+
+This phase lives in the **same** `examples/migration/vlans-from-iseries`
+directory, and therefore the same Terraform state, as [Phase 3, VLAN
+creation](create-vlans-from-iseries.html) -- not a separate directory --
+specifically so `f5os_interface.from_iseries` can hold a real Terraform
+reference to `f5os_vlan.from_iseries`, making VLAN creation a graph
+dependency Terraform itself enforces rather than just an operational
+instruction to run one step before the other.
+
+## Interface name mapping: i-Series (`1.1`) to rSeries (`1.0`)
+
+TMOS (i-Series) names physical interfaces `<blade>.<port>` (e.g. `1.1`,
+`1.2`); single-appliance i-Series/VE platforms are always blade `1`.
+F5OS-A (rSeries) has no blade concept at all: a single rSeries appliance
+maps to `<port>.0`, with the blade number **dropped entirely**, not just
+reformatted. `scripts/interfaces-from-iseries.sh` performs this mapping
+automatically -- `1.1` becomes `1.0`, `1.2` becomes `2.0`, and so on --
+see [`terraform-provider-bigip`'s interface/trunk naming
+guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping)
+for the full naming-convention reference, including the VELOS
+(`<blade>/<port>.<subport>`) form this script does **not** produce (a
+VELOS chassis partition target needs a different mapping, applied
+manually).
+
+The dedicated management interface (`mgmt`) is excluded entirely: it has
+no rSeries data-plane equivalent, is not part of TMOS's numbered
+`<blade>.<port>` scheme, and is never a member of a VLAN's tagged/
+untagged interface list on the source device in the first place, so it
+never needs a native/trunk VLAN translation.
+
+Any interface name that doesn't match the expected TMOS `<blade>.<port>`
+pattern is passed through into the output map unchanged (so it isn't
+silently dropped) and reported to stderr for manual review -- it is not
+a valid rSeries name and must be renamed by hand before applying.
+
+Dropping the blade number this way only produces a 1:1 mapping when the
+source is genuinely single-blade (true for i-Series/VE, per the
+`mgmt`-only-management-interface note above). On a multi-blade source,
+two TMOS interfaces on different blades but the same port (e.g. `1.1`
+and `2.1`) collapse to the same rSeries name (`1.0`); the script detects
+this and reports it to stderr rather than silently keeping only one of
+the colliding interfaces' `native_vlan`/`trunk_vlans`/`enabled` values --
+see "rSeries name collisions" below.
+
+## Trunks (LAGs) are out of scope
+
+F5OS represents link aggregation as a separate `f5os_lag` resource, not
+`f5os_interface` -- a TMOS trunk name has no entry in
+`bigip_net_interfaces` (it isn't a physical interface) and is therefore
+never emitted into this script's `interfaces` output map. Any such
+trunk's VLAN membership is still surfaced separately (printed to stderr,
+not written to any file) so it isn't silently lost; translate it to
+`f5os_lag`'s `native_vlan`/`trunk_vlans` manually -- see
+[`terraform-provider-bigip`'s interface/trunk naming
+guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping#trunk-lag-mapping-is-not-11)
+for that mapping.
+
+## Example Usage
+
+{{ tffile "examples/migration/vlans-from-iseries/interfaces.tf" }}
+
+The `interfaces` variable definition (in `variables.tf`, alongside the
+`vlans` variable from Phase 3):
+
+{{ tffile "examples/migration/vlans-from-iseries/variables.tf" }}
+
+{{ tffile "examples/migration/vlans-from-iseries/outputs.tf" }}
+
+## Populating `var.interfaces` from a Phase 1 extraction
+
+Run `terraform-provider-bigip`'s `scripts/extract-sys-settings.sh`
+against the source i-Series device first (see that provider's
+[extraction
+guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)),
+then convert its output with this repo's
+`scripts/interfaces-from-iseries.sh`, alongside
+`scripts/vlans-from-iseries.sh` from Phase 3:
+
+```sh
+./scripts/vlans-from-iseries.sh extracted-sys-settings.json \
+  examples/migration/vlans-from-iseries/vlans.auto.tfvars.json
+./scripts/interfaces-from-iseries.sh extracted-sys-settings.json \
+  examples/migration/vlans-from-iseries/interfaces.auto.tfvars.json
+```
+
+Terraform automatically loads any `*.auto.tfvars.json` file found in the
+working directory, so no explicit `-var-file` flag is needed as long as
+both generated files are placed alongside `main.tf` as shown above. See
+`terraform.tfvars.json.example` in the same directory for the expected
+shape of both variables together:
+
+{{ codefile "json" "examples/migration/vlans-from-iseries/terraform.tfvars.json.example" }}
+
+Note `native_vlan`/`trunk_vlans` in this file are VLAN ID/tags, matched
+against `var.vlans`' values (not names) -- `interfaces.tf` resolves each
+one back to the corresponding `f5os_vlan.from_iseries` resource instance
+internally. `var.interfaces` validates this automatically: one
+`validation` block rejects any `native_vlan`/`trunk_vlans` ID that
+doesn't also appear in `var.vlans`, surfacing a missing-VLAN mistake at
+`terraform plan` time rather than as a confusing runtime error from the
+F5OS device; another rejects any map key that isn't a validly-shaped
+F5OS interface name (`<port>.0` for rSeries, `<blade>/<port>.0` for
+VELOS partitions), catching an unmapped or otherwise malformed TMOS name
+that `interfaces-from-iseries.sh` passed through unchanged (see
+"Interface name mapping" above).
+
+If the source extraction is missing VLAN membership data entirely
+(`bigip_net_vlans` was omitted -- see [Registry
+fallback](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings#registry-fallback)
+in the Phase 1 extraction guide), `interfaces-from-iseries.sh` prints a
+warning to stderr and every interface is emitted with `native_vlan:
+null` and an empty `trunk_vlans` -- this looks identical to "no VLAN
+membership on the source device" in the output file, so check for that
+warning before assuming the generated `interfaces` map accurately
+reflects the source device.
+
+### Ambiguous native VLANs
+
+A physical interface with more than one *untagged* VLAN membership on
+the source device is an invalid TMOS configuration this script can't
+silently resolve into a single `native_vlan` -- those are left with
+`native_vlan: null` in the output and reported to stderr for manual
+review, matching `terraform-provider-bigip`'s
+`extract-sys-settings.sh` `interface_vlans` derivation behavior (see
+that repo's [extraction guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings#interface-vlan-mapping)).
+
+### rSeries name collisions
+
+If two (or more) distinct TMOS interface names map to the same rSeries
+name after the blade number is dropped (see "Interface name mapping"
+above), only one of them ends up in the output map -- the others'
+`native_vlan`/`trunk_vlans`/`enabled` values are dropped entirely. This
+is reported to stderr with the offending rSeries name and every
+colliding TMOS name so it can be resolved manually (there is no way for
+the script to guess which TMOS interface's configuration should "win").
+This should not occur against a genuine single-blade i-Series/VE
+source; it is a signal the source device or extraction isn't what this
+mapping assumes.
+
+### Duplicate VLAN tags in `var.vlans`
+
+`interfaces.tf` builds a VLAN-tag-to-name reverse lookup to resolve
+`native_vlan`/`trunk_vlans` back to the `f5os_vlan.from_iseries`
+resource that owns each tag (see [Phase 3's VLAN name
+compatibility](create-vlans-from-iseries.html#vlan-name-compatibility)).
+Because a real TMOS source can have two VLAN names sharing the same
+tag (VLAN IDs are scoped per route domain/partition on TMOS, unlike
+this Terraform configuration), `var.vlans` includes a validation
+rejecting duplicate tags outright, with an error explaining the
+conflict -- this configuration has no route-domain/partition to
+disambiguate them, so any such collision must be resolved (renamed or
+merged) in `var.vlans` before applying, not just in `var.interfaces`.
+
+## Applying
+
+```sh
+cd examples/migration/vlans-from-iseries
+terraform init
+terraform apply
+```
+
+Update the `provider "f5os"` block's `host`/`username`/`password` (or use
+the corresponding `F5OS_HOST`/`F5OS_USERNAME`/`F5OS_PASSWORD` environment
+variables) to point at the target rSeries appliance before applying.
+`f5os_interface` (like `f5os_vlan`) rejects the "Velos Controller"
+platform type -- this configuration targets an rSeries appliance or a
+Velos chassis partition, not a Velos controller.
+
+## Related migration guides
+
+- [Inventorying TMOS version and hardware](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/inventory-tmos-version) (Phase 0, `terraform-provider-bigip`)
+- [Extracting i-Series system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
+- [Interface and trunk naming: TMOS (i-Series) vs F5OS (r-Series/VELOS)](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping) (`terraform-provider-bigip`)
+- [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2, `terraform-provider-bigip`)
+- [Creating VLANs on F5OS from discovered i-Series configuration](create-vlans-from-iseries.html) (Phase 3, this repo) -- prerequisite for this guide.
+- [Configuring F5OS LAGs from discovered i-Series configuration](configure-lags-from-iseries.html) (Phase 5, this repo) -- for trunk (LAG) member interfaces, not covered by this guide (a TMOS trunk name has no `bigip_net_interfaces` entry of its own).
+- [Applying a license to F5OS as part of an i-Series migration](apply-license-from-iseries.html) (this repo) -- independent of this phase; can be applied before, after, or in parallel.
