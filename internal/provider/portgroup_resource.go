@@ -136,7 +136,7 @@ func (r *PortGroupResource) Delete(ctx context.Context, req resource.DeleteReque
 	}
 	// Only clear DDM poll frequency on delete, do not change mode (mode persists in hardware)
 	if err := r.client.ClearPortGroupDDM(data.Name.ValueString()); err != nil {
-		resp.Diagnostics.AddWarning("Port group DDM could not be cleared", 
+		resp.Diagnostics.AddWarning("Port group DDM could not be cleared",
 			fmt.Sprintf("Resource removed from state but device DDM config persists: %s", err))
 	}
 }
@@ -194,14 +194,14 @@ func waitForPortGroupReboot(ctx context.Context, client *f5ossdk.F5os) error {
 			return ctx.Err()
 		default:
 		}
-		
+
 		// Try to GET the portgroups endpoint - keep retrying until it succeeds
 		resp, err := client.GetRequest("/f5-portgroup:portgroups")
 		if err == nil && len(resp) > 0 {
 			// Successfully got portgroups response, device has fully recovered
 			return nil
 		}
-		
+
 		// Failed, wait and retry
 		select {
 		case <-ctx.Done():

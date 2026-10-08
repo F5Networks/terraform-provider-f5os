@@ -261,16 +261,16 @@ func (r *AuthResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 						MarkdownDescription: "Base distinguished name for LDAP searches.",
 						Optional:            true,
 					},
-				"bind_dn": schema.StringAttribute{
-					MarkdownDescription: "Bind distinguished name for LDAP connections.",
-					Optional:            true,
-				},
-				"bind_pw": schema.StringAttribute{
-					MarkdownDescription: "Bind password for LDAP connections. This is a write-only field and cannot be read back from the device.",
-					Optional:            true,
-					Sensitive:           true,
-				},
-				"bind_timeout": schema.Int64Attribute{
+					"bind_dn": schema.StringAttribute{
+						MarkdownDescription: "Bind distinguished name for LDAP connections.",
+						Optional:            true,
+					},
+					"bind_pw": schema.StringAttribute{
+						MarkdownDescription: "Bind password for LDAP connections. This is a write-only field and cannot be read back from the device.",
+						Optional:            true,
+						Sensitive:           true,
+					},
+					"bind_timeout": schema.Int64Attribute{
 						MarkdownDescription: "Bind operation timeout in seconds.",
 						Optional:            true,
 					},

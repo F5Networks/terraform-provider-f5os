@@ -16,13 +16,13 @@
 ## Requirements
 
 * [Terraform](https://www.terraform.io/downloads) > 1.x
-* [Go](https://go.dev/doc/install) >= 1.25.0
+* [Go](https://go.dev/doc/install) >= 1.25.8
 * [GNU Make](https://www.gnu.org/software/make/)
 * [golangci-lint](https://golangci-lint.run/usage/install/#local-installation) (optional)
 
 ## Using the Provider
 
-This Terraform Provider is available to install automatically via `terraform init`. It is recommended to setup the following Terraform configuration to pin the major version:
+This Terraform provider is available to install automatically via `terraform init`. It is recommended to set up the following Terraform configuration to pin the major version:
 
 ```hcl
 # Terraform 1.2.x and later
@@ -75,11 +75,11 @@ We also provide:
 
 ## Filing Issues and Getting Help
 
-If you encounter a bug or other issue while using Terraform Provider, use [F5 Technical Support](https://www.f5.com/support#how-f5-helps) to submit it to our team.
+If you encounter a bug or other issue while using the Terraform provider, use [F5 Technical Support](https://www.f5.com/support#how-f5-helps) to submit it to our team.
 
 **Important**: As of July 2026, GitHub issues are no longer being monitored by F5 support staff.
 
-Be sure to see the [BIG-IP LTM requirements](https://github.com/F5Networks/terraform-provider-bigip/blob/master/README.md#f5-bigip-ltm-requirements) in this repo for more details and supported versions of the Terraform Provider.
+See the Compatibility section below for supported Terraform and F5OS versions for this provider.
 
 ## Compatibility
 
@@ -89,12 +89,12 @@ version it implements, and Terraform:
 | F5OS Provider |     Terraform Plugin Protocol      | Terraform | F5OS Velos/rSeries Version |
 |:-------------:|:----------------------------------:|:---------:|:--------------------------:|
 |`1.0.0-1.10.2` |                `6`                 | `>= 1.x`  |      `>= 1.5.x/1.4.0`      |
-|`>= 1.11.1`    |                `6`                 | `>= 1.x`  |      `>= 1.8.x`            |
+|`>= 1.11.1`    |                `6`                 | `>= 1.x`  |      `>= 1.8.x, 2.0.0`     |
 
-**Please note*: Releases >= 1.11.1 are for F5OS-A 1.8.x on rSeries only. Please continue to use previous releases for other version support.
+**Please note**: Releases >= 1.11.1 are for F5OS-A 1.8.x and 2.0.0 on rSeries only. Please continue to use previous releases for other version support.
 
-Details can be found querying the [Registry API](https://www.terraform.io/internals/provider-registry-protocol#list-available-versions)
-that return all the details about which version are currently available for a particular provider.
+Details can be found by querying the [Registry API](https://www.terraform.io/internals/provider-registry-protocol#list-available-versions),
+which returns the details about which versions are currently available for a particular provider.
 
 ## Development
 
@@ -105,7 +105,7 @@ that return all the details about which version are currently available for a pa
 
 The provided `GNUmakefile` defines additional commands generally useful during development,
 like for running tests, generating documentation, code formatting and linting.
-Taking a look at it's content is recommended.
+Taking a look at its content is recommended.
 
 ### Testing
 
@@ -114,7 +114,7 @@ In order to test the provider, you can run
 * `make test` to run provider unit tests
 * `make testacc` to run provider acceptance tests
 
-It's important to note that acceptance tests (`testacc`) will actually spawn real resources, and often cost money to run. Read more about they work on the
+It's important to note that acceptance tests (`testacc`) will actually spawn real resources, and often cost money to run. Read more about how they work on the
 [official page](https://www.terraform.io/plugin/sdkv2/testing/acceptance-tests).
 
 #### Running acceptance tests in CI/CD
@@ -168,8 +168,8 @@ Use `make generate` to ensure the documentation is regenerated with any changes.
 
 ### Using a development build
 
-If [running tests and acceptance tests](#testing) isn't enough, it's possible to set up a local terraform configuration
-to use a development builds of the provider. This can be achieved by leveraging the Terraform CLI
+If [running tests and acceptance tests](#testing) isn't enough, it's possible to set up a local Terraform configuration
+to use a development build of the provider. This can be achieved by leveraging the Terraform CLI
 [configuration file development overrides](https://www.terraform.io/cli/config/config-file#development-overrides-for-provider-developers).
 
 First, use `make install` to place a fresh development build of the provider in your

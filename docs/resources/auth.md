@@ -80,7 +80,7 @@ Optional:
 - `active_directory` (Boolean) Optimize for Active Directory compatibility.
 - `base_dn` (String) Base distinguished name for LDAP searches.
 - `bind_dn` (String) Bind distinguished name for LDAP connections.
-- `bind_pw` (String, Sensitive) Bind password for LDAP connections.
+- `bind_pw` (String, Sensitive) Bind password for LDAP connections. This is a write-only field and cannot be read back from the device.
 - `bind_timeout` (Number) Bind operation timeout in seconds.
 - `chase_referrals` (Boolean) Whether to chase LDAP referrals.
 - `group_object_class` (List of String) Object classes used when searching for LDAP group objects (e.g. ["posixGroup"]). Only supported on F5OS >= 2.0.0.

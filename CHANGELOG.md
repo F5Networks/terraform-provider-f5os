@@ -1,8 +1,17 @@
-## 1.13.0 (Unreleased)
+## 1.15.0 (Unreleased)
+
+BREAKING CHANGES:
+FEATURES:
+BUG FIXES:
+IMPROVEMENTS:
+
+## 1.14.0
 
 BREAKING CHANGES:
 * `f5os_tls_cert_key`: Setting `certificate = ""` or `key = ""` (explicit empty strings) now selects the F5OS 2.0.0+ import workflow instead of silently falling through to the self-signed workflow. On 2.0.0+ devices this surfaces as a deterministic "at least one of certificate or key must be non-empty" error from the client; on pre-2.0.0 devices it surfaces as the "Unsupported attribute" version-gate error. Users who intentionally set these attributes to `""` (including via conditional / null-coalescing HCL patterns) must remove them to keep using the self-signed workflow
 FEATURES:
+* Added `f5os_vlans`, `f5os_config_restore`, `f5os_portgroup`, and `f5os_ldap_server` resources
+* Added guided i-Series to r-Series migration workflows covering VLAN creation, system settings, LAGs, tenant deployment, license activation, plus overview/checklist documentation
 * `f5os_interface`: Added optional `description` attribute for F5OS 2.0.0+ interfaces (openconfig-interfaces:interfaces/interface/config/description); version-gated so writes on pre-2.0.0 devices return a clear "Unsupported attribute" error before any RESTCONF call. An explicit empty string is preserved on the wire (`"description":""`) as the F5OS idiom for clearing a description rather than being treated as unset. Also exposes read-only `phyport` state attribute reported by F5OS 2.0.0+ ethernet interfaces (`openconfig-if-ethernet:ethernet/state/f5-if-ethernet:phyport`)
 * `f5os_tenant`: Added `max_nodes` (Optional/Computed) attribute for F5OS 2.0.0+ tenants; version-gated so it is not sent to devices below 2.0.0. Also exposes read-only `mgmt_vlan`, `mgmt_vlan_accessible`, and `clustering_as_service` state attributes reported by F5OS 2.0.0+
 * `f5os_auth`: Added `login_policy` nested block (`admin_role_limit`, `restconf_max_session_limit`, `ssh_max_session_limit`) backed by the `f5-openconfig-aaa-login-policy` module; version-gated to F5OS 2.0.0+ (configuring it on older devices returns a clear error)
@@ -11,9 +20,11 @@ FEATURES:
 * `f5os_ntp_server`: Added `association_type` (String), `version` (Int64), and `port` (Int64) config attributes backed by the F5OS 2.0.0+ additive NTP server leaves; version-gated so configuring them on devices below 2.0.0 returns a clear "Unsupported attribute" error before any RESTCONF payload is sent. These attributes are `Optional+Computed`: users may set them explicitly, or the device populates them with its own defaults (observed on 1.8.x as well) and the value is mirrored into state so `terraform import` round-trips cleanly and out-of-band device changes surface as drift. Also exposes read-only `stratum` (Int64), `authenticated` (Bool), and `state_address` (String) attributes populated from the device's NTP server state container on 2.0.0+ (null on older devices)
 * `f5os_tls_cert_key`: Added `certificate` and `key` attributes to import an existing PEM-encoded certificate/key pair instead of generating a self-signed certificate. Setting either attribute switches the resource into import mode: the `create-self-signed-cert` RPC is skipped and the material is PATCHed onto the `f5-openconfig-aaa-tls:tls/config` container. Also exposes read-only `state_certificate` populated from the device's `state.certificate` leaf (accepts both bare and module-prefixed JSON leaf names). All three attributes are version-gated to F5OS 2.0.0+; supplying them on older devices returns a clear "Unsupported attribute" error before any device write. `ImportState` is now enabled: `terraform import f5os_tls_cert_key.<label> <name>` adopts an existing device-side certificate into state, and `Read` refreshes `state_certificate` from the device on every plan cycle
 BUG FIXES:
+* `f5os_tenant`: Fixed 2.0.0 tenant state handling so removed legacy leaves no longer cause panics or stale state during refresh
 * `f5os_logging`: On destroy, explicitly reset `include_hostname` to `false` via PUT instead of relying on DELETE of the `f5-openconfig-system-logging:config` container. On some F5OS versions DELETE did not clear the leaf, leaving `include-hostname` set to `true` after the resource was destroyed. Includes a DELETE fallback for older F5OS versions where PUT on the container leaf is not supported
 * `f5os_tls_cert_key`: `Read` now unconditionally clears `state_certificate` on devices below F5OS 2.0.0. Previously a value populated by an earlier 2.0.0+ read (or a device swap / downgrade) could persist in state indefinitely, masking drift and confusing support/debug escalations
 IMPROVEMENTS:
+* Added proxy support documentation and ensured provider `custom_headers` are also injected into HTTPS proxy CONNECT tunnel requests
 * `f5os_tls_cert_key`: Clarified the version-gate error message so it plainly states that `certificate`/`key` (TLS import workflow) require F5OS 2.0.0+ while the self-signed workflow remains available on older versions
 * CI/CD: Bumped Go toolchain from 1.25.10 to 1.25.12 to remediate standard library vulnerabilities GO-2026-5856 (crypto/tls), GO-2026-5039 (net/textproto), and GO-2026-5037 (crypto/x509) flagged by `govulncheck`
 * CI/CD: Re-enabled the GitHub Actions `govulncheck` job as blocking (removed `continue-on-error`) now that the toolchain upgrade clears all known standard library vulnerabilities

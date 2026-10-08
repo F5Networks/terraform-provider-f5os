@@ -80,6 +80,29 @@ cve-scan:
     - export GOFLAGS=-mod=vendor
     - govulncheck -show verbose ./...
 
+generate:
+  stage: lint
+  needs: []
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $RUN_ACC_TESTS == "only"
+      when: never
+    - when: on_success
+  variables:
+    TF_VERSION: "1.9.8"
+    TERRAFORM_MIRROR: "https://releases.hashicorp.com"
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends unzip
+    - curl -fsSL -o /tmp/terraform.zip
+        "${TERRAFORM_MIRROR}/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+    - unzip -o /tmp/terraform.zip -d /usr/local/bin
+    - rm -f /tmp/terraform.zip
+    - terraform version
+  script:
+    - go generate ./...
+    - |
+      git diff --compact-summary --exit-code || \
+        (echo; echo "Unexpected difference in directories after code generation. Run 'go generate ./...' command and commit."; exit 1)
+
 
 # Run any dependency tasks before this to ensure you have installed all your dependencies
 run-Mend:
