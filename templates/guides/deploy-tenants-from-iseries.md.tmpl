@@ -1,21 +1,21 @@
 ---
-page_title: "Deploying F5OS tenants from discovered i-Series configuration"
+page_title: "Deploying F5OS tenants from discovered iSeries configuration"
 description: |-
-  How to use examples/migration/vlans-from-iseries/tenant.tf to deploy f5os_tenant resources on an rSeries F5OS target, sized appropriately for the workload and attached to the VLANs migrated from a source BIG-IP i-Series device.
+  How to use examples/migration/vlans-from-iseries/tenant.tf to deploy f5os_tenant resources on an rSeries F5OS target, sized appropriately for the workload and attached to the VLANs migrated from a source BIG-IP iSeries device.
 ---
 
-# Deploying F5OS tenants from discovered i-Series configuration
+# Deploying F5OS tenants from discovered iSeries configuration
 
 `examples/migration/vlans-from-iseries/tenant.tf` is Phase 6 of an
-i-Series -> r-Series (F5OS) migration workflow: it deploys one
+iSeries -> rSeries (F5OS) migration workflow: it deploys one
 `f5os_tenant` resource per BIG-IP instance being migrated, sized for its
 workload (CPU cores, memory, virtual disk size), attached to the VLANs
 created in [Phase 3](create-vlans-from-iseries.html), and configured
 with the management IP/gateway/prefix the tenant needs to be reachable
 once running.
 
-For the full cross-repo phase sequence, see the [overall i-Series to
-r-Series migration flow](iseries-to-rseries-migration-flow.html).
+For the full cross-repo phase sequence, see the [overall iSeries to
+rSeries migration flow](iseries-to-rseries-migration-flow.html).
 
 This phase lives in the **same** `examples/migration/vlans-from-iseries`
 directory, and therefore the same Terraform state, as [Phase 3, VLAN
@@ -27,14 +27,14 @@ Terraform reference to `f5os_vlan.from_iseries`, making VLAN creation a
 graph dependency Terraform itself enforces rather than just an
 operational instruction to run one step before the other.
 
-## Unlike Phases 3-5, tenant sizing has no direct i-Series source field
+## Unlike Phases 3-5, tenant sizing has no direct iSeries source field
 
 VLANs, interfaces, and LAGs all have a structural 1:1 (or near-1:1)
 analog on the source TMOS device -- `bigip_net_vlans`,
 `bigip_net_interfaces`, and `bigip_net_trunks` map fairly directly onto
 `f5os_vlan`/`f5os_interface`/`f5os_lag`. A tenant's `cpu_cores`,
 `memory`, and `virtual_disk_size` do not: TMOS runs directly on the
-i-Series appliance's hardware (there is no concept of a TMOS "tenant"
+iSeries appliance's hardware (there is no concept of a TMOS "tenant"
 sized independently of the appliance itself), whereas F5OS carves each
 tenant out of the rSeries/Velos chassis's shared CPU/memory/disk pool.
 There is therefore no field in `terraform-provider-bigip`'s
@@ -52,7 +52,7 @@ If `memory` is left `null`, `f5os_tenant` auto-calculates it from
 `cpu_cores` (3GB per vCPU on rSeries; 3.5GB per vCPU plus 512MB on
 Velos -- see `calculateMemory` in `internal/provider/tenant_resource.go`)
 -- a reasonable starting point, but not a substitute for sizing against
-the actual i-Series model/workload being migrated per the guidance
+the actual iSeries model/workload being migrated per the guidance
 above.
 
 ## `image_name` must already be imported on the target device
@@ -63,9 +63,9 @@ verified on the target device (Create fails immediately if
 `f5-tenant-images:images` reports the image as `not-present`). Import
 the correct image first via
 [`f5os_tenant_image`](../resources/tenant_image.html) -- see [Uploading a
-BIG-IP tenant image to r-Series](../resources/tenant_image.html) for
+BIG-IP tenant image to rSeries](../resources/tenant_image.html) for
 SCP/SFTP/HTTPS import and the version-compatibility considerations
-between the image and the source i-Series TMOS version being migrated.
+between the image and the source iSeries TMOS version being migrated.
 
 ## Example Usage
 
@@ -148,12 +148,30 @@ rSeries appliance or a Velos chassis partition, not a Velos controller.
 tenant or changing its image after initial deployment recreates it
 rather than updating it in place.
 
+## After the tenant is deployed: upload and load the UCS in BIG-IP
+
+This guide stops at getting the target BIG-IP tenant deployed and reachable on
+F5OS. The application/configuration migration itself is completed inside the
+BIG-IP tenant after deployment, using the UCS archive generated in Phase 2 of
+the source-side flow.
+
+Once the tenant reaches `running_state = "deployed"` and its management IP is
+reachable:
+
+1. Upload the UCS archive created from the source iSeries device into the
+   deployed BIG-IP tenant.
+2. Load the UCS from within BIG-IP using the **platform-migrate** option.
+3. Complete BIG-IP-side validation after the UCS load before cutover.
+
+The platform-migrate option is required for this iSeries-to-rSeries migration
+path; do not load the UCS as a same-platform restore.
+
 ## Related migration guides
 
 - [Inventorying TMOS version and hardware](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/inventory-tmos-version) (Phase 0, `terraform-provider-bigip`)
-- [Extracting i-Series system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
+- [Extracting iSeries system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
 - [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2, `terraform-provider-bigip`)
-- [Creating VLANs on F5OS from discovered i-Series configuration](create-vlans-from-iseries.html) (Phase 3, this repo) -- prerequisite for this guide.
-- [Configuring F5OS interfaces from discovered i-Series configuration](configure-interfaces-from-iseries.html) (Phase 4, this repo) -- not a hard Terraform dependency of this guide, but the tenant's data-plane VLANs should already be wired to physical interfaces or LAGs before (or by the time) it reaches `running_state = "deployed"`.
-- [Configuring F5OS LAGs from discovered i-Series configuration](configure-lags-from-iseries.html) (Phase 5, this repo) -- same operational-sequencing note as Phase 4 above.
-- [Uploading a BIG-IP tenant image to r-Series](../resources/tenant_image.html) -- prerequisite for this guide; `image_name` must reference an already-imported, verified tenant image.
+- [Creating VLANs on F5OS from discovered iSeries configuration](create-vlans-from-iseries.html) (Phase 3, this repo) -- prerequisite for this guide.
+- [Configuring F5OS interfaces from discovered iSeries configuration](configure-interfaces-from-iseries.html) (Phase 4, this repo) -- not a hard Terraform dependency of this guide, but the tenant's data-plane VLANs should already be wired to physical interfaces or LAGs before (or by the time) it reaches `running_state = "deployed"`.
+- [Configuring F5OS LAGs from discovered iSeries configuration](configure-lags-from-iseries.html) (Phase 5, this repo) -- same operational-sequencing note as Phase 4 above.
+- [Uploading a BIG-IP tenant image to rSeries](../resources/tenant_image.html) -- prerequisite for this guide; `image_name` must reference an already-imported, verified tenant image.

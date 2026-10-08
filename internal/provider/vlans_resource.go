@@ -40,7 +40,7 @@ func NewVlansResource() resource.Resource {
 // /openconfig-vlan:vlans container).
 //
 // The primary motivation is apply-time performance for large VLAN
-// counts (e.g. an i-Series-to-F5OS migration with hundreds of VLANs):
+// counts (e.g. an iSeries-to-F5OS migration with hundreds of VLANs):
 // f5os_vlan issues one PATCH per VLAN (plus one GET read-back) on every
 // apply, while f5os_vlans batches every managed VLAN's create/update
 // into a single PATCH to /openconfig-vlan:vlans in Create/Update, and a

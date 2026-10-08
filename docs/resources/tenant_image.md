@@ -26,7 +26,7 @@ resource "f5os_tenant_image" "test" {
 
 # Import a tenant image via SCP with credentials.
 # The image_name/version must match (or be compatible with) the source
-# i-Series TMOS version being migrated. Large tenant images (2-3+ GB) can
+# iSeries TMOS version being migrated. Large tenant images (2-3+ GB) can
 # take several minutes to transfer, so timeout is set to 600s or higher.
 resource "f5os_tenant_image" "scp_example" {
   image_name      = "BIGIP-17.1.0-0.0.16.ALL-F5OS.qcow2.zip.bundle"

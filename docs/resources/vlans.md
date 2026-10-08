@@ -15,7 +15,7 @@ Resource to manage a whole set of VLANs on F5OS based systems (chassis partition
 ```terraform
 # Creates/updates every VLAN in `vlans` in a single RESTCONF PATCH call,
 # significantly faster than `for_each` + f5os_vlan for large VLAN sets
-# (e.g. an i-Series-to-F5OS migration with hundreds of VLANs). See the
+# (e.g. an iSeries-to-F5OS migration with hundreds of VLANs). See the
 # f5os_vlans resource documentation for the trade-off versus `for_each`
 # + f5os_vlan (per-VLAN Terraform resource addressing).
 resource "f5os_vlans" "test" {

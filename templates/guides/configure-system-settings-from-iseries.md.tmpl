@@ -1,30 +1,30 @@
 ---
-page_title: "Configuring system settings on F5OS from discovered i-Series configuration"
+page_title: "Configuring system settings on F5OS from discovered iSeries configuration"
 description: |-
-  How to use examples/migration/system-settings-from-iseries and scripts/system-settings-from-iseries.sh to configure DNS, NTP, SNMP, AAA authentication order, and local platform users on an rSeries/Velos partition F5OS target from settings discovered on a source BIG-IP i-Series device.
+  How to use examples/migration/system-settings-from-iseries and scripts/system-settings-from-iseries.sh to configure DNS, NTP, SNMP, AAA authentication order, and local platform users on an rSeries/Velos partition F5OS target from settings discovered on a source BIG-IP iSeries device.
 ---
 
-# Configuring system settings on F5OS from discovered i-Series configuration
+# Configuring system settings on F5OS from discovered iSeries configuration
 
 `examples/migration/system-settings-from-iseries` is a system-settings
-phase of an i-Series -> r-Series (F5OS) migration workflow, independent of
+phase of an iSeries -> rSeries (F5OS) migration workflow, independent of
 (and can be applied in parallel with) the VLAN creation workflow in
-[Creating VLANs on F5OS from discovered i-Series
+[Creating VLANs on F5OS from discovered iSeries
 configuration](create-vlans-from-iseries.html): it configures
 `f5os_dns`, `f5os_ntp_server`, `f5os_snmp`, `f5os_auth`, and `f5os_user`
 to match DNS, NTP, SNMP, authentication order, and local user settings
-discovered on a source BIG-IP i-Series device.
+discovered on a source BIG-IP iSeries device.
 `scripts/system-settings-from-iseries.sh` converts the relevant portion
 of the `extracted-sys-settings.json` produced by
 [`terraform-provider-bigip`'s `scripts/extract-sys-settings.sh`](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)
 (that provider's Phase 1) into the variables this configuration expects.
 
-For the full cross-repo phase sequence, see the [overall i-Series to
-r-Series migration flow](iseries-to-rseries-migration-flow.html).
+For the full cross-repo phase sequence, see the [overall iSeries to
+rSeries migration flow](iseries-to-rseries-migration-flow.html).
 
 ## What is (and isn't) migrated
 
-| Source (i-Series) | Target (F5OS) | Notes |
+| Source (iSeries) | Target (F5OS) | Notes |
 |---|---|---|
 | `bigip_sys_dns.name_servers` / `.search` | `f5os_dns.dns_servers` / `.dns_domains` | Direct pass-through. |
 | `bigip_sys_ntp.servers` | `f5os_ntp_server.server` (one resource per server, `for_each`) | `iburst` is always enabled on the created resources for faster resynchronization after migration. Per-server `key_id`/`prefer` (NTP authentication) are not present in the source extraction and are not set. |
@@ -43,7 +43,7 @@ r-Series migration flow](iseries-to-rseries-migration-flow.html).
 ## Populating the variables from a Phase 1 extraction
 
 Run `terraform-provider-bigip`'s `scripts/extract-sys-settings.sh` against
-the source i-Series device first (see that provider's [extraction
+the source iSeries device first (see that provider's [extraction
 guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)),
 then convert its output with this repo's
 `scripts/system-settings-from-iseries.sh`:
@@ -132,7 +132,7 @@ so each mapping can be reviewed. Edit `f5os_role` in the generated
 ### Authentication order
 
 `system-settings-from-iseries.sh` always sets `auth_order` to `["local"]`
-in its output, regardless of whether the source i-Series device has
+in its output, regardless of whether the source iSeries device has
 LDAP, RADIUS, or TACACS+ configured (`bigip_auth_ldap`/`bigip_auth_radius`/
 `bigip_auth_tacacs` entries in `extracted-sys-settings.json`, present only
 if configured on the source device). This is intentional, not an
@@ -147,7 +147,7 @@ separately first, then set `var.auth_order` to include them (e.g.
 ### SNMP access-list caveat
 
 `bigip_sys_snmp.allowedaddresses` restricts which source addresses may
-query SNMP on the i-Series device. `f5os_snmp` has no equivalent
+query SNMP on the iSeries device. `f5os_snmp` has no equivalent
 attribute -- F5OS does not expose a per-address SNMP client access list
 through this resource. If the source device has any `allowedaddresses`
 configured, `system-settings-from-iseries.sh` prints a warning naming
@@ -179,7 +179,7 @@ See each resource's own documentation for details before running
 ## Related migration guides
 
 - [Inventorying TMOS version and hardware](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/inventory-tmos-version) (Phase 0, `terraform-provider-bigip`)
-- [Extracting i-Series system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
-- [Creating VLANs on F5OS from discovered i-Series configuration](create-vlans-from-iseries.html) (this repo) -- the parallel VLAN-creation phase of this migration workflow.
-- [Applying a license to F5OS as part of an i-Series migration](apply-license-from-iseries.html) (this repo) -- also independent of this phase.
+- [Extracting iSeries system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
+- [Creating VLANs on F5OS from discovered iSeries configuration](create-vlans-from-iseries.html) (this repo) -- the parallel VLAN-creation phase of this migration workflow.
+- [Applying a license to F5OS as part of an iSeries migration](apply-license-from-iseries.html) (this repo) -- also independent of this phase.
 - [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2, `terraform-provider-bigip`)

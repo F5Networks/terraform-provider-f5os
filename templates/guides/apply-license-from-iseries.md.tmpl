@@ -1,47 +1,47 @@
 ---
-page_title: "Applying a license to F5OS as part of an i-Series migration"
+page_title: "Applying a license to F5OS as part of an iSeries migration"
 description: |-
   How to use examples/migration/license-from-iseries to activate the F5OS platform license on an rSeries appliance or Velos chassis partition using a new registration key obtained from F5, and how to verify activation succeeded.
 ---
 
-# Applying a license to F5OS as part of an i-Series migration
+# Applying a license to F5OS as part of an iSeries migration
 
 `examples/migration/license-from-iseries` is a licensing phase of an
-i-Series -> r-Series (F5OS) migration workflow, independent of (and can
+iSeries -> rSeries (F5OS) migration workflow, independent of (and can
 be applied before, after, or in parallel with) the VLAN creation
-workflow in [Creating VLANs on F5OS from discovered i-Series
+workflow in [Creating VLANs on F5OS from discovered iSeries
 configuration](create-vlans-from-iseries.html) and the [system-settings
 workflow](configure-system-settings-from-iseries.html): it activates the
 target rSeries appliance's (or Velos chassis partition's) platform
 license via [`f5os_license`](../resources/license.html), using a
 registration key obtained from F5 specifically for that device.
 
-For the full cross-repo phase sequence, see the [overall i-Series to
-r-Series migration flow](iseries-to-rseries-migration-flow.html).
+For the full cross-repo phase sequence, see the [overall iSeries to
+rSeries migration flow](iseries-to-rseries-migration-flow.html).
 
-## i-Series license keys are not valid on r-Series
+## iSeries license keys are not valid on rSeries
 
 Every other phase of this migration workflow converts data discovered
-on the source i-Series device into F5OS configuration
+on the source iSeries device into F5OS configuration
 (`scripts/vlans-from-iseries.sh`, `scripts/interfaces-from-iseries.sh`,
 `scripts/lags-from-iseries.sh`, `scripts/system-settings-from-iseries.sh`).
-Licensing is different: an i-Series device's TMOS registration key is
+Licensing is different: an iSeries device's TMOS registration key is
 tied to that specific BIG-IP platform/serial number and its licensed
 module set, and **cannot be reused, converted, or migrated onto an
-r-Series appliance or Velos chassis partition** -- F5OS uses an entirely
+rSeries appliance or Velos chassis partition** -- F5OS uses an entirely
 separate licensing SKU and activation record from TMOS, keyed to the
-r-Series/Velos hardware's own serial number/base registration key, not
-the i-Series device being replaced.
+rSeries/Velos hardware's own serial number/base registration key, not
+the iSeries device being replaced.
 
 There is no `scripts/license-from-iseries.sh` conversion script in this
 repo, and there will not be one: this is a hard prerequisite, not a
 migration step with source data to transform.
 
 **Before applying this configuration, obtain a new base registration
-key (and, if applicable, add-on keys) from F5 for the target r-Series
+key (and, if applicable, add-on keys) from F5 for the target rSeries
 appliance or Velos chassis partition.** Contact F5 support or your F5
 account team with the device's serial number if you do not already
-have one. Applying `f5os_license` with an i-Series/TMOS key, a
+have one. Applying `f5os_license` with an iSeries/TMOS key, a
 placeholder value, or a key issued for a different device fails at
 `terraform apply` time -- the device validates the key against F5's
 license activation service during the underlying EULA/install calls
@@ -62,8 +62,8 @@ error rather than silently accepted.
 
 Unlike the other phases in this migration workflow, there is no
 extraction script that populates these variables from the source
-i-Series device -- `var.registration_key`/`var.addon_keys` come directly
-from the new key(s) issued by F5 for this r-Series/Velos target (see
+iSeries device -- `var.registration_key`/`var.addon_keys` come directly
+from the new key(s) issued by F5 for this rSeries/Velos target (see
 above). Copy `terraform.tfvars.json.example` in the same directory to a
 `*.auto.tfvars.json` file (Terraform loads any such file automatically)
 and fill in the real key(s):
@@ -134,7 +134,7 @@ output on any mismatch.
 ## Related migration guides
 
 - [Inventorying TMOS version and hardware](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/inventory-tmos-version) (Phase 0, `terraform-provider-bigip`)
-- [Extracting i-Series system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
-- [Creating VLANs on F5OS from discovered i-Series configuration](create-vlans-from-iseries.html) (Phase 3, this repo) -- independent of this phase; can be applied before, after, or in parallel.
-- [Configuring system settings on F5OS from discovered i-Series configuration](configure-system-settings-from-iseries.html) (this repo) -- also independent of this phase.
+- [Extracting iSeries system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
+- [Creating VLANs on F5OS from discovered iSeries configuration](create-vlans-from-iseries.html) (Phase 3, this repo) -- independent of this phase; can be applied before, after, or in parallel.
+- [Configuring system settings on F5OS from discovered iSeries configuration](configure-system-settings-from-iseries.html) (this repo) -- also independent of this phase.
 - [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2, `terraform-provider-bigip`)

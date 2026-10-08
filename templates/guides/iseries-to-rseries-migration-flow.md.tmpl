@@ -1,12 +1,12 @@
 ---
-page_title: "i-Series to r-Series migration flow across terraform-provider-bigip and terraform-provider-f5os"
+page_title: "iSeries to rSeries migration flow across terraform-provider-bigip and terraform-provider-f5os"
 description: |-
-  End-to-end phase flow for migrating a BIG-IP i-Series device to an r-Series/F5OS target using source-side discovery in terraform-provider-bigip and target-side configuration in terraform-provider-f5os.
+  End-to-end phase flow for migrating a BIG-IP iSeries device to an rSeries/F5OS target using source-side discovery in terraform-provider-bigip and target-side configuration in terraform-provider-f5os.
 ---
 
-# i-Series to r-Series migration flow across terraform-provider-bigip and terraform-provider-f5os
+# iSeries to rSeries migration flow across terraform-provider-bigip and terraform-provider-f5os
 
-This document describes the end-to-end i-Series to r-Series migration flow
+This document describes the end-to-end iSeries to rSeries migration flow
 using the phases already defined in:
 
 - `terraform-provider-bigip`
@@ -18,20 +18,23 @@ The workflow is split across the two repos by design:
   backup.
 - `terraform-provider-f5os` handles target-platform licensing,
   system-settings, network-layer configuration, and tenant deployment.
+  The final UCS upload/load happens inside the deployed BIG-IP tenant,
+  not through this provider.
 
 ## Phase map
 
 | Phase | Repo | Purpose |
 |---|---|---|
 | Phase 0 | `terraform-provider-bigip` | Inventory TMOS version/build and hardware; select the correct tenant image |
-| Phase 1 | `terraform-provider-bigip` | Extract i-Series system and network settings into JSON artifacts |
+| Phase 1 | `terraform-provider-bigip` | Extract iSeries system and network settings into JSON artifacts |
 | Phase 2 | `terraform-provider-bigip` | Generate and download a UCS backup from the source device |
-| Licensing phase | `terraform-provider-f5os` | Apply a new F5OS/r-Series platform license |
+| Licensing phase | `terraform-provider-f5os` | Apply a new F5OS/rSeries platform license |
 | System-settings phase | `terraform-provider-f5os` | Configure target DNS, NTP, SNMP, auth order, and local platform users |
 | Phase 3 | `terraform-provider-f5os` | Create target VLANs |
 | Phase 4 | `terraform-provider-f5os` | Configure target interfaces |
 | Phase 5 | `terraform-provider-f5os` | Configure target LAGs |
 | Phase 6 | `terraform-provider-f5os` | Deploy BIG-IP tenants |
+| Phase 7 | BIG-IP tenant CLI/UI | Upload and load the UCS with platform migrate |
 
 ## Cross-repo flow
 
@@ -41,8 +44,8 @@ The workflow is split across the two repos by design:
 
 - run `scripts/inventory-tmos-version.sh`
 - identify the exact source TMOS version/build and hardware model
-- derive the recommended r-Series tenant image filename pattern
-- confirm whether the source TMOS train is suitable for r-Series tenant use
+- derive the recommended rSeries tenant image filename pattern
+- confirm whether the source TMOS train is suitable for rSeries tenant use
 
 #### Phase 1: extract source settings
 
@@ -53,7 +56,7 @@ The workflow is split across the two repos by design:
 #### Phase 2: generate UCS backup
 
 - run `scripts/generate-ucs-backup.sh`
-- create and download a UCS archive from the source i-Series device
+- create and download a UCS archive from the source iSeries device
 
 ## Target-side phases in terraform-provider-f5os
 
@@ -95,6 +98,13 @@ The workflow is split across the two repos by design:
 - attach the VLANs created in Phase 3
 - supply operator-chosen sizing and management settings
 
+### Phase 7: upload and load the UCS inside the deployed tenant
+
+- wait for the BIG-IP tenant from Phase 6 to finish deploying and become reachable
+- upload the UCS archive created in Phase 2 into the BIG-IP tenant
+- load the UCS from within BIG-IP using the platform-migrate option
+- complete any BIG-IP-side post-load checks before cutover
+
 ## Recommended execution order
 
 1. Phase 0 in `terraform-provider-bigip`
@@ -106,6 +116,7 @@ The workflow is split across the two repos by design:
 7. Phase 4 interface configuration
 8. Phase 5 LAG configuration
 9. Phase 6 tenant deployment
+10. Phase 7 UCS upload/load with platform migrate inside the tenant
 
 ## Parallel work that is safe
 
@@ -117,24 +128,27 @@ The workflow is split across the two repos by design:
 
 ## Important caveats
 
-- i-Series license keys are not reused on r-Series; obtain new registration
+- iSeries license keys are not reused on rSeries; obtain new registration
   keys for the target device.
-- TMOS interface names do not map directly to r-Series names; use the
+- TMOS interface names do not map directly to rSeries names; use the
   interface/trunk mapping guidance from `terraform-provider-bigip`.
-- tenant sizing is not auto-derived from the source i-Series device and must
+- tenant sizing is not auto-derived from the source iSeries device and must
   be planned explicitly.
 - the target data plane is only fully useful once VLANs, interfaces/LAGs, and
   tenant attachments are all aligned.
+- the UCS is restored only after the tenant is up, and it must be loaded on
+  BIG-IP with the platform-migrate option for an iSeries-to-rSeries move.
 
 ## Related guides
 
 - [Inventorying TMOS version and hardware](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/inventory-tmos-version) (Phase 0, `terraform-provider-bigip`)
-- [Extracting i-Series system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
+- [Extracting iSeries system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
 - [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2, `terraform-provider-bigip`)
-- [Interface and trunk naming: TMOS (i-Series) vs F5OS (r-Series/VELOS)](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping) (`terraform-provider-bigip`)
-- [Applying a license to F5OS as part of an i-Series migration](apply-license-from-iseries.html) (`terraform-provider-f5os`)
-- [Configuring system settings on F5OS from discovered i-Series configuration](configure-system-settings-from-iseries.html) (`terraform-provider-f5os`)
-- [Creating VLANs on F5OS from discovered i-Series configuration](create-vlans-from-iseries.html) (`terraform-provider-f5os`)
-- [Configuring F5OS interfaces from discovered i-Series configuration](configure-interfaces-from-iseries.html) (`terraform-provider-f5os`)
-- [Configuring F5OS LAGs from discovered i-Series configuration](configure-lags-from-iseries.html) (`terraform-provider-f5os`)
-- [Deploying F5OS tenants from discovered i-Series configuration](deploy-tenants-from-iseries.html) (`terraform-provider-f5os`)
+- [Interface and trunk naming: TMOS (iSeries) vs F5OS (rSeries/VELOS)](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping) (`terraform-provider-bigip`)
+- [Applying a license to F5OS as part of an iSeries migration](apply-license-from-iseries.html) (`terraform-provider-f5os`)
+- [Configuring system settings on F5OS from discovered iSeries configuration](configure-system-settings-from-iseries.html) (`terraform-provider-f5os`)
+- [Creating VLANs on F5OS from discovered iSeries configuration](create-vlans-from-iseries.html) (`terraform-provider-f5os`)
+- [Configuring F5OS interfaces from discovered iSeries configuration](configure-interfaces-from-iseries.html) (`terraform-provider-f5os`)
+- [Configuring F5OS LAGs from discovered iSeries configuration](configure-lags-from-iseries.html) (`terraform-provider-f5os`)
+- [Deploying F5OS tenants from discovered iSeries configuration](deploy-tenants-from-iseries.html) (`terraform-provider-f5os`)
+- [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2 source artifact used again during Phase 7 restore inside the tenant)

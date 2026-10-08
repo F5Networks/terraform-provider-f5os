@@ -61,12 +61,12 @@ In case of specific questions or discussions, please use the
 HashiCorp [Terraform Providers Discuss forums](https://discuss.hashicorp.com/c/terraform-providers/31),
 in accordance with HashiCorp [Community Guidelines](https://www.hashicorp.com/community-guidelines).
 
-## i-Series to r-Series migration guides
+## iSeries to rSeries migration guides
 
-This repo contains the target-side F5OS phases for an i-Series -> r-Series
+This repo contains the target-side F5OS phases for an iSeries -> rSeries
 migration workflow. Start here for the overall flow:
 
-* [Overall i-Series to r-Series migration flow](https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/iseries-to-rseries-migration-flow)
+* [Overall iSeries to rSeries migration flow](https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/iseries-to-rseries-migration-flow)
 * [Operator migration checklist](https://registry.terraform.io/providers/F5Networks/f5os/latest/docs/guides/iseries-to-rseries-migration-checklist)
 
 We also provide:

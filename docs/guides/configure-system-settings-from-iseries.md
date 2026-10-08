@@ -1,30 +1,30 @@
 ---
-page_title: "Configuring system settings on F5OS from discovered i-Series configuration"
+page_title: "Configuring system settings on F5OS from discovered iSeries configuration"
 description: |-
-  How to use examples/migration/system-settings-from-iseries and scripts/system-settings-from-iseries.sh to configure DNS, NTP, SNMP, AAA authentication order, and local platform users on an rSeries/Velos partition F5OS target from settings discovered on a source BIG-IP i-Series device.
+  How to use examples/migration/system-settings-from-iseries and scripts/system-settings-from-iseries.sh to configure DNS, NTP, SNMP, AAA authentication order, and local platform users on an rSeries/Velos partition F5OS target from settings discovered on a source BIG-IP iSeries device.
 ---
 
-# Configuring system settings on F5OS from discovered i-Series configuration
+# Configuring system settings on F5OS from discovered iSeries configuration
 
 `examples/migration/system-settings-from-iseries` is a system-settings
-phase of an i-Series -> r-Series (F5OS) migration workflow, independent of
+phase of an iSeries -> rSeries (F5OS) migration workflow, independent of
 (and can be applied in parallel with) the VLAN creation workflow in
-[Creating VLANs on F5OS from discovered i-Series
+[Creating VLANs on F5OS from discovered iSeries
 configuration](create-vlans-from-iseries.html): it configures
 `f5os_dns`, `f5os_ntp_server`, `f5os_snmp`, `f5os_auth`, and `f5os_user`
 to match DNS, NTP, SNMP, authentication order, and local user settings
-discovered on a source BIG-IP i-Series device.
+discovered on a source BIG-IP iSeries device.
 `scripts/system-settings-from-iseries.sh` converts the relevant portion
 of the `extracted-sys-settings.json` produced by
 [`terraform-provider-bigip`'s `scripts/extract-sys-settings.sh`](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)
 (that provider's Phase 1) into the variables this configuration expects.
 
-For the full cross-repo phase sequence, see the [overall i-Series to
-r-Series migration flow](iseries-to-rseries-migration-flow.html).
+For the full cross-repo phase sequence, see the [overall iSeries to
+rSeries migration flow](iseries-to-rseries-migration-flow.html).
 
 ## What is (and isn't) migrated
 
-| Source (i-Series) | Target (F5OS) | Notes |
+| Source (iSeries) | Target (F5OS) | Notes |
 |---|---|---|
 | `bigip_sys_dns.name_servers` / `.search` | `f5os_dns.dns_servers` / `.dns_domains` | Direct pass-through. |
 | `bigip_sys_ntp.servers` | `f5os_ntp_server.server` (one resource per server, `for_each`) | `iburst` is always enabled on the created resources for faster resynchronization after migration. Per-server `key_id`/`prefer` (NTP authentication) are not present in the source extraction and are not set. |
@@ -44,9 +44,9 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 # ---------------------------------------------------------------------------
 # Configures DNS, NTP, SNMP, AAA authentication, and local platform users
 # on the F5OS (rSeries appliance or Velos chassis partition) layer to
-# match settings discovered on a source BIG-IP i-Series device.
+# match settings discovered on a source BIG-IP iSeries device.
 #
-# This is a system-settings phase of an i-Series -> r-Series (F5OS)
+# This is a system-settings phase of an iSeries -> rSeries (F5OS)
 # migration workflow, parallel to (and independent of) the VLAN creation
 # workflow in examples/migration/vlans-from-iseries: it consumes the
 # DNS/NTP/SNMP/user portions of the JSON produced by
@@ -81,7 +81,7 @@ resource "f5os_dns" "from_iseries" {
   # f5os_dns.dns_servers is Required (see
   # internal/provider/dns_resource.go): an empty list fails at apply
   # time with a device error, not a clear Terraform-side message. This
-  # configuration is applied whether or not the source i-Series device
+  # configuration is applied whether or not the source iSeries device
   # had a bigip_sys_dns entry (var.dns_servers defaults to []), so guard
   # creation on at least one discovered DNS server instead.
   count = length(var.dns_servers) > 0 ? 1 : 0
@@ -125,7 +125,7 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
  */
 
 # ---------------------------------------------------------------------------
-# dns_servers/dns_search_domains are populated from the source i-Series
+# dns_servers/dns_search_domains are populated from the source iSeries
 # device's `bigip_sys_dns` (name_servers/search), passed straight through
 # to f5os_dns.
 #
@@ -134,24 +134,24 @@ If a copy of the MPL was not distributed with this file, You can obtain one at h
 #   dns_search_domains  = ["openstack.internal"]
 # ---------------------------------------------------------------------------
 variable "dns_servers" {
-  description = "List of DNS server IP addresses discovered on the source i-Series device (bigip_sys_dns.name_servers), applied verbatim to f5os_dns.dns_servers."
+  description = "List of DNS server IP addresses discovered on the source iSeries device (bigip_sys_dns.name_servers), applied verbatim to f5os_dns.dns_servers."
   type        = list(string)
   default     = []
 }
 
 variable "dns_search_domains" {
-  description = "List of DNS search domains discovered on the source i-Series device (bigip_sys_dns.search), applied verbatim to f5os_dns.dns_domains."
+  description = "List of DNS search domains discovered on the source iSeries device (bigip_sys_dns.search), applied verbatim to f5os_dns.dns_domains."
   type        = list(string)
   default     = []
 }
 
 # ---------------------------------------------------------------------------
 # ntp_servers is a flat list of NTP server addresses/hostnames from the
-# source i-Series device's `bigip_sys_ntp.servers`. Each entry becomes a
+# source iSeries device's `bigip_sys_ntp.servers`. Each entry becomes a
 # separate f5os_ntp_server resource (that resource manages one server per
 # instance, unlike f5os_dns/f5os_snmp/f5os_auth which are singletons), with
 # iburst enabled per the acceptance criteria for faster resynchronization
-# after the r-Series migration reboot/cutover.
+# after the rSeries migration reboot/cutover.
 #
 # TMOS's bigip_sys_ntp has no per-server key_id/prefer equivalent in the
 # extracted data (those are separate `net ntp keys`/`sys ntp` fields this
@@ -163,7 +163,7 @@ variable "dns_search_domains" {
 #   ntp_servers = ["ntp1.example.com", "ntp2.example.com"]
 # ---------------------------------------------------------------------------
 variable "ntp_servers" {
-  description = "List of NTP server addresses/hostnames discovered on the source i-Series device (bigip_sys_ntp.servers), each created as a separate f5os_ntp_server resource with iburst enabled."
+  description = "List of NTP server addresses/hostnames discovered on the source iSeries device (bigip_sys_ntp.servers), each created as a separate f5os_ntp_server resource with iburst enabled."
   type        = list(string)
   default     = []
 }
@@ -184,19 +184,19 @@ variable "ntp_servers" {
 #   snmp_sys_location = "Network Closet 1"
 # ---------------------------------------------------------------------------
 variable "snmp_sys_contact" {
-  description = "SNMP system contact discovered on the source i-Series device (bigip_sys_snmp.sys_contact), applied to f5os_snmp.snmp_mib.syscontact."
+  description = "SNMP system contact discovered on the source iSeries device (bigip_sys_snmp.sys_contact), applied to f5os_snmp.snmp_mib.syscontact."
   type        = string
   default     = null
 }
 
 variable "snmp_sys_location" {
-  description = "SNMP system location discovered on the source i-Series device (bigip_sys_snmp.sys_location), applied to f5os_snmp.snmp_mib.syslocation."
+  description = "SNMP system location discovered on the source iSeries device (bigip_sys_snmp.sys_location), applied to f5os_snmp.snmp_mib.syslocation."
   type        = string
   default     = null
 }
 
 # ---------------------------------------------------------------------------
-# users is keyed by username (preserved from the source i-Series device)
+# users is keyed by username (preserved from the source iSeries device)
 # and maps to the F5OS role to assign. scripts/system-settings-from-iseries.sh
 # derives f5os_role from each bigip_auth_user's partition_access[0].role,
 # approximating TMOS's role model onto F5OS's (see the script and guide
@@ -218,7 +218,7 @@ variable "snmp_sys_location" {
 #   }
 # ---------------------------------------------------------------------------
 variable "users" {
-  description = "Map of username (from the source i-Series device) to F5OS role and initial password, to create on the F5OS (rSeries/Velos partition) target via f5os_user."
+  description = "Map of username (from the source iSeries device) to F5OS role and initial password, to create on the F5OS (rSeries/Velos partition) target via f5os_user."
   type = map(object({
     f5os_role = string
     password  = string
@@ -241,7 +241,7 @@ variable "users" {
 # ---------------------------------------------------------------------------
 # auth_order is the local/remote authentication method precedence to
 # configure via f5os_auth. Defaults to `[\"local\"]` since the sample
-# i-Series extraction has no LDAP/RADIUS/TACACS+ configured
+# iSeries extraction has no LDAP/RADIUS/TACACS+ configured
 # (bigip_auth_ldap/bigip_auth_radius/bigip_auth_tacacs entries are only
 # present in extracted-sys-settings.json if configured on the source
 # device) -- this configuration does not attempt to migrate remote AAA
@@ -253,7 +253,7 @@ variable "users" {
 # separately and adjust auth_order to match.
 # ---------------------------------------------------------------------------
 variable "auth_order" {
-  description = "Ordered list of authentication methods for f5os_auth.auth_order. Defaults to [\"local\"] -- see the note above if the source i-Series device uses LDAP/RADIUS/TACACS+."
+  description = "Ordered list of authentication methods for f5os_auth.auth_order. Defaults to [\"local\"] -- see the note above if the source iSeries device uses LDAP/RADIUS/TACACS+."
   type        = list(string)
   default     = ["local"]
 
@@ -288,7 +288,7 @@ output "dns_id" {
 }
 
 output "ntp_servers" {
-  description = "Map of NTP server address to the F5OS-assigned resource id for every NTP server created from the i-Series source."
+  description = "Map of NTP server address to the F5OS-assigned resource id for every NTP server created from the iSeries source."
   value       = { for addr, ntp in f5os_ntp_server.from_iseries : addr => ntp.id }
 }
 
@@ -303,7 +303,7 @@ output "auth_id" {
 }
 
 output "created_users" {
-  description = "Map of username to the F5OS-assigned resource id for every platform user created from the i-Series source."
+  description = "Map of username to the F5OS-assigned resource id for every platform user created from the iSeries source."
   value       = { for name, user in f5os_user.from_iseries : name => user.id }
 }
 ```
@@ -311,7 +311,7 @@ output "created_users" {
 ## Populating the variables from a Phase 1 extraction
 
 Run `terraform-provider-bigip`'s `scripts/extract-sys-settings.sh` against
-the source i-Series device first (see that provider's [extraction
+the source iSeries device first (see that provider's [extraction
 guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)),
 then convert its output with this repo's
 `scripts/system-settings-from-iseries.sh`:
@@ -413,7 +413,7 @@ so each mapping can be reviewed. Edit `f5os_role` in the generated
 ### Authentication order
 
 `system-settings-from-iseries.sh` always sets `auth_order` to `["local"]`
-in its output, regardless of whether the source i-Series device has
+in its output, regardless of whether the source iSeries device has
 LDAP, RADIUS, or TACACS+ configured (`bigip_auth_ldap`/`bigip_auth_radius`/
 `bigip_auth_tacacs` entries in `extracted-sys-settings.json`, present only
 if configured on the source device). This is intentional, not an
@@ -428,7 +428,7 @@ separately first, then set `var.auth_order` to include them (e.g.
 ### SNMP access-list caveat
 
 `bigip_sys_snmp.allowedaddresses` restricts which source addresses may
-query SNMP on the i-Series device. `f5os_snmp` has no equivalent
+query SNMP on the iSeries device. `f5os_snmp` has no equivalent
 attribute -- F5OS does not expose a per-address SNMP client access list
 through this resource. If the source device has any `allowedaddresses`
 configured, `system-settings-from-iseries.sh` prints a warning naming
@@ -460,7 +460,7 @@ See each resource's own documentation for details before running
 ## Related migration guides
 
 - [Inventorying TMOS version and hardware](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/inventory-tmos-version) (Phase 0, `terraform-provider-bigip`)
-- [Extracting i-Series system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
-- [Creating VLANs on F5OS from discovered i-Series configuration](create-vlans-from-iseries.html) (this repo) -- the parallel VLAN-creation phase of this migration workflow.
-- [Applying a license to F5OS as part of an i-Series migration](apply-license-from-iseries.html) (this repo) -- also independent of this phase.
+- [Extracting iSeries system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
+- [Creating VLANs on F5OS from discovered iSeries configuration](create-vlans-from-iseries.html) (this repo) -- the parallel VLAN-creation phase of this migration workflow.
+- [Applying a license to F5OS as part of an iSeries migration](apply-license-from-iseries.html) (this repo) -- also independent of this phase.
 - [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2, `terraform-provider-bigip`)

@@ -1,30 +1,30 @@
 ---
-page_title: "Creating VLANs on F5OS from discovered i-Series configuration"
+page_title: "Creating VLANs on F5OS from discovered iSeries configuration"
 description: |-
-  How to use examples/migration/vlans-from-iseries and scripts/vlans-from-iseries.sh to create the f5os_vlan resources needed on an rSeries/Velos partition F5OS target from VLANs discovered on a source BIG-IP i-Series device.
+  How to use examples/migration/vlans-from-iseries and scripts/vlans-from-iseries.sh to create the f5os_vlan resources needed on an rSeries/Velos partition F5OS target from VLANs discovered on a source BIG-IP iSeries device.
 ---
 
-# Creating VLANs on F5OS from discovered i-Series configuration
+# Creating VLANs on F5OS from discovered iSeries configuration
 
-`examples/migration/vlans-from-iseries` is Phase 3 of an i-Series ->
-r-Series (F5OS) migration workflow: it creates one `f5os_vlan` resource
-per VLAN discovered on a source BIG-IP i-Series device, preserving both
+`examples/migration/vlans-from-iseries` is Phase 3 of an iSeries ->
+rSeries (F5OS) migration workflow: it creates one `f5os_vlan` resource
+per VLAN discovered on a source BIG-IP iSeries device, preserving both
 the VLAN ID/tag and the name from that device, via a single `for_each`
 over a `vlans` variable map. `scripts/vlans-from-iseries.sh` converts the
 VLAN portion of the `extracted-sys-settings.json` produced by
 [`terraform-provider-bigip`'s `scripts/extract-sys-settings.sh`](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)
 (that provider's Phase 1) into the `vlans` map this configuration expects.
-See [Configuring F5OS interfaces from discovered i-Series
+See [Configuring F5OS interfaces from discovered iSeries
 configuration](configure-interfaces-from-iseries.html) (Phase 4, this
 repo) for the next step, which assigns these VLANs to interfaces in the
 same working directory and depends on the VLANs created here.
 
-For the full cross-repo phase sequence, see the [overall i-Series to
-r-Series migration flow](iseries-to-rseries-migration-flow.html).
+For the full cross-repo phase sequence, see the [overall iSeries to
+rSeries migration flow](iseries-to-rseries-migration-flow.html).
 
 ## Why `for_each` over a variable map instead of one resource block per VLAN
 
-The number and identity of VLANs on a source i-Series device is not known
+The number and identity of VLANs on a source iSeries device is not known
 ahead of time -- it varies per device and is only known after running the
 Phase 1 extraction. A `for_each` over a `map(number)` variable (VLAN name
 -> VLAN ID) lets the same configuration create any number of VLANs
@@ -43,7 +43,7 @@ even as VLANs are added or removed on the source device between runs.
 ## Populating `var.vlans` from a Phase 1 extraction
 
 Run `terraform-provider-bigip`'s `scripts/extract-sys-settings.sh` against
-the source i-Series device first (see that provider's [extraction
+the source iSeries device first (see that provider's [extraction
 guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)),
 then convert its output with this repo's `scripts/vlans-from-iseries.sh`:
 
@@ -94,7 +94,7 @@ migrated.
 
 TMOS scopes VLAN IDs per route domain/partition, so two VLANs with
 different names can legitimately share the same numeric tag on the
-source i-Series device -- but F5OS has no equivalent scoping and
+source iSeries device -- but F5OS has no equivalent scoping and
 requires VLAN IDs to be unique. `vlans-from-iseries.sh` detects this
 and prints a warning naming every VLAN sharing a duplicate tag; `var.vlans`'
 validation (see below) also rejects this outright at `terraform plan`
@@ -118,9 +118,9 @@ partition before applying.
 ## Related migration guides
 
 - [Inventorying TMOS version and hardware](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/inventory-tmos-version) (Phase 0, `terraform-provider-bigip`)
-- [Extracting i-Series system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
-- [Interface and trunk naming: TMOS (i-Series) vs F5OS (r-Series/VELOS)](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping) (`terraform-provider-bigip`) -- for mapping `f5os_interface`/`f5os_lag` `native_vlan`/`trunk_vlans` once the VLANs created here exist on the F5OS target.
-- [Configuring system settings on F5OS from discovered i-Series configuration](configure-system-settings-from-iseries.html) (this repo) -- the parallel DNS/NTP/SNMP/auth/user configuration phase of this migration workflow; independent of and can be applied alongside this VLAN-creation phase.
-- [Configuring F5OS LAGs from discovered i-Series configuration](configure-lags-from-iseries.html) (Phase 5, this repo) -- creates `f5os_lag` resources from discovered i-Series trunks once the VLANs created here exist on the F5OS target.
-- [Applying a license to F5OS as part of an i-Series migration](apply-license-from-iseries.html) (this repo) -- independent of this phase; can be applied before, after, or in parallel.
+- [Extracting iSeries system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
+- [Interface and trunk naming: TMOS (iSeries) vs F5OS (rSeries/VELOS)](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping) (`terraform-provider-bigip`) -- for mapping `f5os_interface`/`f5os_lag` `native_vlan`/`trunk_vlans` once the VLANs created here exist on the F5OS target.
+- [Configuring system settings on F5OS from discovered iSeries configuration](configure-system-settings-from-iseries.html) (this repo) -- the parallel DNS/NTP/SNMP/auth/user configuration phase of this migration workflow; independent of and can be applied alongside this VLAN-creation phase.
+- [Configuring F5OS LAGs from discovered iSeries configuration](configure-lags-from-iseries.html) (Phase 5, this repo) -- creates `f5os_lag` resources from discovered iSeries trunks once the VLANs created here exist on the F5OS target.
+- [Applying a license to F5OS as part of an iSeries migration](apply-license-from-iseries.html) (this repo) -- independent of this phase; can be applied before, after, or in parallel.
 - [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2, `terraform-provider-bigip`)

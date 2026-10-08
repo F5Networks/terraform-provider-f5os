@@ -1,14 +1,14 @@
 ---
-page_title: "Configuring F5OS LAGs from discovered i-Series configuration"
+page_title: "Configuring F5OS LAGs from discovered iSeries configuration"
 description: |-
-  How to use examples/migration/vlans-from-iseries/lags.tf and scripts/lags-from-iseries.sh to create f5os_lag resources on an rSeries F5OS target matching the trunk (LAG) configuration discovered on a source BIG-IP i-Series device, including LACP mode and member interfaces.
+  How to use examples/migration/vlans-from-iseries/lags.tf and scripts/lags-from-iseries.sh to create f5os_lag resources on an rSeries F5OS target matching the trunk (LAG) configuration discovered on a source BIG-IP iSeries device, including LACP mode and member interfaces.
 ---
 
-# Configuring F5OS LAGs from discovered i-Series configuration
+# Configuring F5OS LAGs from discovered iSeries configuration
 
 `examples/migration/vlans-from-iseries/lags.tf` is Phase 5 of an
-i-Series -> r-Series (F5OS) migration workflow: it configures one
-`f5os_lag` resource per trunk discovered on a source BIG-IP i-Series
+iSeries -> rSeries (F5OS) migration workflow: it configures one
+`f5os_lag` resource per trunk discovered on a source BIG-IP iSeries
 device, preserving the trunk name, LACP type/mode/interval, member
 interfaces (mapped to F5OS names), and native/trunk VLAN assignment.
 `scripts/lags-from-iseries.sh` converts the trunk/VLAN membership
@@ -17,8 +17,8 @@ portion of the `extracted-sys-settings.json` produced by
 (that provider's Phase 1) into the `lags` map this configuration
 expects.
 
-For the full cross-repo phase sequence, see the [overall i-Series to
-r-Series migration flow](iseries-to-rseries-migration-flow.html).
+For the full cross-repo phase sequence, see the [overall iSeries to
+rSeries migration flow](iseries-to-rseries-migration-flow.html).
 
 This phase lives in the **same** `examples/migration/vlans-from-iseries`
 directory, and therefore the same Terraform state, as [Phase 3, VLAN
@@ -71,7 +71,7 @@ and `interfaces` variables from Phases 3 and 4):
 ## Populating `var.lags` from a Phase 1 extraction
 
 Run `terraform-provider-bigip`'s `scripts/extract-sys-settings.sh`
-against the source i-Series device first (see that provider's
+against the source iSeries device first (see that provider's
 [extraction
 guide](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings)),
 then convert its output with this repo's `scripts/lags-from-iseries.sh`,
@@ -173,9 +173,9 @@ apply will conflict.
 ## Related migration guides
 
 - [Inventorying TMOS version and hardware](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/inventory-tmos-version) (Phase 0, `terraform-provider-bigip`)
-- [Extracting i-Series system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
-- [Interface and trunk naming: TMOS (i-Series) vs F5OS (r-Series/VELOS)](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping) (`terraform-provider-bigip`)
+- [Extracting iSeries system settings](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/extract-sys-settings) (Phase 1, `terraform-provider-bigip`)
+- [Interface and trunk naming: TMOS (iSeries) vs F5OS (rSeries/VELOS)](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/interface-trunk-mapping) (`terraform-provider-bigip`)
 - [Generating and downloading a UCS backup](https://registry.terraform.io/providers/F5Networks/bigip/latest/docs/guides/generate-ucs-backup) (Phase 2, `terraform-provider-bigip`)
-- [Creating VLANs on F5OS from discovered i-Series configuration](create-vlans-from-iseries.html) (Phase 3, this repo) -- prerequisite for this guide.
-- [Configuring F5OS interfaces from discovered i-Series configuration](configure-interfaces-from-iseries.html) (Phase 4, this repo) -- prerequisite for this guide; not required to be applied first (LAG members do not need a `f5os_interface` resource of their own), but conflicts if the same physical interface is configured in both places (see "Applying" above).
-- [Applying a license to F5OS as part of an i-Series migration](apply-license-from-iseries.html) (this repo) -- independent of this phase; can be applied before, after, or in parallel.
+- [Creating VLANs on F5OS from discovered iSeries configuration](create-vlans-from-iseries.html) (Phase 3, this repo) -- prerequisite for this guide.
+- [Configuring F5OS interfaces from discovered iSeries configuration](configure-interfaces-from-iseries.html) (Phase 4, this repo) -- prerequisite for this guide; not required to be applied first (LAG members do not need a `f5os_interface` resource of their own), but conflicts if the same physical interface is configured in both places (see "Applying" above).
+- [Applying a license to F5OS as part of an iSeries migration](apply-license-from-iseries.html) (this repo) -- independent of this phase; can be applied before, after, or in parallel.
