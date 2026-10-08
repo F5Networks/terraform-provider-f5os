@@ -1116,7 +1116,7 @@ func tenantTestDiskSize() int {
 			return n
 		}
 	}
-	return 83
+	return 89
 }
 
 // testAccPreCheckTenant is the PreCheck for tenant acceptance tests. In

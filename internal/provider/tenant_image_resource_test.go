@@ -29,25 +29,25 @@ const (
 // Image coordinates are package-level vars (not consts) so they can be
 // overridden per-device via environment variables. This is required because
 // different F5OS versions accept different tenant image builds: F5OS 1.8.x
-// (e.g. host A) accepts BIGIP-17.1.0.1, but F5OS 2.0.0 (e.g. host B) rejects
-// that build with "file-type-check-failed" and instead requires a 17.5.x
-// image. CI can therefore point each DUT at a compatible image without code
-// changes by setting F5OS_TENANT_IMAGE / F5OS_IMAGE_REMOTE_HOST /
-// F5OS_IMAGE_REMOTE_PATH. The defaults preserve the historical 17.1.0.1
-// values so existing 1.8.x environments behave exactly as before.
+// rejects BIGIP-21.1.0.2 with "file-type-check-failed" and requires BIGIP-17.1.x,
+// but F5OS 2.0.0 requires BIGIP-21.1.x (or later) and rejects older 17.x builds.
+// CI can therefore point each DUT at a compatible image without code changes by
+// setting F5OS_TENANT_IMAGE / F5OS_IMAGE_REMOTE_HOST / F5OS_IMAGE_REMOTE_PATH.
+// The defaults are BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle (F5OS 2.0.0-compatible);
+// F5OS 1.8.x environments must override via environment variables.
 var (
 	// testAccImageName is the standard test image name used across acceptance
 	// tests. Override with F5OS_TENANT_IMAGE.
-	testAccImageName = envOrDefault("F5OS_TENANT_IMAGE", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle")
+	testAccImageName = envOrDefault("F5OS_TENANT_IMAGE", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle")
 
 	// testAccImageRemoteHost is the image server accessible from the DUT.
 	// Override with F5OS_IMAGE_REMOTE_HOST.
-	testAccImageRemoteHost = envOrDefault("F5OS_IMAGE_REMOTE_HOST", "10.238.1.148")
+	testAccImageRemoteHost = envOrDefault("F5OS_IMAGE_REMOTE_HOST", "10.146.14.22")
 
 	// testAccImageRemotePath is the path on the image server where test images
 	// live. Override with F5OS_IMAGE_REMOTE_PATH. Must correspond to the build
 	// named by testAccImageName.
-	testAccImageRemotePath = envOrDefault("F5OS_IMAGE_REMOTE_PATH", "v17.1.0.1/dist/release/VM")
+	testAccImageRemotePath = envOrDefault("F5OS_IMAGE_REMOTE_PATH", "v21.1.0.2/dist/release/VM")
 )
 
 // envOrDefault returns the value of environment variable key, or def if the
@@ -134,10 +134,12 @@ func testAccEnsureImageNamed(t *testing.T, imageName string) {
 	}
 
 	// Image doesn't exist — import it
+	remoteFile := fmt.Sprintf("%s/%s", testAccImageRemotePath, imageName)
+	t.Logf("Full import URL: https://%s/%s", testAccImageRemoteHost, remoteFile)
 	t.Logf("Importing test image %s from %s", imageName, testAccImageRemoteHost)
 	importConfig := &f5ossdk.F5ReqTenantImage{
 		RemoteHost: testAccImageRemoteHost,
-		RemoteFile: fmt.Sprintf("%s/%s", testAccImageRemotePath, imageName),
+		RemoteFile: remoteFile,
 		LocalFile:  "images/tenant",
 		Insecure:   []interface{}{nil}, // YANG empty leaf (RFC 7951): [null]
 	}
@@ -268,28 +270,41 @@ func TestUnitTenantImageCreateTC3Resource(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", "")
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+testAccImageName, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if r.Method == "GET" && count == 0 {
 			_, _ = fmt.Fprintf(w, "%s", "")
 			count++
 		} else {
-			_, _ = fmt.Fprintf(w, "%s", `{"f5-tenant-images:image": [{
-            "name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+			_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{"f5-tenant-images:image": [{
+            "name": "%s",
             "in-use": false,
             "type": "vm-image",
             "status": "replicated",
             "date": "2023-3-27",
-            "size": "2.27 GB"}]}`)
+            "size": "2.27 GB"}]}`, testAccImageName))
 		}
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", "")
+		_, _ = fmt.Fprintf(w, "%s", `{"f5-utils-file-transfer:output":{"operation-id":"IMPORT-test"}}`)
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+		_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{
+  "f5-utils-file-transfer:transfer-operation": [
+    {
+      "operation-id": "IMPORT-test",
+      "status": "         Completed",
+      "remote-file-path": "%s/%s",
+      "remote-host": "%s",
+      "local-file-path": "images/%s",
+      "protocol": "HTTPS",
+      "operation": "Import file",
+      "timestamp": "Mon Jun 26 16:05:22 2023"
+    }
+  ]
+}`, testAccImageRemotePath, testAccImageName, testAccImageRemoteHost, testAccImageName))
 	})
 	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -307,13 +322,13 @@ func TestUnitTenantImageCreateTC3Resource(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 				),
 			},
 			{
 				Config: testAccTenantImageCreateTC2ModifyResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 				),
 			},
 		},
@@ -337,13 +352,12 @@ func TestUnitTenantImageCreateTC4Resource(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", "")
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+testAccImageName, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", `
-{
+		_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{
     "f5-tenant-images:image": [
         {
-            "name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "name": "%s",
             "in-use": false,
             "type": "vm-image",
             "status": "replicated",
@@ -351,16 +365,28 @@ func TestUnitTenantImageCreateTC4Resource(t *testing.T) {
             "size": "2.27 GB"
         }
     ]
-}
-`)
+}`, testAccImageName))
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", "")
+		_, _ = fmt.Fprintf(w, "%s", `{"f5-utils-file-transfer:output":{"operation-id":"IMPORT-test"}}`)
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+		_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{
+  "f5-utils-file-transfer:transfer-operation": [
+    {
+      "operation-id": "IMPORT-test",
+      "status": "         Completed",
+      "remote-file-path": "%s/%s",
+      "remote-host": "%s",
+      "local-file-path": "images/%s",
+      "protocol": "HTTPS",
+      "operation": "Import file",
+      "timestamp": "Mon Jun 26 16:05:22 2023"
+    }
+  ]
+}`, testAccImageRemotePath, testAccImageName, testAccImageRemoteHost, testAccImageName))
 	})
 	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -378,7 +404,7 @@ func TestUnitTenantImageCreateTC4Resource(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 				),
 			},
 			// ImportState testing
@@ -418,14 +444,14 @@ func TestUnitTenantImageRequiresReplaceOnRemotePathChange(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", "")
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if !imageExists {
 			// Image not present — return empty so Create triggers import
 			_, _ = fmt.Fprintf(w, "%s", "")
 		} else {
 			_, _ = fmt.Fprintf(w, "%s", `{"f5-tenant-images:image": [{
-            "name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "name": "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
             "in-use": false,
             "type": "vm-image",
             "status": "replicated",
@@ -443,28 +469,28 @@ func TestUnitTenantImageRequiresReplaceOnRemotePathChange(t *testing.T) {
 		// Return a dynamic transfer status that includes entries for both
 		// the original and replacement remote paths so importWait finds a match.
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{
+		_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{
     "f5-utils-file-transfer:transfer-operation": [
         {
-            "local-file-path": "images/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "local-file-path": "images/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
             "remote-host": %q,
-            "remote-file-path": "v17.1.0.1/dist/release/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "remote-file-path": "%s/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
             "operation": "Import file",
             "protocol": "HTTPS   ",
             "status": "         Completed",
             "timestamp": "Mon Jun 26 16:05:22 2023"
         },
         {
-            "local-file-path": "images/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "local-file-path": "images/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
             "remote-host": %q,
-            "remote-file-path": "v17.1.0.1/daily/previous/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "remote-file-path": "v21.1.0.2/dist/release/backup/VM/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
             "operation": "Import file",
             "protocol": "HTTPS   ",
             "status": "         Completed",
             "timestamp": "Mon Jun 26 16:10:22 2023"
         }
     ]
-}`, testAccImageRemoteHost, testAccImageRemoteHost)
+}`, testAccImageRemoteHost, testAccImageRemotePath, testAccImageRemoteHost))
 	})
 	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
 		deleteCount++
@@ -485,7 +511,7 @@ func TestUnitTenantImageRequiresReplaceOnRemotePathChange(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_path", testAccImageRemotePath),
 				),
 			},
@@ -494,8 +520,8 @@ func TestUnitTenantImageRequiresReplaceOnRemotePathChange(t *testing.T) {
 			{
 				Config: testAccTenantImageRequiresReplaceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_path", "v17.1.0.1/daily/previous/VM"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_path", "v21.1.0.2/dist/release/backup/VM"),
 					func(s *terraform.State) error {
 						// createCount should be 2: one for Step 1 + one for Step 2 re-create
 						if createCount < 2 {
@@ -532,28 +558,41 @@ func TestUnitTenantImageTimeoutChangeNoReplace(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "%s", "")
 	})
 	var firstGet = true
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+testAccImageName, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if r.Method == "GET" && firstGet {
 			_, _ = fmt.Fprintf(w, "%s", "")
 			firstGet = false
 		} else {
-			_, _ = fmt.Fprintf(w, "%s", `{"f5-tenant-images:image": [{
-            "name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+			_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{"f5-tenant-images:image": [{
+            "name": "%s",
             "in-use": false,
             "type": "vm-image",
             "status": "replicated",
             "date": "2023-3-27",
-            "size": "2.27 GB"}]}`)
+            "size": "2.27 GB"}]}`, testAccImageName))
 		}
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", "")
+		_, _ = fmt.Fprintf(w, "%s", `{"f5-utils-file-transfer:output":{"operation-id":"IMPORT-test"}}`)
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+		_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{
+  "f5-utils-file-transfer:transfer-operation": [
+    {
+      "operation-id": "IMPORT-test",
+      "status": "         Completed",
+      "remote-file-path": "%s/%s",
+      "remote-host": "%s",
+      "local-file-path": "images/%s",
+      "protocol": "HTTPS",
+      "operation": "Import file",
+      "timestamp": "Mon Jun 26 16:05:22 2023"
+    }
+  ]
+}`, testAccImageRemotePath, testAccImageName, testAccImageRemoteHost, testAccImageName))
 	})
 	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
 		deleteCount++
@@ -573,14 +612,14 @@ func TestUnitTenantImageTimeoutChangeNoReplace(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 				),
 			},
 			// Step 2: Change only timeout (360 -> 380) — no replacement
 			{
 				Config: testAccTenantImageCreateTC2ModifyResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 					func(s *terraform.State) error {
 						// Between Step 1 and Step 2, no delete should occur
 						// (only the final destroy at test cleanup will delete).
@@ -1025,13 +1064,13 @@ resource "f5os_tenant_image" "test" {
 // include insecure=true (unlike the acceptance test configs which always set it).
 var testAccTenantImageNoInsecureConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
-  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  image_name  = %q
   remote_host = %q
-  remote_path = "v17.1.0.1/daily/current/VM"
+  remote_path = "v21.1.0.2/dist/release/VM"
   local_path  = "images"
   timeout     = 360
 }
-`, testAccImageRemoteHost)
+`, testAccImageName, testAccImageRemoteHost)
 
 // TestUnitTenantImageImportPayloadIncludesAllFields verifies that when protocol,
 // remote_user, remote_password, and remote_port are set in the HCL config, all
@@ -1055,30 +1094,43 @@ func TestUnitTenantImageImportPayloadIncludesAllFields(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "%s", "")
 	})
 	var firstGet = true
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+testAccImageName, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if r.Method == "GET" && firstGet {
 			_, _ = fmt.Fprintf(w, "%s", "")
 			firstGet = false
 		} else {
-			_, _ = fmt.Fprintf(w, "%s", `{"f5-tenant-images:image": [{
-            "name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+			_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{"f5-tenant-images:image": [{
+            "name": "%s",
             "in-use": false,
             "type": "vm-image",
             "status": "replicated",
             "date": "2023-3-27",
-            "size": "2.27 GB"}]}`)
+            "size": "2.27 GB"}]}`, testAccImageName))
 		}
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &capturedBody)
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", "")
+		_, _ = fmt.Fprintf(w, "%s", `{"f5-utils-file-transfer:output":{"operation-id":"IMPORT-test"}}`)
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+		_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{
+  "f5-utils-file-transfer:transfer-operation": [
+    {
+      "operation-id": "IMPORT-test",
+      "status": "         Completed",
+      "remote-file-path": "%s/%s",
+      "remote-host": "%s",
+      "local-file-path": "images/%s",
+      "protocol": "HTTPS",
+      "operation": "Import file",
+      "timestamp": "Mon Jun 26 16:05:22 2023"
+    }
+  ]
+}`, testAccImageRemotePath, testAccImageName, testAccImageRemoteHost, testAccImageName))
 	})
 	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -1096,7 +1148,7 @@ func TestUnitTenantImageImportPayloadIncludesAllFields(t *testing.T) {
 			{
 				Config: testAccTenantImageAllFieldsConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "protocol", "scp"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_user", "admin"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "remote_password", "secret123"),
@@ -1130,9 +1182,9 @@ func TestUnitTenantImageImportPayloadIncludesAllFields(t *testing.T) {
 // import attributes: protocol, remote_user, remote_password, remote_port.
 var testAccTenantImageAllFieldsConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
-  image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  image_name      = %q
   remote_host     = %q
-  remote_path     = "v17.1.0.1/daily/current/VM"
+  remote_path     = "v21.1.0.2/dist/release/VM"
   local_path      = "images"
   protocol        = "scp"
   remote_user     = "admin"
@@ -1140,7 +1192,7 @@ resource "f5os_tenant_image" "test" {
   remote_port     = 2222
   timeout         = 360
 }
-`, testAccImageRemoteHost)
+`, testAccImageName, testAccImageRemoteHost)
 
 // ---------------------------------------------------------------------------
 // Shared mock-server setup for RequiresReplace / payload unit tests
@@ -1182,13 +1234,13 @@ func setupTenantImageMock(t *testing.T, transferPaths []string) *tenantImageMock
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", "")
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if !st.imageExists {
 			_, _ = fmt.Fprintf(w, "%s", "")
 		} else {
 			_, _ = fmt.Fprintf(w, "%s", `{"f5-tenant-images:image": [{
-            "name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+            "name": "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
             "in-use": false,
             "type": "vm-image",
             "status": "replicated",
@@ -1219,7 +1271,7 @@ func setupTenantImageMock(t *testing.T, transferPaths []string) *tenantImageMock
 	entries := make([]transferEntry, 0, len(transferPaths))
 	for _, p := range transferPaths {
 		entries = append(entries, transferEntry{
-			LocalFilePath:  "images/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+			LocalFilePath:  "images/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
 			RemoteHost:     testAccImageRemoteHost,
 			RemoteFilePath: p,
 			Operation:      "Import file",
@@ -1259,7 +1311,7 @@ func setupTenantImageMock(t *testing.T, transferPaths []string) *tenantImageMock
 // protocol triggers destroy+recreate (RequiresReplace).
 func TestUnitTenantImageRequiresReplaceOnProtocolChange(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
-		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+		"v21.1.0.2/dist/release/VM/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
 	})
 	defer teardown()
 	resource.Test(t, resource.TestCase{
@@ -1295,7 +1347,7 @@ func TestUnitTenantImageRequiresReplaceOnProtocolChange(t *testing.T) {
 // remote_port triggers destroy+recreate (RequiresReplace).
 func TestUnitTenantImageRequiresReplaceOnRemotePortChange(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
-		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+		"v21.1.0.2/dist/release/VM/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
 	})
 	defer teardown()
 	resource.Test(t, resource.TestCase{
@@ -1331,7 +1383,7 @@ func TestUnitTenantImageRequiresReplaceOnRemotePortChange(t *testing.T) {
 // remote_user triggers destroy+recreate (RequiresReplace).
 func TestUnitTenantImageRequiresReplaceOnRemoteUserChange(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
-		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+		"v21.1.0.2/dist/release/VM/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
 	})
 	defer teardown()
 	resource.Test(t, resource.TestCase{
@@ -1367,7 +1419,7 @@ func TestUnitTenantImageRequiresReplaceOnRemoteUserChange(t *testing.T) {
 // remote_host triggers destroy+recreate (RequiresReplace).
 func TestUnitTenantImageRequiresReplaceOnRemoteHostChange(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
-		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+		"v21.1.0.2/dist/release/VM/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
 	})
 	defer teardown()
 	resource.Test(t, resource.TestCase{
@@ -1415,7 +1467,7 @@ func TestUnitTenantImageOmitsOptionalFieldsWhenUnset(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 					func(s *terraform.State) error {
 						if st.capturedBody == nil {
 							return fmt.Errorf("import endpoint was never called")
@@ -1455,8 +1507,8 @@ func TestUnitTenantImageImportSetsImageName(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "image_name", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "image_name", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 				),
 			},
 			// Step 2: Import and verify that id, image_name, and status
@@ -1496,8 +1548,8 @@ func TestUnitTenantImageUpdatePreservesIdAndImageName(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "image_name", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "image_name", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "status", "replicated"),
 				),
 			},
@@ -1506,8 +1558,8 @@ func TestUnitTenantImageUpdatePreservesIdAndImageName(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ModifyResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "image_name", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "image_name", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "status", "replicated"),
 				),
 			},
@@ -1532,7 +1584,7 @@ func TestUnitTenantImageStatusPopulatedAfterCreate(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "status", "replicated"),
 				),
 			},
@@ -1546,7 +1598,7 @@ func TestUnitTenantImageStatusPopulatedAfterCreate(t *testing.T) {
 // default), the field should be omitted from the payload entirely.
 func TestUnitTenantImageInsecureFlagInPayload(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
-		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+		"v21.1.0.2/dist/release/VM/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
 	})
 	defer teardown()
 	resource.Test(t, resource.TestCase{
@@ -1556,7 +1608,7 @@ func TestUnitTenantImageInsecureFlagInPayload(t *testing.T) {
 			{
 				Config: testAccTenantImageInsecureTrueConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "insecure", "true"),
 					func(s *terraform.State) error {
 						if st.capturedBody == nil {
@@ -1586,7 +1638,7 @@ func TestUnitTenantImageInsecureFlagInPayload(t *testing.T) {
 // import payload (nil interface{} is stripped by omitempty).
 func TestUnitTenantImageInsecureDefaultOmitted(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
-		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+		"v21.1.0.2/dist/release/VM/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
 	})
 	defer teardown()
 	resource.Test(t, resource.TestCase{
@@ -1596,7 +1648,7 @@ func TestUnitTenantImageInsecureDefaultOmitted(t *testing.T) {
 			{
 				Config: testAccTenantImageNoInsecureConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "insecure", "false"),
 					func(s *terraform.State) error {
 						if st.capturedBody == nil {
@@ -1635,7 +1687,7 @@ func TestUnitTenantImageReadAfterImportHasCorrectState(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 				),
 			},
 			// Step 2: Import and verify the full state round-trip
@@ -1650,8 +1702,8 @@ func TestUnitTenantImageReadAfterImportHasCorrectState(t *testing.T) {
 				},
 				// After import + read, verify all computed fields
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "image_name", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "image_name", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "status", "replicated"),
 				),
 			},
@@ -1663,14 +1715,14 @@ func TestUnitTenantImageReadAfterImportHasCorrectState(t *testing.T) {
 // to verify it appears in the import API payload.
 var testAccTenantImageInsecureTrueConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
-  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  image_name  = %q
   remote_host = %q
-  remote_path = "v17.1.0.1/daily/current/VM"
+  remote_path = "v21.1.0.2/dist/release/VM"
   local_path  = "images"
   insecure    = true
   timeout     = 360
 }
-`, testAccImageRemoteHost)
+`, testAccImageName, testAccImageRemoteHost)
 
 // ---------------------------------------------------------------------------
 // Unit tests for insecure + protocol combination and http protocol rejection
@@ -1682,7 +1734,7 @@ resource "f5os_tenant_image" "test" {
 // as [null] (RFC 7951 YANG empty leaf).
 func TestUnitTenantImageInsecureWithHTTPSProtocol(t *testing.T) {
 	st := setupTenantImageMock(t, []string{
-		"v17.1.0.1/daily/current/VM/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+		"v21.1.0.2/dist/release/VM/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
 	})
 	defer teardown()
 	resource.Test(t, resource.TestCase{
@@ -1692,7 +1744,7 @@ func TestUnitTenantImageInsecureWithHTTPSProtocol(t *testing.T) {
 			{
 				Config: testAccTenantImageInsecureHTTPSConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "insecure", "true"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "protocol", "https"),
 					func(s *terraform.State) error {
@@ -1722,15 +1774,15 @@ func TestUnitTenantImageInsecureWithHTTPSProtocol(t *testing.T) {
 
 var testAccTenantImageInsecureHTTPSConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
-  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  image_name  = %q
   remote_host = %q
-  remote_path = "v17.1.0.1/daily/current/VM"
+  remote_path = "v21.1.0.2/dist/release/VM"
   local_path  = "images"
   protocol    = "https"
   insecure    = true
   timeout     = 360
 }
-`, testAccImageRemoteHost)
+`, testAccImageName, testAccImageRemoteHost)
 
 // TestUnitTenantImageHTTPProtocolRejected verifies that protocol="http"
 // is rejected at plan time by ValidateConfig. The F5OS RESTCONF API
@@ -1743,9 +1795,9 @@ func TestUnitTenantImageHTTPProtocolRejected(t *testing.T) {
 			{
 				Config: `
 resource "f5os_tenant_image" "http_test" {
-  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  image_name  = "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"
   remote_host = "10.0.0.1"
-  remote_path = "v17.1.0.1/daily/current/VM"
+  remote_path = "v21.1.0.2/dist/release/VM"
   local_path  = "images"
   protocol    = "http"
   timeout     = 360
@@ -2032,7 +2084,7 @@ func testAccTenantImageImportFixConfig(imageName string, timeout int) string {
 resource "f5os_tenant_image" "import_fix_test" {
   image_name  = %q
   remote_host = %q
-  remote_path = "v17.1.0.1/daily/current/VM"
+  remote_path = "v21.1.0.2/dist/release/VM"
   local_path  = "images/tenant"
   insecure    = true
   timeout     = %d
@@ -2046,9 +2098,9 @@ resource "f5os_tenant_image" "import_fix_test" {
 
 var testAccTenantImageProtocolChangedConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
-  image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  image_name      = %q
   remote_host     = %q
-  remote_path     = "v17.1.0.1/daily/current/VM"
+  remote_path     = "v21.1.0.2/dist/release/VM"
   local_path      = "images"
   protocol        = "https"
   remote_user     = "admin"
@@ -2056,13 +2108,13 @@ resource "f5os_tenant_image" "test" {
   remote_port     = 2222
   timeout         = 360
 }
-`, testAccImageRemoteHost)
+`, testAccImageName, testAccImageRemoteHost)
 
 var testAccTenantImageRemotePortChangedConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
-  image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  image_name      = %q
   remote_host     = %q
-  remote_path     = "v17.1.0.1/daily/current/VM"
+  remote_path     = "v21.1.0.2/dist/release/VM"
   local_path      = "images"
   protocol        = "scp"
   remote_user     = "admin"
@@ -2070,13 +2122,13 @@ resource "f5os_tenant_image" "test" {
   remote_port     = 3333
   timeout         = 360
 }
-`, testAccImageRemoteHost)
+`, testAccImageName, testAccImageRemoteHost)
 
 var testAccTenantImageRemoteUserChangedConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
-  image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  image_name      = %q
   remote_host     = %q
-  remote_path     = "v17.1.0.1/daily/current/VM"
+  remote_path     = "v21.1.0.2/dist/release/VM"
   local_path      = "images"
   protocol        = "scp"
   remote_user     = "operator"
@@ -2084,13 +2136,13 @@ resource "f5os_tenant_image" "test" {
   remote_port     = 2222
   timeout         = 360
 }
-`, testAccImageRemoteHost)
+`, testAccImageName, testAccImageRemoteHost)
 
-const testAccTenantImageRemoteHostChangedConfig = `
+var testAccTenantImageRemoteHostChangedConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
-  image_name      = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  image_name      = %q
   remote_host     = "mirror.olympus.f5net.com"
-  remote_path     = "v17.1.0.1/daily/current/VM"
+  remote_path     = "v21.1.0.2/dist/release/VM"
   local_path      = "images"
   protocol        = "scp"
   remote_user     = "admin"
@@ -2098,7 +2150,7 @@ resource "f5os_tenant_image" "test" {
   remote_port     = 2222
   timeout         = 360
 }
-`
+`, testAccImageName)
 
 // TestUnitTenantImageGetImageErrorStillImports verifies the fix where the
 // initial GetImage call in Create returns an error alongside a non-nil
@@ -2134,7 +2186,7 @@ func TestUnitTenantImageGetImageErrorStillImports(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", "")
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+testAccImageName, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -2148,23 +2200,36 @@ func TestUnitTenantImageGetImageErrorStillImports(t *testing.T) {
 		} else {
 			// All subsequent calls: image exists
 			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image": [{
-				"name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+			_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{"f5-tenant-images:image": [{
+				"name": "%s",
 				"in-use": false,
 				"type": "vm-image",
 				"status": "replicated",
 				"date": "2023-3-27",
-				"size": "2.27 GB"}]}`)
+				"size": "2.27 GB"}]}`, testAccImageName))
 		}
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
 		importCalled = true
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", "")
+		_, _ = fmt.Fprintf(w, "%s", `{"f5-utils-file-transfer:output":{"operation-id":"IMPORT-test"}}`)
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+		_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{
+  "f5-utils-file-transfer:transfer-operation": [
+    {
+      "operation-id": "IMPORT-test",
+      "status": "         Completed",
+      "remote-file-path": "%s/%s",
+      "remote-host": "%s",
+      "local-file-path": "images/%s",
+      "protocol": "HTTPS",
+      "operation": "Import file",
+      "timestamp": "Mon Jun 26 16:05:22 2023"
+    }
+  ]
+}`, testAccImageRemotePath, testAccImageName, testAccImageRemoteHost, testAccImageName))
 	})
 	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -2179,7 +2244,7 @@ func TestUnitTenantImageGetImageErrorStillImports(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 					resource.TestCheckResourceAttr("f5os_tenant_image.test", "status", "replicated"),
 					func(s *terraform.State) error {
 						if !importCalled {
@@ -2267,7 +2332,7 @@ func testAccTenantImageExistingImageConfig(imageName string) string {
 resource "f5os_tenant_image" "existing_test" {
   image_name  = %q
   remote_host = %q
-  remote_path = "v17.1.0.1/daily/current/VM"
+  remote_path = "v21.1.0.2/dist/release/VM"
   local_path  = "images/tenant"
   insecure    = true
   timeout     = 360
@@ -2359,7 +2424,7 @@ func TestUnitTenantImageCreateImportError(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	// GetImage returns empty (image not present) so Create tries to import
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", "")
 	})
@@ -2402,7 +2467,7 @@ func TestUnitTenantImageCreateImportNonSuccess(t *testing.T) {
 	mux.HandleFunc("/restconf/data/openconfig-vlan:vlans", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "%s", "")
 	})
@@ -2415,9 +2480,9 @@ func TestUnitTenantImageCreateImportNonSuccess(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `{
 			"f5-utils-file-transfer:transfer-operation": [{
-				"local-file-path": "images/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+				"local-file-path": "images/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
 				"remote-host": %q,
-				"remote-file-path": "%s/BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+				"remote-file-path": "%s/BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
 				"operation": "Import file",
 				"protocol": "HTTPS   ",
 				"status": "    Couldn't connect to server",
@@ -2754,7 +2819,7 @@ func TestUnitTenantImageCreatePostImportGetImageError(t *testing.T) {
 	})
 
 	var getImageCount int
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+testAccImageName, func(w http.ResponseWriter, r *http.Request) {
 		getImageCount++
 		if getImageCount <= 1 {
 			// First GetImage: image does not exist
@@ -2769,10 +2834,24 @@ func TestUnitTenantImageCreatePostImportGetImageError(t *testing.T) {
 	// Import succeeds
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", `{"f5-utils-file-transfer:output":{"operation-id":"IMPORT-test"}}`)
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+		_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{
+  "f5-utils-file-transfer:transfer-operation": [
+    {
+      "operation-id": "IMPORT-test",
+      "status": "         Completed",
+      "remote-file-path": "%s/%s",
+      "remote-host": "%s",
+      "local-file-path": "images/%s",
+      "protocol": "HTTPS",
+      "operation": "Import file",
+      "timestamp": "Mon Jun 26 16:05:22 2023"
+    }
+  ]
+}`, testAccImageRemotePath, testAccImageName, testAccImageRemoteHost, testAccImageName))
 	})
 
 	defer teardown()
@@ -2810,7 +2889,7 @@ func TestUnitTenantImageCreatePostImportEmptyImages(t *testing.T) {
 	})
 
 	var getImageCount int
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+testAccImageName, func(w http.ResponseWriter, r *http.Request) {
 		getImageCount++
 		w.WriteHeader(http.StatusOK)
 		if getImageCount <= 1 {
@@ -2824,10 +2903,24 @@ func TestUnitTenantImageCreatePostImportEmptyImages(t *testing.T) {
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", `{"f5-utils-file-transfer:output":{"operation-id":"IMPORT-test"}}`)
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+		_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{
+  "f5-utils-file-transfer:transfer-operation": [
+    {
+      "operation-id": "IMPORT-test",
+      "status": "         Completed",
+      "remote-file-path": "%s/%s",
+      "remote-host": "%s",
+      "local-file-path": "images/%s",
+      "protocol": "HTTPS",
+      "operation": "Import file",
+      "timestamp": "Mon Jun 26 16:05:22 2023"
+    }
+  ]
+}`, testAccImageRemotePath, testAccImageName, testAccImageRemoteHost, testAccImageName))
 	})
 	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -2844,7 +2937,7 @@ func TestUnitTenantImageCreatePostImportEmptyImages(t *testing.T) {
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				// When GetImage returns empty after import, Create should
 				// return an explicit error about the missing image.
-				ExpectError: regexp.MustCompile(`imported\s+successfully but is not present`),
+				ExpectError: regexp.MustCompile(`imported\s+successfully[\s\S]+is not present`),
 			},
 		},
 	})
@@ -2869,7 +2962,7 @@ func TestUnitTenantImageReadGetImageError(t *testing.T) {
 	})
 
 	var getImageCount int
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+testAccImageName, func(w http.ResponseWriter, r *http.Request) {
 		getImageCount++
 		if getImageCount <= 2 {
 			// Create calls: first (image check), second (post-import verify)
@@ -2877,10 +2970,10 @@ func TestUnitTenantImageReadGetImageError(t *testing.T) {
 			if getImageCount == 1 {
 				_, _ = fmt.Fprintf(w, "%s", "")
 			} else {
-				_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image": [{
-					"name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+				_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{"f5-tenant-images:image": [{
+					"name": "%s",
 					"in-use": false, "type": "vm-image",
-					"status": "replicated", "date": "2023-3-27", "size": "2.27 GB"}]}`)
+					"status": "replicated", "date": "2023-3-27", "size": "2.27 GB"}]}`, testAccImageName))
 			}
 		} else {
 			// Read call: return error
@@ -2890,10 +2983,24 @@ func TestUnitTenantImageReadGetImageError(t *testing.T) {
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", `{"f5-utils-file-transfer:output":{"operation-id":"IMPORT-test"}}`)
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+		_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{
+  "f5-utils-file-transfer:transfer-operation": [
+    {
+      "operation-id": "IMPORT-test",
+      "status": "         Completed",
+      "remote-file-path": "%s/%s",
+      "remote-host": "%s",
+      "local-file-path": "images/%s",
+      "protocol": "HTTPS",
+      "operation": "Import file",
+      "timestamp": "Mon Jun 26 16:05:22 2023"
+    }
+  ]
+}`, testAccImageRemotePath, testAccImageName, testAccImageRemoteHost, testAccImageName))
 	})
 	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -2937,7 +3044,7 @@ func TestUnitTenantImageReadEmptyImages(t *testing.T) {
 	})
 
 	var getImageCount int
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image="+testAccImageName, func(w http.ResponseWriter, r *http.Request) {
 		getImageCount++
 		w.WriteHeader(http.StatusOK)
 		if getImageCount <= 2 {
@@ -2946,10 +3053,10 @@ func TestUnitTenantImageReadEmptyImages(t *testing.T) {
 				_, _ = fmt.Fprintf(w, "%s", "")
 			} else {
 				// Create post-import verify: found
-				_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image": [{
-					"name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+				_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{"f5-tenant-images:image": [{
+					"name": "%s",
 					"in-use": false, "type": "vm-image",
-					"status": "replicated", "date": "2023-3-27", "size": "2.27 GB"}]}`)
+					"status": "replicated", "date": "2023-3-27", "size": "2.27 GB"}]}`, testAccImageName))
 			}
 		} else {
 			// Read call: return empty list to exercise the false branch
@@ -2958,10 +3065,24 @@ func TestUnitTenantImageReadEmptyImages(t *testing.T) {
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/import", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s", `{"f5-utils-file-transfer:output":{"operation-id":"IMPORT-test"}}`)
 	})
 	mux.HandleFunc("/restconf/data/f5-utils-file-transfer:file/transfer-operations/transfer-operation", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, "%s", loadFixtureString("./fixtures/tenant_image_transfer_status.json"))
+		_, _ = fmt.Fprintf(w, "%s", fmt.Sprintf(`{
+  "f5-utils-file-transfer:transfer-operation": [
+    {
+      "operation-id": "IMPORT-test",
+      "status": "         Completed",
+      "remote-file-path": "%s/%s",
+      "remote-host": "%s",
+      "local-file-path": "images/%s",
+      "protocol": "HTTPS",
+      "operation": "Import file",
+      "timestamp": "Mon Jun 26 16:05:22 2023"
+    }
+  ]
+}`, testAccImageRemotePath, testAccImageName, testAccImageRemoteHost, testAccImageName))
 	})
 	mux.HandleFunc("/restconf/data/f5-tenant-images:images/remove", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -2977,7 +3098,7 @@ func TestUnitTenantImageReadEmptyImages(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", testAccImageName),
 				),
 			},
 		},
@@ -3007,7 +3128,7 @@ func TestUnitTenantImageUpdateGetImageError(t *testing.T) {
 	// Step 1 (Read after Create): succeeds
 	// Step 2 (Update): GetImage returns error
 	var getImageCount int
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle", func(w http.ResponseWriter, r *http.Request) {
 		getImageCount++
 		// Step 1 Create calls: image already exists (skip import)
 		// Step 1 Read: succeeds
@@ -3015,7 +3136,7 @@ func TestUnitTenantImageUpdateGetImageError(t *testing.T) {
 		if getImageCount <= 3 {
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image": [{
-				"name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+				"name": "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
 				"in-use": false, "type": "vm-image",
 				"status": "replicated", "date": "2023-3-27", "size": "2.27 GB"}]}`)
 		} else {
@@ -3039,7 +3160,7 @@ func TestUnitTenantImageUpdateGetImageError(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 				),
 			},
 			// Step 2: Change timeout → triggers Update which gets error
@@ -3074,10 +3195,10 @@ func TestUnitTenantImageDeleteError(t *testing.T) {
 	})
 
 	// GetImage always returns the image
-	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/restconf/data/f5-tenant-images:images/image=BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `{"f5-tenant-images:image": [{
-			"name": "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle",
+			"name": "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle",
 			"in-use": false, "type": "vm-image",
 			"status": "replicated", "date": "2023-3-27", "size": "2.27 GB"}]}`)
 	})
@@ -3105,7 +3226,7 @@ func TestUnitTenantImageDeleteError(t *testing.T) {
 			{
 				Config: testAccTenantImageCreateTC2ResourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"),
+					resource.TestCheckResourceAttr("f5os_tenant_image.test", "id", "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"),
 				),
 			},
 			// Step 2: Remove resource from config — triggers destroy.
@@ -3123,9 +3244,9 @@ func TestUnitTenantImageDeleteError(t *testing.T) {
 // RequiresReplace (destroy + recreate).
 var testAccTenantImageRequiresReplaceConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "test" {
-  image_name  = "BIGIP-17.1.0.1-0.0.4.ALL-F5OS.qcow2.zip.bundle"
+  image_name  = "BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle"
   remote_host = %q
-  remote_path = "v17.1.0.1/daily/previous/VM"
+  remote_path = "v21.1.0.2/dist/release/backup/VM"
   local_path  = "images"
   insecure    = true
   timeout     = 360
@@ -3203,7 +3324,7 @@ var testAccTenantImageCertErrorConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "cert_error_test" {
   image_name  = "BIGIP-cert-error-nonexistent.qcow2.zip.bundle"
   remote_host = %q
-  remote_path = "v17.1.0.1/daily/current/VM"
+  remote_path = "v21.1.0.2/dist/release/VM"
   local_path  = "images/tenant"
   insecure    = false
   timeout     = 90
@@ -3415,7 +3536,7 @@ var testAccTenantImageInsecureFalseHTTPSConfig = fmt.Sprintf(`
 resource "f5os_tenant_image" "cert_test" {
   image_name  = "BIGIP-insecure-false-test-nonexistent.qcow2.zip.bundle"
   remote_host = %q
-  remote_path = "v17.1.0.1/daily/current/VM"
+  remote_path = "v21.1.0.2/dist/release/VM"
   local_path  = "images/tenant"
   protocol    = "https"
   insecure    = false
@@ -3510,7 +3631,7 @@ var testAccTenantImageLargeTransferImageName = os.Getenv("F5OS_TENANT_IMAGE_LARG
 // F5OS_TENANT_IMAGE_LARGE_TRANSFER_REMOTE_PATH if
 // F5OS_TENANT_IMAGE_LARGE_TRANSFER is set to a build stored elsewhere.
 var testAccTenantImageLargeTransferRemotePath = envOrDefault(
-	"F5OS_TENANT_IMAGE_LARGE_TRANSFER_REMOTE_PATH", "v17.1.0/dist/release/VM")
+	"F5OS_TENANT_IMAGE_LARGE_TRANSFER_REMOTE_PATH", "v21.1.0.2/dist/release/VM")
 
 // TestAccTenantImageLargeTransferWithExtendedTimeout imports a tenant image
 // that is not already present on the DUT over HTTPS (see NOTE ON PROTOCOL

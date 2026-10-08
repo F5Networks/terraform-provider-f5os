@@ -148,7 +148,7 @@ func TestAccCfgBackupCreate(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Step 1: Create the backup and verify state + device
 			{
-				Config: cfgBackupConfig,
+				Config: cfgBackupConfig(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_config_backup.test", "name", name),
 					resource.TestCheckResourceAttr("f5os_config_backup.test", "remote_path", "/upload/upload.php"),
@@ -162,7 +162,7 @@ func TestAccCfgBackupCreate(t *testing.T) {
 			},
 			// Step 2: Update a mutable attribute (remote_path) to exercise Update
 			{
-				Config: cfgBackupConfigUpdated,
+				Config: cfgBackupConfigUpdated(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("f5os_config_backup.test", "name", name),
 					resource.TestCheckResourceAttr("f5os_config_backup.test", "remote_path", "/upload/upload_v2.php"),
@@ -218,23 +218,23 @@ func TestUnitCfgBackup(t *testing.T) {
 	mux.HandleFunc(transferStatus, func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method, "Expected method '%s', got '%s'", http.MethodGet, r.Method)
 		//nolint:errcheck
-		fmt.Fprint(w,
-			`
+		transferOp := fmt.Sprintf(`
 			{
 				"f5-utils-file-transfer:transfer-operation": [
 					{
 						"local-file-path": "configs/test_cfg_backup",
-						"remote-host": "10.145.42.244",
+						"remote-host": "%s",
 						"remote-file-path": "/upload/test_cfg_backup",
 						"operation": "Export file",
 						"protocol": "HTTPS   ",
 						"status": "         Completed",
-						"timestamp": "Tue Aug  1 07:21:03 2023"
+						"timestamp": "Tue Jul 16 14:13:12 2015"
 					}
 				]
 			}
-		`,
-		)
+		`, os.Getenv("F5OS_BACKUP_HOST"))
+		//nolint:errcheck
+		fmt.Fprint(w, transferOp)
 	})
 
 	mux.HandleFunc(readCfgBackup, func(w http.ResponseWriter, r *http.Request) {
@@ -588,29 +588,33 @@ resource "f5os_config_backup" "test" {
 }
 `
 
-const cfgBackupConfig = `
+func cfgBackupConfig() string {
+	return fmt.Sprintf(`
 resource "f5os_config_backup" "test" {
   name            = "test_backup_92dh7s"
-  remote_host     = "10.145.42.244"
+  remote_host     = "%s"
   remote_user     = "corpuser"
   remote_password = "password"
   remote_path     = "/upload/upload.php"
   protocol        = "https"
   # 300s (vs. the schema default of 150s) absorbs transient slowness on
-  # the shared upload target 10.145.42.244 that has caused the client's
+  # the shared upload target that has caused the client's
   # "export operation timed out" retry loop to exit prematurely on CI.
   timeout         = 300
 }
-`
+`, os.Getenv("F5OS_BACKUP_HOST"))
+}
 
-const cfgBackupConfigUpdated = `
+func cfgBackupConfigUpdated() string {
+	return fmt.Sprintf(`
 resource "f5os_config_backup" "test" {
   name            = "test_backup_92dh7s"
-  remote_host     = "10.145.42.244"
+  remote_host     = "%s"
   remote_user     = "corpuser"
   remote_password = "password"
   remote_path     = "/upload/upload_v2.php"
   protocol        = "https"
   timeout         = 300
 }
-`
+`, os.Getenv("F5OS_BACKUP_HOST"))
+}

@@ -1,6 +1,11 @@
 variables:
   DOCKER_HUB_PROXY: "artifactory.f5net.com/dockerhub-remote"
   PKG_NAME: terraform-provider-f5os
+  F5OS_BACKUP_HOST: "${F5_BACKUP_HOST:-10.145.38.30}"
+  F5OS_TENANT_IMAGE: "${F5OS_TENANT_IMAGE:-BIGIP-21.1.0.2-0.0.22.ALL-F5OS.tar.bundle}"
+  F5OS_IMAGE_REMOTE_HOST: "${F5OS_IMAGE_REMOTE_HOST:-10.146.14.22}"
+  F5OS_IMAGE_REMOTE_PATH: "${F5OS_IMAGE_REMOTE_PATH:-v21.1.0.2/dist/release/VM)"
+  F5OS_TENANT_DISK_SIZE: "${F5OS_TENANT_DISK_SIZE:-89}"
 
 default:
   image: "${DOCKER_HUB_PROXY}/golang:1.25"
