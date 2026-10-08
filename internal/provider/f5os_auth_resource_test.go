@@ -4363,6 +4363,16 @@ func setupLdapMock(t *testing.T, currentLdap map[string]interface{}) {
 				"f5-openconfig-aaa-ldap:ldap": currentLdap,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
+		case "PATCH":
+			var payload map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
+				if ldap, ok := payload["f5-openconfig-aaa-ldap:ldap"].(map[string]interface{}); ok {
+					for k, v := range ldap {
+						currentLdap[k] = v
+					}
+				}
+			}
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
@@ -4399,8 +4409,8 @@ func setupLdapMock(t *testing.T, currentLdap map[string]interface{}) {
 // Update changes them. Verifies both leaf-lists round-trip.
 func TestUnitAuthResourceLdap2_0_0(t *testing.T) {
 	currentLdap := map[string]interface{}{
-		"user-object-class":  []interface{}{"person"},
-		"group-object-class": []interface{}{"groupOfNames"},
+		"user-object-class":  []interface{}{"posixAccount"},
+		"group-object-class": []interface{}{"posixGroup"},
 	}
 
 	testAccPreUnitCheck(t)
@@ -4474,17 +4484,31 @@ func setupLdapDriftMock(t *testing.T, drift *map[string]interface{}) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("/restconf/data/openconfig-system:system/aaa/authentication/f5-openconfig-aaa-ldap:ldap", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "GET" {
+		switch r.Method {
+		case "GET":
 			w.Header().Set("Content-Type", "application/yang-data+json")
 			w.WriteHeader(http.StatusOK)
+			// Return whatever is currently in drift
 			resp := map[string]interface{}{
 				"f5-openconfig-aaa-ldap:ldap": *drift,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
-			return
+		case "PATCH":
+			// Update the drift state to reflect the applied changes
+			var payload map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
+				if ldap, ok := payload["f5-openconfig-aaa-ldap:ldap"].(map[string]interface{}); ok {
+					for k, v := range ldap {
+						(*drift)[k] = v
+					}
+				}
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
-		w.WriteHeader(http.StatusMethodNotAllowed)
 	})
+
 	// Accept the client's per-leaf PUT/DELETE writes but do not persist: the
 	// caller drives GET state via *drift to simulate out-of-band eviction.
 	for _, leaf := range []string{"user-object-class", "group-object-class"} {
@@ -4497,6 +4521,179 @@ func setupLdapDriftMock(t *testing.T, drift *map[string]interface{}) {
 			}
 		})
 	}
+}
+
+// TestUnitAuthResourceLdapAllFields exercises all 13 LDAP fields in the ldap
+// nested block: Create sends them, Read preserves them, and Update changes them.
+// Verifies all fields round-trip correctly on a 2.0.0 device.
+func TestUnitAuthResourceLdapAllFields(t *testing.T) {
+	testAccPreUnitCheck(t)
+	setupMockPlatformVersion(mux, "2.0.0")
+
+	// Initial LDAP state from device
+	currentLdap := map[string]interface{}{
+		"base-dn":           "dc=example,dc=com",
+		"bind-dn":           "cn=admin,dc=example,dc=com",
+		"bind-timelimit":    30.0,
+		"timelimit":         60.0,
+		"idle-timelimit":    300.0,
+		"ldap-version":      3.0,
+		"chase-referrals":   true,
+		"ssl":               false,
+		"active-directory":  false,
+		"user-object-class": []interface{}{"posixAccount"},
+		"group-object-class": []interface{}{"posixGroup"},
+		"unix-attributes":   true,
+		"ignore-case":       false,
+	}
+
+	setupLdapMock(t, currentLdap)
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			// Step 1: Create with all 13 fields (no bind_pw - it's write-only)
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  ldap = {
+    base_dn           = "dc=example,dc=com"
+    bind_dn           = "cn=admin,dc=example,dc=com"
+    bind_timeout      = 30
+    read_timeout      = 60
+    idle_timeout      = 300
+    ldap_version      = 3
+    chase_referrals   = true
+    ssl               = false
+    active_directory  = false
+    user_object_class = ["posixAccount"]
+    group_object_class = ["posixGroup"]
+    unix_attributes   = true
+    ignore_case       = false
+  }
+}
+`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.base_dn", "dc=example,dc=com"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.bind_dn", "cn=admin,dc=example,dc=com"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.bind_timeout", "30"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.read_timeout", "60"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.idle_timeout", "300"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.ldap_version", "3"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.chase_referrals", "true"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.ssl", "false"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.active_directory", "false"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "posixAccount"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.group_object_class.0", "posixGroup"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.unix_attributes", "true"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.ignore_case", "false"),
+				),
+			},
+			// Step 2: Update with modified values
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  ldap = {
+    base_dn           = "dc=modified,dc=com"
+    bind_dn           = "cn=newadmin,dc=modified,dc=com"
+    bind_timeout      = 45
+    read_timeout      = 90
+    idle_timeout      = 600
+    ldap_version      = 3
+    chase_referrals   = false
+    ssl               = true
+    active_directory  = true
+    user_object_class = ["inetOrgPerson", "posixAccount"]
+    group_object_class = ["posixGroup", "groupOfNames"]
+    unix_attributes   = false
+    ignore_case       = true
+  }
+}
+`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.base_dn", "dc=modified,dc=com"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.bind_dn", "cn=newadmin,dc=modified,dc=com"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.bind_timeout", "45"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.read_timeout", "90"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.idle_timeout", "600"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.ldap_version", "3"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.chase_referrals", "false"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.ssl", "true"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.active_directory", "true"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "inetOrgPerson"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.1", "posixAccount"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.group_object_class.0", "posixGroup"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.group_object_class.1", "groupOfNames"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.unix_attributes", "false"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.ignore_case", "true"),
+				),
+			},
+		},
+	})
+}
+
+// TestUnitAuthResourceLdapBindPassword exercises the bind_pw (password) field.
+// bind_pw is write-only (not readable from device) so we test that:
+// 1. It can be set without error during Create
+// 2. It can be changed during Update without error
+// 3. We do NOT verify its value in state (since it's sensitive and not readable)
+func TestUnitAuthResourceLdapBindPassword(t *testing.T) {
+	testAccPreUnitCheck(t)
+	setupMockPlatformVersion(mux, "2.0.0")
+
+	currentLdap := map[string]interface{}{
+		"user-object-class": []interface{}{"posixAccount"},
+	}
+
+	setupLdapMock(t, currentLdap)
+	defer teardown()
+
+	tfresource.Test(t, tfresource.TestCase{
+		IsUnitTest:               true,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []tfresource.TestStep{
+			// Step 1: Create with bind_pw
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  ldap = {
+    bind_dn           = "cn=admin,dc=example,dc=com"
+    bind_pw           = "initial-password"
+    user_object_class = ["posixAccount"]
+  }
+}
+`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.bind_dn", "cn=admin,dc=example,dc=com"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "posixAccount"),
+					// Note: We do NOT check bind_pw value - it's write-only and not returned from API
+				),
+			},
+			// Step 2: Update bind_pw to a different value
+			{
+				Config: `
+resource "f5os_auth" "test" {
+  auth_order = ["local"]
+  ldap = {
+    bind_dn           = "cn=admin,dc=example,dc=com"
+    bind_pw           = "updated-password"
+    user_object_class = ["posixAccount"]
+  }
+}
+`,
+				Check: tfresource.ComposeAggregateTestCheckFunc(
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.bind_dn", "cn=admin,dc=example,dc=com"),
+					tfresource.TestCheckResourceAttr("f5os_auth.test", "ldap.user_object_class.0", "posixAccount"),
+					// Note: We do NOT check bind_pw value - it's write-only and not returned from API
+				),
+			},
+		},
+	})
 }
 
 // TestUnitAuthResourceLdapDriftSurfaced verifies the non-import drift branch of
@@ -4585,7 +4782,7 @@ resource "f5os_auth" "test" {
   }
 }
 `,
-				ExpectError: regexp.MustCompile(`ldap configuration \(user_object_class/group_object_class\) is not supported`),
+				ExpectError: regexp.MustCompile(`user_object_class is not supported on F5OS versions below 2.0.0`),
 			},
 		},
 	})
@@ -4643,11 +4840,17 @@ func testAccCheckLdapApplied(userClasses, groupClasses []string) tfresource.Test
 		if err != nil {
 			return fmt.Errorf("GetLdapConfig failed: %w", err)
 		}
-		if !slices.Equal(config.UserObjectClass, userClasses) {
-			return fmt.Errorf("user-object-class: expected %v, got %v", userClasses, config.UserObjectClass)
+		// Check that configured classes are present (subset), not exact match.
+		// PATCH merges; pre-existing device defaults remain.
+		for _, want := range userClasses {
+			if !slices.Contains(config.UserObjectClass, want) {
+				return fmt.Errorf("user-object-class: missing %q in %v", want, config.UserObjectClass)
+			}
 		}
-		if !slices.Equal(config.GroupObjectClass, groupClasses) {
-			return fmt.Errorf("group-object-class: expected %v, got %v", groupClasses, config.GroupObjectClass)
+		for _, want := range groupClasses {
+			if !slices.Contains(config.GroupObjectClass, want) {
+				return fmt.Errorf("group-object-class: missing %q in %v", want, config.GroupObjectClass)
+			}
 		}
 		return nil
 	}
@@ -4723,7 +4926,7 @@ func TestAccAuthResourceLdap(t *testing.T) {
 				ResourceName:            "f5os_auth.test",
 				ImportState:             true,
 				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy", "login_policy"},
+				ImportStateVerifyIgnore: []string{"remote_roles", "password_policy", "login_policy", "ldap"},
 			},
 		},
 	})

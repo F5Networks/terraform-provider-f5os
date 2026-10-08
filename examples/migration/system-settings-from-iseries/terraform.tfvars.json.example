@@ -1,0 +1,12 @@
+{
+  "dns_servers": ["172.27.1.1"],
+  "dns_search_domains": ["openstack.internal"],
+  "ntp_servers": [],
+  "snmp_sys_contact": "Customer Name <admin@customer.com>",
+  "snmp_sys_location": "Network Closet 1",
+  "auth_order": ["local"],
+  "users": {
+    "anotherUser": { "f5os_role": "operator", "password": "REPLACE-ME" },
+    "guestUser": { "f5os_role": "operator", "password": "REPLACE-ME" }
+  }
+}

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -166,6 +167,18 @@ var (
 //
 // Use this in acceptance-test check functions that need an independent client
 // to verify device state outside of the Terraform resource lifecycle.
+//
+// The cache is skipped for unit tests: testAccPreUnitCheck sets F5OS_HOST to
+// an httptest server's URL (e.g. "http://127.0.0.1:62861"), which is torn
+// down at the end of each test. The OS can reuse the port for a later test's
+// server, producing the same cache key and reviving a client whose
+// connection points at a dead listener (or, worse, one that silently
+// succeeds against the new server but carries stale session state such as
+// an empty PlatformVersion from before that server registered its
+// platform-version handler). Any host that begins with an http:// or
+// https:// scheme is treated as non-cacheable; real F5OS hosts are bare IPs
+// or hostnames. This mirrors the equivalent guard in the provider's
+// Configure (see provider.go).
 func newTestClientFromEnv() (*f5ossdk.F5os, error) {
 	host := os.Getenv("F5OS_HOST")
 	user := os.Getenv("F5OS_USERNAME")
@@ -180,13 +193,17 @@ func newTestClientFromEnv() (*f5ossdk.F5os, error) {
 		}
 	}
 
+	cacheable := !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://")
+
 	key := fmt.Sprintf("%s|%s|%d", host, user, port)
 
-	testClientCacheMu.Lock()
-	defer testClientCacheMu.Unlock()
-
-	if client, ok := testClientCache[key]; ok && client != nil {
-		return client, nil
+	if cacheable {
+		testClientCacheMu.Lock()
+		if client, ok := testClientCache[key]; ok && client != nil {
+			testClientCacheMu.Unlock()
+			return client, nil
+		}
+		testClientCacheMu.Unlock()
 	}
 
 	cfg := &f5ossdk.F5osConfig{
@@ -200,7 +217,12 @@ func newTestClientFromEnv() (*f5ossdk.F5os, error) {
 	if err != nil {
 		return nil, err
 	}
-	testClientCache[key] = client
+
+	if cacheable {
+		testClientCacheMu.Lock()
+		testClientCache[key] = client
+		testClientCacheMu.Unlock()
+	}
 	return client, nil
 }
 
